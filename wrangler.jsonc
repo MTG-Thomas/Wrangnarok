@@ -56,11 +56,10 @@
       },
       "d1_databases": [{
         "binding": "DB",
-        // Distinct dev database. Create it with the human handoff command
-        // `wrangler d1 create wrangnarok-dev`, then replace this placeholder
-        // with the returned UUID. Never commit a real ID discovered elsewhere.
+        // Distinct dev database, created 2026-09-09 via
+        // `wrangler d1 create wrangnarok-dev`. D1 IDs are not secrets.
         "database_name": "wrangnarok-dev",
-        "database_id": "REPLACE-ME-wrangler-d1-create-wrangnarok-dev",
+        "database_id": "4bcf0eef-45a4-46c1-b80c-1d244ff3076c",
         "migrations_dir": "migrations"
       }],
       "workflows": [{
