@@ -6,6 +6,8 @@ Wrangnarök asks a deliberately constrained question:
 
 **How much of Bifrost's code-first integration-orchestration model can be reproduced using only Cloudflare-native primitives, while remaining useful on Cloudflare's free tier?**
 
+Wrangnarök is a full-stack app: one Cloudflare Worker serves both the browser UI (Workers Static Assets) and the JSON API, backed by Workflows + D1. See ADR 008.
+
 This is a greenfield experiment, not a line-by-line port. Upstream Bifrost is treated primarily as a behavioral and product specification. Wrangnarök should preserve useful ideas while allowing Cloudflare's execution model to reshape the implementation.
 
 ## Project constraints
@@ -36,7 +38,7 @@ The canonical domain vocabulary is defined in `docs/lexicon.md`; the table below
 
 This vocabulary is intentionally conservative. Forms remain forms. Tables remain tables. Secrets remain secrets. Cloudflare Queues remain Queues. Mythology should clarify the domain, not turn the codebase into a crossword puzzle.
 
-## MVP: The First Acorn 🌰
+## MVP: First slice
 
 The first milestone is intentionally tiny:
 
@@ -50,7 +52,7 @@ The first milestone is intentionally tiny:
 - basic execution-history API
 - demonstrated operation within Cloudflare Free limits
 
-The acorn is the milestone, not (yet) a domain abstraction.
+The slice is the milestone, not (yet) a domain abstraction.
 
 ## Upstream relationship
 
@@ -69,14 +71,14 @@ See `docs/upstream-spec.md` as that inventory develops.
 ## Initial architecture
 
 ```text
-Client / API caller
-       |
-       v
- Cloudflare Worker
-       |
-       +---- D1 ----------------> Organizations / Connections / ExecutionHistory
-       |
-       +---- Workflow ----------> Saga Execution
+Browser UI (Static Assets) / API caller
+        |
+        v
+ Cloudflare Worker (UI + /api/*, single deployment)
+        |
+        +---- D1 ----------------> Organizations / Connections / ExecutionHistory
+        |
+        +---- Workflow ----------> Saga Execution
                                   |
                                   +-- Operation
                                   +-- Operation

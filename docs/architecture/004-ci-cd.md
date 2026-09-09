@@ -42,7 +42,7 @@ Initial implementation SHOULD use two logical environments once live deployment 
 
 The environments MUST use distinct mutable data resources where practical, especially D1 databases. A smoke test must never mutate production tenant/Connection data.
 
-For the First Acorn, production promotion may initially be manual or omitted until a dev deployment is stable. The architecture should not require elaborate progressive delivery before there is real traffic.
+For the MVP slice, production promotion may initially be manual or omitted until a dev deployment is stable. The architecture should not require elaborate progressive delivery before there is real traffic.
 
 ### D1 migration rule
 
@@ -141,7 +141,7 @@ Do not create a second deployment system for Saga/Integration content yet. If Wr
 - Forward-compatible D1 migration discipline requires more staged changes than destructive one-shot migrations.
 - CI configuration must evolve with Wrangler and Cloudflare's testing tooling.
 
-## First Acorn implementation
+## MVP slice implementation
 
 Issue #4 should establish the PR validation half of this ADR first. Live deployment automation should be added only after the TypeScript scaffold can pass locally.
 

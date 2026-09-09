@@ -1,4 +1,4 @@
-# ADR 007: First Acorn submission and local execution slice
+# ADR 007: MVP slice submission and local execution slice
 
 **Status: Draft implementation proposal; runtime validation pending.**
 

@@ -79,12 +79,6 @@ These keep their ordinary names unless a real domain distinction emerges:
 
 ## Reserved jokes
 
-### Acorn 🌰
-
-Not currently a domain abstraction.
-
-The first MVP milestone is **The First Acorn**. If the architecture later develops a concept for which "Acorn" is genuinely clearer than the boring technical term, it may be reconsidered. Do not invent such a concept solely to use the name.
-
 ### Squirrel
 
 Also not an execution primitive. Cloudflare Workers are Workers.

@@ -8,7 +8,7 @@ import migration from "../migrations/0001_initial.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 const bindings = env as unknown as Bindings;
 const principal = { orgId: "00000000-0000-4000-8000-000000000001", userId: "00000000-0000-4000-8000-000000000002" };
-const key = "first-acorn-test-001";
+const key = "mvp-slice-test-001";
 function request(path: string, method = "GET", message = "hello") {
   return new Request(`http://local.test${path}`, { method,
     headers: { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json", "Idempotency-Key": key },

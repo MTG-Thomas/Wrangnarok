@@ -75,7 +75,7 @@ Use application-level envelope encryption with a deployment master key:
 - Format string (`algorithm`) must be versioned before declaring stability;
   v1 is experimental.
 
-## What First Acorn must NOT do
+## What the MVP slice must NOT do
 
 - No plaintext credential/token columns in D1.
 - No secrets in ExecutionHistory rows, Execution Operation inputs/outputs, Workflow
@@ -112,7 +112,7 @@ Connection-with-secrets ships, required review:
 
 - Integration code stays portable; Connection secrets stay Organization-scoped.
 - Adds crypto + rotation complexity — earned only when real credentials arrive.
-- First Acorn stays unblocked without secret storage.
+- First MVP slice stays unblocked without secret storage.
 
 ## Alternatives considered (ecosystem survey, Sep 2026)
 

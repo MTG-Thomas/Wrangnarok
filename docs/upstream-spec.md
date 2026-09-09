@@ -98,7 +98,7 @@ An upstream Solution is a portable source definition containing apps, workflows,
 
 Upstream Solution-owned entities are deploy-managed; live mutation is blocked. Loose entities can be manipulated directly. Deploy is full replacement/reconciliation of managed definitions, while environment data follows separate preservation rules.
 
-**Wrangnarök implication:** there is a useful invariant here—declaratively managed resources should not drift through ad-hoc mutation—but reproducing the full loose-vs-managed system may be excessive. Investigate after First Acorn.
+**Wrangnarök implication:** there is a useful invariant here—declaratively managed resources should not drift through ad-hoc mutation—but reproducing the full loose-vs-managed system may be excessive. Investigate after the MVP slice.
 
 ### 11. Shared-resource fallback is explicit and bounded
 
@@ -173,7 +173,7 @@ Measurement is mandatory, not assumed (see ADR 004 `system.smoke`):
 
    | Primitive | Free allowance | Smoke actual (per run) | Notes/source |
    | --- | --- | --- | --- |
-   | D1 stored rows | [verify vs current Cloudflare pricing] | measured | First Acorn state + ExecutionHistory |
+   | D1 stored rows | [verify vs current Cloudflare pricing] | measured | MVP slice state + ExecutionHistory |
    | D1 reads / writes | [verify vs current Cloudflare pricing] | measured | per `system.smoke` usage block |
    | Workflows steps / instances | [verify vs current Cloudflare pricing] | measured | Execution + Operations |
    | Workers requests / CPU-ms | [verify vs current Cloudflare pricing] | measured | Worker/API handling |

@@ -26,7 +26,7 @@ jobs:
 
       # Wrangnarök is currently specification-only. Keep CI alive now, then
       # automatically become a real Node/Cloudflare validation pipeline as
-      # soon as the First Acorn scaffold adds package.json.
+      # soon as the MVP slice scaffold adds package.json.
       - name: Detect implementation scaffold
         id: scaffold
         shell: bash
