@@ -1,0 +1,138 @@
+# ADR 003: Realms and Connections
+
+Status: **Proposed**
+
+## Context
+
+Upstream Bifrost separates an Integration definition from organization-specific mappings. A workflow resolves the Integration in its current organization context; configuration is composed from service defaults and organization overrides, while OAuth/token state belongs to the environment rather than portable workflow source.
+
+Wrangnarök needs the same product boundary without inheriting Bifrost's implementation.
+
+## Decision
+
+### Realm
+
+A **Realm** is code: a reusable, typed TypeScript integration/provider definition.
+
+A Realm owns:
+
+- a stable machine identifier;
+- human discovery metadata;
+- typed configuration schema;
+- identification of which configuration fields are secret;
+- optional authentication/OAuth contract;
+- typed Actions that Sagas may call;
+- vendor-specific request/response normalization;
+- vendor-specific pagination/rate-limit/error behavior where useful.
+
+A Realm does **not** own tenant credentials or mutable OAuth tokens.
+
+Example shape (illustrative, not yet API-stable):
+
+```ts
+export const echo = defineRealm({
+  id: "00000000-0000-0000-0000-000000000101",
+  name: "echo",
+  config: EchoConfig,
+  actions: {
+    echo: async (ctx, input: EchoInput) => {
+      const response = await ctx.fetch(`${ctx.config.baseUrl}/echo`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return response.json<EchoResult>();
+    },
+  },
+});
+```
+
+### Connection
+
+A **Connection** is environment state: a configured instance of a Realm for a Grove.
+
+A Connection owns:
+
+- stable Connection ID;
+- Realm ID;
+- Grove ID;
+- optional external entity/tenant ID and display name;
+- non-secret configuration;
+- references to secret material;
+- authentication state/metadata;
+- created/updated timestamps.
+
+A Connection must never serialize decrypted credentials through the ordinary public API, Trail, Journey result, or browser-facing state.
+
+### Resolution
+
+A Saga normally asks for a Realm in the current Journey's Grove context. The runtime resolves the corresponding Connection.
+
+The MVP resolution rule is deliberately strict:
+
+1. Resolve the requested Realm by stable ID/name.
+2. Resolve a Connection for exactly the current Grove.
+3. If none exists, fail with a structured `CONNECTION_NOT_CONFIGURED` error.
+
+There is **no implicit global credential fallback in the MVP**. Upstream supports org/global cascades, but explicit Grove isolation is safer and simpler for the experiment. Shared/default Connections may be introduced later only with explicit lookup and write-boundary semantics.
+
+Explicit cross-Grove Connection lookup is an administrative capability, not something arbitrary Saga code receives by passing another Grove ID.
+
+### Actions
+
+An **Action** is a typed callable exposed by a Realm. Keep this boring term.
+
+Sagas should ideally read like ordinary TypeScript:
+
+```ts
+const echo = await ctx.realms.echo.echo({ message: "hello" });
+```
+
+Do not require Saga authors to manipulate Connection records, tokens, D1 rows, or Cloudflare bindings directly.
+
+### Secret boundary
+
+Cloudflare Worker secrets and Secrets Store are suitable for deployment/account-level secrets, but they are not by themselves a scalable per-Grove Connection store: Worker secrets are deployment bindings, while Secrets Store is account-level and currently limited in count.
+
+D1 is encrypted at rest, but D1 encryption alone does not make plaintext credential columns an acceptable application secret design. Before multi-tenant Connections ship, Wrangnarök must choose an application-level secret-storage scheme.
+
+Likely direction to investigate:
+
+- one deployment-level master encryption key stored as a Worker secret;
+- per-Connection secret payload encrypted/decrypted inside the Worker with Web Crypto (AES-GCM or an envelope scheme);
+- ciphertext, nonce/version/key metadata persisted in D1;
+- decrypted material exists only transiently inside server-side Worker/Workflow execution;
+- key rotation/versioning designed before declaring the format stable.
+
+This is **not yet approved for production use**. The First Acorn does not need tenant credentials; its demo Realm can use a mock endpoint with non-secret configuration.
+
+### OAuth
+
+OAuth is deferred, but the Connection contract must leave room for:
+
+- authorization-code tokens;
+- client-credentials flows;
+- access/refresh token expiry;
+- refresh coordination;
+- alternate requested scopes/resources;
+- token replacement without replacing Connection identity.
+
+Token refresh must not be implemented independently in every Saga.
+
+## Consequences
+
+- Realm code remains portable and Git-versioned.
+- Connection state remains Grove/environment-specific.
+- A Saga cannot accidentally carry credentials in source.
+- MVP tenant resolution is stricter than upstream Bifrost's global fallback behavior.
+- Secret storage becomes an explicit security design task rather than an accidental D1 schema detail.
+- The First Acorn can implement the Realm abstraction without blocking on OAuth/secret storage.
+
+## Upstream behavior intentionally not copied yet
+
+- global/default Integration credential fallback;
+- provider-organization mapping enumeration;
+- cross-org mapping administration from ordinary workflow APIs;
+- Solution-declared Integration requirement failures;
+- OAuth scope override behavior.
+
+These remain specification fodder for later phases.
