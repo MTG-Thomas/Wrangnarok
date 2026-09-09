@@ -1,6 +1,6 @@
 # ADR 001: Saga, Execution, and Operation execution model
 
-**Status:** Draft — reconciled per issue #15 (2026-09-09). Canonical rules below replace the former UUIDv7 / optional-key / 10-minute-expiry / create()+reconciler proposals, which are recorded as rejected alternatives with rationale.
+**Status:** Draft — reconciled per issue #15 (2026-09-09); resilience semantics implemented per issue #16 (2026-09-09). Canonical rules below replace the former UUIDv7 / optional-key / 10-minute-expiry / create()+reconciler proposals, which are recorded as rejected alternatives with rationale.
 
 ## Context
 
@@ -43,22 +43,24 @@ An Execution is backed initially by a Cloudflare Workflow instance but has its o
 
 An Execution record must include `org_id` from day one. MVP slice ships a single default Organization (`default` stub ID) propagated explicitly via `ctx`; multi-tenancy and authorization are deferred to Phase 3. The Workflow loads the Organization from its immutable D1 Execution row, never from client-supplied context.
 
-Initial state model (MVP slice implements `Pending`, `Running`, `Succeeded`, `Failed`; `TimedOut`/`Cancelled` are reserved domain states, `Scheduled`/`Cancelling` are deferred distinct states — see below):
+Initial state model (MVP slice implemented `Pending`, `Running`, `Succeeded`, `Failed`; issue #16 implemented `TimedOut` via the explicit `timeout-mark-v1` checkpoint and `Cancelling`/`Cancelled` via the owner-only cancel endpoint + native `terminate`; `Scheduled` remains the one deferred distinct state — see below):
 
 ```text
 Pending -> Running -> Succeeded
                   \-> Failed
-                  \-> TimedOut (reserved)
-                  \-> Cancelled (reserved)
+                  \-> TimedOut (explicit timeout step only)
+Pending -> Cancelling -> Cancelled
+Running -> Cancelling -> Cancelled
 ```
 
-`Scheduled` (durable pre-publish, promotable when due) and `Cancelling` (transient cancel-requested) are intentionally NOT in the MVP CHECK constraint. They are distinct future states, not aliases of `Pending`.
+`Scheduled` (durable pre-publish, promotable when due) is intentionally NOT in the CHECK constraint. It is a distinct future state, not an alias of `Pending`. `Cancelling` joined the CHECK constraint via `migrations/0002_cancelling.sql`.
 
-Allowed transitions (MVP slice):
+Allowed transitions (implemented; unit-tested as pure TypeScript via `canTransition`):
 
 ```text
-Pending -> Running | Failed
-Running -> Succeeded | Failed | TimedOut | Cancelled
+Pending -> Running | Failed | Cancelling
+Running -> Succeeded | Failed | TimedOut | Cancelling
+Cancelling -> Cancelled
 ```
 
 No other transitions are legal. Unit-test the transition table as pure TypeScript. `Pending` is never swept by any background job: there is no autonomous `Pending -> Failed` expiry. `Pending -> Failed` only occurs via an explicit Workflow failure checkpoint (`failExecution`), never via a timer.
@@ -95,7 +97,7 @@ MVP slice Operation defaults:
 - stable step names per Saga version (e.g. `prepare-input-v1`, `echo-http-v1`); never reorder/rename persisted v1 steps;
 - stable `operation_id` per unit of work (e.g. `${executionId}-echo-http-v1`) passed as the outbound `Idempotency-Key` to the Integration Action; retries reuse the same ID;
 - serial, bounded fanout (cap 8 targets/iterations for the MVP slice);
-- step timeout 10 seconds; **retry gate (upstream finding 14): Integration/vendor steps `retries: 0` unless destination-side idempotency is proven and an explicit policy exists; idempotent D1 checkpoint steps (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`) only may use `retries` up to the operator ceiling 2; every business/expected failure throws `NonRetryableError` so the engine never retries a non-idempotent mutation.** The former blanket `retries limit 2` on arbitrary steps is rejected for the same reason;
+- step timeout 10 seconds; **retry gate (upstream finding 14): the `stepRetryLimit()` table resolves every step.do limit — Integration/vendor steps `retries: 0` unless destination-side idempotency is proven and an explicit policy exists; idempotent D1 checkpoint steps (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`, `timeout-mark-v1`) only may use `retries` up to the operator ceiling 2; every business/expected failure throws `NonRetryableError` so the engine never retries a non-idempotent mutation.** The former blanket `retries limit 2` on arbitrary steps is rejected for the same reason;
 - **no exactly-once external-side-effect guarantee:** a step may redeliver after a lost checkpoint. Integration Actions MUST enforce `operation_id` idempotency at the destination or refuse automatic retries for unsafe operations. The fixture echo Action is read-like (POST-echo, no external mutation) with `retries: 0`; future retryable mutations require destination-side idempotency and a deliberate policy.
 
 ### Invocation and creation protocol (D1 + Workflow instance)
@@ -160,9 +162,11 @@ History/list endpoints return lightweight Execution summaries (no input/result, 
 
 ### Cancellation
 
-Cancellation is a product capability, not assumed behavior. MVP slice omits user cancellation: `TimedOut`/`Cancelled` are reserved domain states, never written by current Sagas; `Cancelling` is deferred entirely.
+Cancellation is a product capability with an explicit implementation (issue #16), not assumed behavior.
 
-**Deferred (upstream finding 14): explicit `Cancelling` handling requires** owner-or-equivalent authorization, `Scheduled`/`Pending` immediate-cancel vs `Running -> Cancelling` with a worker-honored cancel flag, idempotent re-cancel, non-cancellable terminal states, stale-token/callback rejection, and a deliberate mapping onto Cloudflare Workflow instance controls (terminate/dismiss). Until Phase 2 cancellation/timeout investigation demonstrates these, adding a `Cancelling` CHECK value or a cancel endpoint is rejected as premature. Recorded here so the gap is explicit, not overlooked.
+Owner-only `POST /api/executions/:id/cancel` uses the same fixture auth plus the same `(org_id, user_id)` scoping as reads: foreign owners get 404, never an existence leak. `Pending` cancels immediately; `Running` moves `Running -> Cancelling -> Cancelled` with a conditional D1 write, then the native Workflow instance `terminate()` control (verified present in the pinned `worker-configuration.d.ts` as `WorkflowInstance.terminate()` and proven in local workerd: the instance reaches `terminated`, observed in `test/resilience.test.ts`), then the terminal `Cancelled` marker. Re-cancel while `Cancelling` is idempotent (`200`, no side effects); terminal states answer `409 EXECUTION_NOT_CANCELLABLE` and are never rewritten. A cancelled Execution never dispatches (again): resubmitting its key returns `409 EXECUTION_CANCELLED`. Late Saga checkpoints are fenced by conditional writes (`Running`-gated success, `Pending`/`Running`-gated failure), so a checkpoint that lands after cancellation cannot overwrite `Cancelled`, and a cancelled row never advances to `Running` (prepare-step guard).
+
+`Scheduled` stays deferred: there is no delayed-start path to cancel yet, so no `Scheduled` cancel semantics are claimed.
 
 ### Retry and idempotency
 
@@ -205,14 +209,16 @@ Native Workflow introspection is advisory only. Detail exposes `runtimeStatus` (
 | `queued`, `running` | `Running` (advisory) | Workflow `prepare` step writes `Running` |
 | `complete` | `complete` (advisory) | Workflow `persist-success` writes `Succeeded` |
 | `errored` | `errored` (advisory) | Workflow `persist-failure` writes `Failed` |
-| `terminated` | `terminated` (advisory) | Reserved `Cancelled` path (not implemented) |
+| `terminated` | `terminated` (advisory) | Cancel endpoint writes `Cancelled` after `terminate()` |
 
-`TimedOut` is never inferred from Workflow introspection alone. It is only written by an explicit timeout `step` / terminal checkpoint carrying `{ status: "TimedOut" }` so Wrangnarök can explain what timed out. Operation-level history beyond Workflow introspection is deferred (see Open questions).
+`TimedOut` is never inferred from Workflow introspection alone. It is only written by the explicit `timeout-mark-v1` step carrying `{ status: "TimedOut" }` so Wrangnarök can explain what timed out. Operation-level history beyond Workflow introspection is deferred (see Open questions).
 
 ### Step retries and Cancelling (finding 14 — canonical)
 
-- **Step retries gated to engine-loss-only with operator ceiling 2:** Integration/vendor Operations (`echo-http-v1`, `ninja-list-orgs-v1`) use `retries: 0`; only idempotent D1 checkpoint Operations (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`, all conditional `UPDATE`s safe under redelivery) may use `retries` up to ceiling 2 (`STEP_RETRY_CEILING`). All expected/business failures (bad input, `CONNECTION_NOT_CONFIGURED`, vendor `NINJA_*`/`ECHO_*`) are returned as structured step results and thrown as `NonRetryableError`, so the engine never retries a non-idempotent mutation. The prior blanket `retries: 2` on arbitrary steps is rejected per upstream "retry is engine-loss-only".
-- **Cancelling deferred with explicit rationale:** no `Cancelling` state, cancel flag, cancel endpoint, or stale-token rejection in the MVP slice because there is no user cancellation control to race. `Pending -> Cancelled` without an in-flight race is therefore not implemented either; the only `Pending -> Failed` path is the Workflow failure checkpoint. Phase 2 cancellation/timeout work must add: cancellable-state table, owner-only authorization, `Running -> Cancelling` + worker-honored flag, idempotent re-cancel, terminal non-cancellability, and the Cloudflare terminate mapping — before claiming cancellation semantics.
+- **Step retries gated to engine-loss-only with operator ceiling 2:** the retry policy is a code table, `stepRetryLimit()` in `src/domain.ts`, which every Saga `step.do` resolves its retry limit through. Integration/vendor Operations (`echo-http-v1`, `ninja-list-orgs-v1`) resolve to `retries: 0`; only idempotent D1 checkpoint Operations (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`, `timeout-mark-v1`) resolve up to ceiling 2 (`STEP_RETRY_CEILING`); unknown step names fail closed to 0. All expected/business failures (bad input, `CONNECTION_NOT_CONFIGURED`, vendor `NINJA_*`/`ECHO_*`) are returned as structured step results and thrown as `NonRetryableError`, so the engine never retries a non-idempotent mutation. Proven by a workerd test that counts exactly one outbound vendor call on failure. The prior blanket `retries: 2` on arbitrary steps is rejected per upstream "retry is engine-loss-only".
+- **Sleep/wait primitive (issue #16):** the native `WorkflowStep.sleep(name, duration)` (verified in the pinned `worker-configuration.d.ts`) is used on the echo success path (`settle-wait-v1`, `"1 second"`). It is deliberately an infrastructure checkpoint, not a product Operation: ExecutionHistory still records only `prepare-input-v1` and `echo-http-v1`. A workerd test proves wake+continue (Succeeded after the sleep, with an elapsed lower bound).
+- **Timeout (issue #16):** `TimedOut` is written exclusively by the explicit `timeout-mark-v1` checkpoint carrying `{ status: "TimedOut" }` with the structured `ECHO_VENDOR_TIMEOUT` code. The echo vendor step enforces its own deadline (`VENDOR_TIMEOUT_MS`); a slow vendor surfaces the timeout code through `failExecution`, never via native Workflow introspection. Operation rows stay within `('Running','Succeeded','Failed')`; the timeout code lives in `error_json`.
+- **Cancelling implemented (issue #16):** see `Cancellation` above. The Phase 2 investigation it was deferred to is discharged by the cancel endpoint + `terminate` mapping + idempotent re-cancel + terminal non-cancellability, all proven in workerd.
 
 ## Local testing strategy
 
@@ -251,4 +257,5 @@ Resolved by this ADR (per #15):
 - ~~Execution identity.~~ Deterministic SHA-256; UUIDv7 + `UNIQUE(idempotency_key)` rejected for MVP (see `Execution identity`).
 - ~~Recovery window.~~ 15-minute same-revision refusal gate, `Pending` never swept, `Scheduled` distinct deferred (see `Recovery window`).
 - ~~Dispatch.~~ `createBatch` + `dispatched` marker, caller-driven retry; reconciler/Cron deferred (see `Dispatch`).
-- ~~Step retries and Cancelling.~~ Engine-loss-only gate with ceiling 2; `Cancelling` deferred with rationale (see `Step retries and Cancelling`).
+- ~~Step retries and Cancelling.~~ Engine-loss-only gate with ceiling 2 via the `stepRetryLimit()` table; `Cancelling` implemented per issue #16 (see `Step retries and Cancelling` + `Cancellation`).
+- Issue #16 (resilience): native `step.sleep` wait on the echo success path; `TimedOut` solely via `timeout-mark-v1`; owner-only cancel endpoint with `Running -> Cancelling -> Cancelled` onto native `terminate()`; vendor steps proven at zero auto-retries; `Cancelling` CHECK value via `migrations/0002_cancelling.sql`. `Scheduled` remains the only deferred state in this model.
