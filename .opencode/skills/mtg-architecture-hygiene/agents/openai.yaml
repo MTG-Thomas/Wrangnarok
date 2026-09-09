@@ -1,0 +1,4 @@
+interface:
+  display_name: "MTG Architecture Hygiene"
+  short_description: "Review architecture without scope creep"
+  default_prompt: "Use $mtg-architecture-hygiene to review this codebase for focused architecture improvements."
