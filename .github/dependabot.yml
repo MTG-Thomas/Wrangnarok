@@ -5,7 +5,14 @@
 
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
+  - package-ecosystem: "npm"
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+    ignore:
+      # Hold vitest at 4.x: @cloudflare/vitest-plugin@1.1.6 peers
+      # vitest ^4.1.0, so vitest 5 breaks `npm ci` with ERESOLVE
+      # (see PR23, superseded for now by PR25). Revisit once Cloudflare
+      # ships a vitest-5-compatible plugin.
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
