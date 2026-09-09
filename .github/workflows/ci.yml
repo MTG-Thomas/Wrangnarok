@@ -61,6 +61,10 @@ jobs:
         if: steps.scaffold.outputs.present == 'true'
         run: npm test
 
+      - name: Build UI
+        if: steps.scaffold.outputs.present == 'true'
+        run: npm run build:ui
+
       - name: Wrangler dry run
         if: steps.scaffold.outputs.present == 'true'
         run: npx wrangler deploy --dry-run

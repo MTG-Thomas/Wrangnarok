@@ -12,5 +12,5 @@ export default defineConfig({
       NINJA_CLIENT_SECRET: "test-client-secret-sentinel",
     } },
   })],
-  test: { include: ["test/**/*.test.ts"] },
+  test: { include: ["test/**/*.test.{ts,tsx}"] },
 });

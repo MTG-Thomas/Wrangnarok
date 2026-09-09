@@ -11,9 +11,15 @@ function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
 }
 export default {
   async fetch(request: Request, env: Bindings): Promise<Response> {
+    const url = new URL(request.url);
+    // Single-Worker full-stack app (ADR 008): the browser UI ships as Static
+    // Assets and needs no auth; only /api/* is authenticated JSON.
+    if (!url.pathname.startsWith("/api/")) {
+      if (env.ASSETS) return env.ASSETS.fetch(request);
+      return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+    }
     try {
       const caller = await authenticate(request, env);
-      const url = new URL(request.url);
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported by this slice.");
       if (url.pathname === "/api/sagas" && request.method === "GET") return json({ sagas: [echoSaga, ninjaSaga] });
       if (url.pathname === "/api/executions" && request.method === "POST") {
@@ -47,7 +53,9 @@ export default {
             completedAt: op.completed_at, result: op.result_json ? JSON.parse(op.result_json) : null,
             error: op.error_json ? JSON.parse(op.error_json) : null })) });
       }
-      return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      // Gray-out is server-enforced: mapped /api/* routes serve, every other
+      // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).
+      return json({ error: { code: "UNIMPLEMENTED", message: "This API surface is not implemented in this slice." } }, 501);
     } catch (error) {
       const fault = error instanceof Fault ? error : new Fault(500, "INTERNAL_ERROR", "The request could not be completed.");
       const headers: Record<string, string> = {};

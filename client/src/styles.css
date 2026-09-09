@@ -1,0 +1,5 @@
+.shell { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 56rem; padding: 1rem; }
+.nav ul { display: flex; flex-wrap: wrap; gap: 0.75rem; list-style: none; padding: 0; }
+.nav .brand { font-weight: 800; }
+.nav .disabled { color: #666; }
+.nav .disabled a { margin-left: 0.25rem; }
