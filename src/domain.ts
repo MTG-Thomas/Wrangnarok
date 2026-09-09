@@ -3,17 +3,17 @@ export const echoSaga = Object.freeze({
   id: "720b9ebf-9b6a-4eac-bae9-6ed22c970401",
   name: "echo",
   revision: "echo-v1",
-  description: "First Acorn: prepare input and call the local HTTP echo Realm",
+  description: "First Acorn: prepare input and call the local HTTP echo Integration",
 });
-export const ECHO_REALM_ID = "720b9ebf-9b6a-4eac-bae9-6ed22c970402";
+export const ECHO_INTEGRATION_ID = "720b9ebf-9b6a-4eac-bae9-6ed22c970402";
 export const BODY_LIMIT = 4096;
 export const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
-export const JOURNEY_ID = /^[a-f0-9]{64}$/;
+export const EXECUTION_ID = /^[a-f0-9]{64}$/;
 export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-export type JourneyStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";
-export interface Principal { readonly userId: string; readonly groveId: string }
+export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";
+export interface Principal { readonly userId: string; readonly orgId: string }
 export interface EchoInput { message: string }
-export interface JourneyParams { journeyId: string }
+export interface ExecutionParams { executionId: string }
 export interface SafeError { code: string; message: string }
 
 export class Fault extends Error {
@@ -50,11 +50,11 @@ export async function hash(value: string): Promise<string> {
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-export function journeyId(principal: Principal, key: string): Promise<string> {
-  return hash(JSON.stringify(["wrangnarok.journey.v1", principal.groveId, principal.userId, parseKey(key)]));
+export function executionId(principal: Principal, key: string): Promise<string> {
+  return hash(JSON.stringify(["wrangnarok.execution.v1", principal.orgId, principal.userId, parseKey(key)]));
 }
 
-/** Shared byte bound, also used before parsing an external Realm response. */
+/** Shared byte bound, also used before parsing an external Integration response. */
 export async function boundedJson(body: ReadableStream<Uint8Array> | null): Promise<unknown> {
   if (body === null) throw new Fault(400, "INVALID_JSON", "A JSON body is required.");
   const reader = body.getReader();
@@ -75,6 +75,6 @@ export async function boundedJson(body: ReadableStream<Uint8Array> | null): Prom
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)); }
   catch { throw new Fault(400, "INVALID_JSON", "The body must be valid UTF-8 JSON."); }
 }
