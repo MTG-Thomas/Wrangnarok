@@ -14,20 +14,25 @@ const bindings = env as unknown as Bindings;
 const principal = { orgId: "00000000-0000-4000-8000-000000000001", userId: "00000000-0000-4000-8000-000000000002" };
 const auth = { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json" };
 function submitRequest(key: string, message = "hello") {
-  return new Request("http://local.test/api/executions", { method: "POST",
+  return new Request("http://local.test/api/executions", {
+    method: "POST",
     headers: { ...auth, "Idempotency-Key": key },
-    body: JSON.stringify({ sagaId: echoSaga.id, input: { message } }) });
+    body: JSON.stringify({ sagaId: echoSaga.id, input: { message } }),
+  });
 }
 function detailRequest(id: string) {
   return new Request(`http://local.test/api/executions/${id}`, { method: "GET", headers: { ...auth } });
 }
 function cancelRequest(id: string, override: Partial<Bindings> = {}) {
-  return { request: new Request(`http://local.test/api/executions/${id}/cancel`, { method: "POST", headers: { ...auth } }), override };
+  return {
+    request: new Request(`http://local.test/api/executions/${id}/cancel`, { method: "POST", headers: { ...auth } }),
+    override,
+  };
 }
 async function waitForExecutionStatus(id: string, want: string, timeoutMs = 10000): Promise<string> {
   const start = Date.now();
   for (;;) {
-    const body = await (await worker.fetch(detailRequest(id), bindings)).json() as { status: string };
+    const body = (await (await worker.fetch(detailRequest(id), bindings)).json()) as { status: string };
     if (body.status === want) return body.status;
     if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${want}; last observed: ${body.status}`);
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -60,8 +65,15 @@ it("wakes from the native sleep step and continues to success", async () => {
   expect((await worker.fetch(submitRequest(key), bindings)).status).toBe(202);
   await instance.waitForStatus("complete");
   const detail = await worker.fetch(detailRequest(id), bindings);
-  expect(await detail.json()).toMatchObject({ executionId: id, status: "Succeeded", result: { message: "hello" },
-    operations: [{ name: "prepare-input-v1", status: "Succeeded" }, { name: "echo-http-v1", status: "Succeeded" }] });
+  expect(await detail.json()).toMatchObject({
+    executionId: id,
+    status: "Succeeded",
+    result: { message: "hello" },
+    operations: [
+      { name: "prepare-input-v1", status: "Succeeded" },
+      { name: "echo-http-v1", status: "Succeeded" },
+    ],
+  });
   // The 1-second native step.sleep sits between the vendor step and the
   // success checkpoint, so reaching Succeeded proves wake+continue. The sleep
   // itself is an infrastructure checkpoint, not a product Operation.
@@ -90,7 +102,11 @@ it("surfaces a slow vendor as TimedOut through the explicit timeout step", async
   await instance.waitForStatus("errored");
   const response = await worker.fetch(detailRequest(id), bindings);
   const text = await response.text();
-  expect(JSON.parse(text)).toMatchObject({ executionId: id, status: "TimedOut", error: { code: "ECHO_VENDOR_TIMEOUT" } });
+  expect(JSON.parse(text)).toMatchObject({
+    executionId: id,
+    status: "TimedOut",
+    error: { code: "ECHO_VENDOR_TIMEOUT" },
+  });
   expect(text).not.toContain("slow-vendor-diagnostic");
 }, 20000);
 it("cancels a Running execution through the native terminate control", async () => {
@@ -112,12 +128,18 @@ it("cancels a Running execution through the native terminate control", async () 
   ]);
   console.log(`native terminate observation: ${native}`);
   const detail = await worker.fetch(detailRequest(id), bindings);
-  expect(await detail.json()).toMatchObject({ executionId: id, status: "Cancelled", error: { code: "EXECUTION_CANCELLED" } });
+  expect(await detail.json()).toMatchObject({
+    executionId: id,
+    status: "Cancelled",
+    error: { code: "EXECUTION_CANCELLED" },
+  });
   // Re-cancel of the now-terminal Execution is rejected, not resurrected.
   expect((await worker.fetch(cancelRequest(id).request, bindings)).status).toBe(409);
   // A foreign requester learns nothing about the Execution.
-  const foreign = await worker.fetch(cancelRequest(id).request,
-    { ...bindings, LAB_USER_ID: "00000000-0000-4000-8000-000000000003" });
+  const foreign = await worker.fetch(cancelRequest(id).request, {
+    ...bindings,
+    LAB_USER_ID: "00000000-0000-4000-8000-000000000003",
+  });
   expect(foreign.status).toBe(404);
   expect(fetch).toHaveBeenCalledTimes(1);
 }, 25000);
@@ -127,8 +149,20 @@ it("cancels a Pending execution immediately and never dispatches it", async () =
   mockEcho(async () => Response.json({ message: "hello" }));
   await bindings.DB.prepare(
     "INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,dispatched,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-  ).bind(id, echoSaga.id, echoSaga.name, echoSaga.revision, principal.orgId, principal.userId,
-    JSON.stringify({ message: "hello" }), 0, "Pending", new Date().toISOString()).run();
+  )
+    .bind(
+      id,
+      echoSaga.id,
+      echoSaga.name,
+      echoSaga.revision,
+      principal.orgId,
+      principal.userId,
+      JSON.stringify({ message: "hello" }),
+      0,
+      "Pending",
+      new Date().toISOString(),
+    )
+    .run();
   const { request } = cancelRequest(id);
   const cancelled = await worker.fetch(request, bindings);
   expect(cancelled.status).toBe(200);

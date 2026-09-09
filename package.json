@@ -19,7 +19,9 @@
     "setup:local": "node scripts/setup-local.mjs",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:seed:local": "node scripts/seed-local.mjs",
-    "fixture": "node scripts/echo-server.mjs"
+    "fixture": "node scripts/echo-server.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "react": "19.2.0",
@@ -31,6 +33,7 @@
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "5.0.2",
+    "prettier": "3.9.6",
     "typescript": "5.8.3",
     "vite": "7.3.6",
     "vitest": "4.1.11",

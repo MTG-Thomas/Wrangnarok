@@ -8,9 +8,7 @@ import { fetchExecutionDetail } from "../lib/api-client";
 import { getErrorMessage } from "../lib/api-error";
 import type { ExecutionDetail as Detail } from "../lib/client-types";
 
-export function ExecutionDetailView(props: {
-  initial?: Detail;
-}): React.JSX.Element {
+export function ExecutionDetailView(props: { initial?: Detail }): React.JSX.Element {
   const params = useParams();
   const id = props.initial?.executionId ?? params["id"] ?? "";
   const [data, setData] = useState<Detail | null>(props.initial ?? null);

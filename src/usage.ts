@@ -30,9 +30,16 @@ export interface UsageBlock {
   readonly note: string;
 }
 export function buildUsage(input: {
-  saga: string; sagaRevision: string; executionId: string; orgId: string;
-  status: string; operationRows: number; reads: number; writes: number;
-  stepsExecuted: number; durationMs: number;
+  saga: string;
+  sagaRevision: string;
+  executionId: string;
+  orgId: string;
+  status: string;
+  operationRows: number;
+  reads: number;
+  writes: number;
+  stepsExecuted: number;
+  durationMs: number;
 }): UsageBlock {
   return {
     version: USAGE_VERSION,
@@ -55,8 +62,12 @@ export function logUsage(usage: UsageBlock): void {
  * (old DB before migration 0002) must not fail the Execution itself. */
 export async function persistUsage(db: D1Database, executionId: string, usage: UsageBlock): Promise<void> {
   try {
-    await db.prepare("INSERT INTO usage_blocks(execution_id,usage_json,created_at) VALUES (?,?,?) ON CONFLICT(execution_id) DO NOTHING")
-      .bind(executionId, JSON.stringify(usage), new Date().toISOString()).run();
+    await db
+      .prepare(
+        "INSERT INTO usage_blocks(execution_id,usage_json,created_at) VALUES (?,?,?) ON CONFLICT(execution_id) DO NOTHING",
+      )
+      .bind(executionId, JSON.stringify(usage), new Date().toISOString())
+      .run();
   } catch {
     console.warn(`WRANGNAROK_USAGE_PERSIST_SKIPPED ${executionId}`);
   }

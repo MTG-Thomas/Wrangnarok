@@ -6,10 +6,7 @@
 // the Token field in the UI) and sent as `Authorization: Bearer <token>`.
 // Secrets are never bundled in client code.
 import { parseApiError } from "./api-error";
-import type {
-  ExecutionDetail,
-  ExecutionHistoryResponse,
-} from "./client-types";
+import type { ExecutionDetail, ExecutionHistoryResponse } from "./client-types";
 
 const TOKEN_KEY = "wrangnarok.token";
 
@@ -48,11 +45,7 @@ function isHistoryResponse(value: unknown): value is ExecutionHistoryResponse {
 function isDetailResponse(value: unknown): value is ExecutionDetail {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
-  return (
-    typeof v["executionId"] === "string" &&
-    Array.isArray(v["operations"]) &&
-    "runtimeStatus" in v
-  );
+  return typeof v["executionId"] === "string" && Array.isArray(v["operations"]) && "runtimeStatus" in v;
 }
 
 /** GET /api/executions — ExecutionHistory list (20 + hasMore). */

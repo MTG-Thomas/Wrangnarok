@@ -1,15 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { boundedJson, canTransition, echoSaga, executionId, ninjaSaga, parseInput, parseSubmission, STEP_RETRY_CEILING, stepRetryLimit } from "../src/domain";
+import {
+  boundedJson,
+  canTransition,
+  echoSaga,
+  executionId,
+  ninjaSaga,
+  parseInput,
+  parseSubmission,
+  STEP_RETRY_CEILING,
+  stepRetryLimit,
+} from "../src/domain";
 
 describe("MVP slice contracts", () => {
   it("uses a stable Saga UUID rather than a class or file name", () => {
     expect(echoSaga.id).toBe("720b9ebf-9b6a-4eac-bae9-6ed22c970401");
     expect(parseSubmission({ sagaId: echoSaga.id, input: { message: "hello" } })).toEqual({
-      saga: expect.objectContaining({ id: echoSaga.id }), input: { message: "hello" },
+      saga: expect.objectContaining({ id: echoSaga.id }),
+      input: { message: "hello" },
     });
     expect(ninjaSaga.id).toBe("2c79a880-f1ac-4183-b324-d05daffc321a");
     expect(parseSubmission({ sagaId: ninjaSaga.id, input: {} })).toEqual({
-      saga: expect.objectContaining({ id: ninjaSaga.id }), input: {},
+      saga: expect.objectContaining({ id: ninjaSaga.id }),
+      input: {},
     });
   });
   it("rejects submitted Organization overrides and unexpected input", () => {
@@ -49,7 +61,15 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Running", "Cancelling")).toBe(true);
     expect(canTransition("Cancelling", "Cancelled")).toBe(true);
     for (const terminal of ["Succeeded", "Failed", "TimedOut", "Cancelled"] as const) {
-      for (const next of ["Pending", "Running", "Succeeded", "Failed", "TimedOut", "Cancelling", "Cancelled"] as const) {
+      for (const next of [
+        "Pending",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "TimedOut",
+        "Cancelling",
+        "Cancelled",
+      ] as const) {
         expect(canTransition(terminal, next)).toBe(false);
       }
     }
