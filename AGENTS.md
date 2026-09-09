@@ -17,11 +17,11 @@ Before changing architecture or domain contracts, read:
 3. TypeScript is the implementation and Saga-authoring language.
 4. Sagas are code-first. Do not invent a YAML/JSON workflow DSL without a demonstrated requirement.
 5. Cloudflare primitives retain their native names: Worker, Workflow, step, Queue, Durable Object, D1, R2, KV, binding, etc.
-6. Domain vocabulary is defined in `docs/lexicon.md`; do not casually add mythological aliases.
+6. The canonical domain vocabulary is `docs/lexicon.md`; do not casually add mythological aliases. In case of conflict, `docs/lexicon.md` prevails over README, roadmap, or ADR summaries.
 7. Start with Worker + Workflows + D1. Add another Cloudflare primitive only when a concrete requirement needs it and document why.
 8. Prefer boring, typed TypeScript APIs over clever wrappers.
-9. Realm definitions and Grove-specific Connections are separate concepts. Never embed environment credentials in portable Saga/Realm source.
-10. Grove/tenant context and authorization boundaries must remain explicit.
+9. Integration definitions and Organization-specific Connections are separate concepts. Never embed environment credentials in portable Saga/Integration source.
+10. Organization context and authorization boundaries must remain explicit.
 11. Saga identity must survive ordinary source edits.
 12. Local development and tests must not require a Cloudflare production deployment.
 13. Do not hide Cloudflare behind a portability abstraction. Cloudflare-native is the experiment.
@@ -35,13 +35,13 @@ Use Cloudflare's current local tooling rather than hand-written mocks where prac
 - local D1 bindings and migrations;
 - local Workflows emulation;
 - `@cloudflare/vitest-plugin` + Vitest for Worker-runtime tests;
-- mock only external vendor HTTP APIs at the Realm boundary.
+- mock only external vendor HTTP APIs at the Integration boundary.
 
 Keep domain logic independently testable where possible, but include integration tests that exercise the real local Cloudflare runtime/bindings.
 
 ## Architecture changes
 
-If a change introduces a new platform primitive, changes Saga/Journey/Operation semantics, changes tenancy/security boundaries, or creates a public compatibility contract, write/update an ADR or architecture spec and link the relevant issue.
+If a change introduces a new platform primitive, changes Saga/Execution/Operation semantics, changes tenancy/security boundaries, or creates a public compatibility contract, write/update an ADR or architecture spec and link the relevant issue.
 
 ## Upstream archaeology
 

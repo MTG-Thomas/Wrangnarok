@@ -76,8 +76,10 @@ jobs:
           test -s docs/testing.md
           test -s docs/architecture/001-execution-model.md
           test -s docs/architecture/002-saga-identity.md
-          test -s docs/architecture/003-realms-connections.md
+          test -s docs/architecture/003-integrations-connections.md
           test -s docs/architecture/004-ci-cd.md
+          test -s docs/architecture/005-secret-storage.md
+          test -s docs/architecture/006-naming.md
 
           grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
           grep -q "END OF TERMS AND CONDITIONS" LICENSE

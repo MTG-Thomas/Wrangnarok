@@ -15,9 +15,9 @@ Cloudflare's local tooling runs Workers under `workerd` and provides local imple
 Use ordinary Vitest tests for domain behavior that does not need bindings:
 
 - Saga catalog/identity rules;
-- Journey state transitions;
+- Execution state transitions;
 - structured errors;
-- Realm request/response shaping;
+- Integration request/response shaping;
 - validation and serialization.
 
 ### 2. Worker-runtime tests
@@ -29,7 +29,7 @@ Primary targets:
 - HTTP routing;
 - D1 repositories/migrations;
 - authorization/context propagation;
-- Realm code that depends on Worker runtime APIs.
+- Integration code that depends on Worker runtime APIs.
 
 ### 3. Local D1
 
@@ -39,21 +39,27 @@ Tests must be repeatable from an empty database and must not depend on productio
 
 ### 4. Local Workflows
 
-Use `wrangler dev` local Workflows support for end-to-end Journey tests. Exercise creation, execution and inspection of Workflow instances locally.
+Use `wrangler dev` local Workflows support for end-to-end Execution tests. Exercise creation, execution and inspection of Workflow instances locally.
 
 First Acorn should prove:
 
 ```text
 HTTP request
   -> Worker
-  -> D1 Journey row
+  -> D1 Execution row
   -> local Workflow instance
   -> multiple durable Operations
-  -> mocked external HTTP Realm
-  -> terminal Journey state/result in D1
+  -> mocked external HTTP Integration
+  -> terminal Execution state/result in D1
 ```
 
-### 5. External Realm mocks
+- Dual-write fault test (Worker-runtime + local D1 + local Workflow binding): crash between D1 `Pending` insert and `Workflow.create()`, then assert retry with the same `Idempotency-Key` returns the same `executionId` and reconciliation adopt-or-fails the `Pending` row (no second Workflow instance). Cover `create()`-throws and callback-never-arrives cases.
+- Idempotency conflict test: same key + different canonical input => 409 `IDEMPOTENCY_CONFLICT` + original lookup path; stored input immutable; concurrent conflicting submits never both launch.
+- Expiry test: `Pending` older than 10 minutes with absent Workflow history is never silently recreated; surfaces expired lookup path and requires a fresh key.
+- Determinism authoring test: static assertion + runtime test that Saga `run` bodies contain no direct `Date.now()` / `Math.random()` / `fetch()` / top-level `ctx.integrations.*` outside `ctx.step.do()` / `defineOperation`, and that Saga `input`/`output` fixtures round-trip through `JSON.stringify` (serializable contract).
+- Runtime smoke skeleton (local Wrangler, no login/deploy, temp config + temp state, teardown after): duplicate-submit, conflict-submit (409), cross-principal isolation (404 without touching Workflow binding), completion with bounded Operations, restart persistence (same key => same Execution + same result). Model on the lab spike's `scripts/runtime-smoke.mjs` crash/ambiguity windows: simultaneous same-key submits, lost create response, receipt-write failure, quota failure, retained receipt after history loss.
+
+### 5. External Integration mocks
 
 External APIs are the mock boundary. Tests should provide deterministic HTTP behavior for:
 
@@ -89,6 +95,6 @@ Initial CI should require:
 - TypeScript typecheck;
 - unit/Worker-runtime tests;
 - local D1 migration/application tests;
-- a local end-to-end Journey test once Workflows harnessing is stable in CI.
+- a local end-to-end Execution test once Workflows harnessing is stable in CI.
 
 Production deployment should not be required to merge ordinary PRs.
