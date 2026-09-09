@@ -9,4 +9,5 @@ export interface Bindings extends LabAuth, NinjaCredentials {
   DB: D1Database;
   ECHO_WORKFLOW: Workflow<ExecutionParams>;
   NINJA_WORKFLOW: Workflow<ExecutionParams>;
+  ASSETS?: Fetcher;
 }
