@@ -20,7 +20,13 @@ function request(path: string, method = "GET", body: unknown = {}) {
 function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus = 200) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url === "https://app.ninjarmm.com/oauth/token") {
+    if (url === "https://us2.ninjarmm.com/oauth/token") {
+      const body = typeof init?.body === "string" ? init.body : "";
+      expect(body).toContain("grant_type=client_credentials");
+      expect(body).toContain("scope=monitoring");
+      expect(body).not.toContain("management");
+      // workerd rejects redirect:"error"; pin the live-safe policy.
+      expect(init?.redirect).toBe("manual");
       return new Response(JSON.stringify(token), { status: tokenStatus, headers: { "Content-Type": "application/json" } });
     }
     if (url === "https://us2.ninjarmm.com/api/v2/organizations") {
@@ -28,6 +34,7 @@ function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus 
       // cross-realm AbortSignal that the Request constructor rejects.
       const headers = input instanceof Request ? input.headers : new Headers(init?.headers as HeadersInit);
       expect(headers.get("Authorization")).toBe(`Bearer ${TOKEN_SENTINEL}`);
+      expect(init?.redirect).toBe("manual");
       return new Response(typeof orgs === "string" ? orgs : JSON.stringify(orgs),
         { status: orgsStatus, headers: { "Content-Type": "application/json" } });
     }
@@ -86,4 +93,17 @@ it("rejects non-empty input and unknown sagas", async () => {
     headers: { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json", "Idempotency-Key": key },
     body: JSON.stringify({ sagaId: "00000000-0000-0000-0000-000000000000", input: {} }) });
   expect((await worker.fetch(unknown, bindings)).status).toBe(400);
+});
+it("truncates large organization lists to a bounded persisted summary", async () => {
+  const many = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, name: `Org ${index + 1}` }));
+  mockNinja({ access_token: TOKEN_SENTINEL, expires_in: 3600, token_type: "Bearer" }, many);
+  const id = await executionId(principal, key);
+  await using instance = await introspectWorkflowInstance(bindings.NINJA_WORKFLOW, id);
+  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  await instance.waitForStatus("complete");
+  const detail = await worker.fetch(request(`/api/executions/${id}`), bindings);
+  const body = await detail.json() as { status: string; result: { organizationCount: number; organizations: unknown[] } };
+  expect(body.status).toBe("Succeeded");
+  expect(body.result.organizationCount).toBe(100);
+  expect(body.result.organizations).toHaveLength(25);
 });

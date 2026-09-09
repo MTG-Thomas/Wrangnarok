@@ -13,10 +13,12 @@ export const ninjaSaga = Object.freeze({
   description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
 });
 export const NINJA_INTEGRATION_ID = "0606e237-137b-4629-8346-85468e1c2df6";
-// Verified live 2026-09-09 (no creds): app.ninjarmm.com answers both token
-// paths with the API error envelope; us2 token paths 404 at infra level.
-// Default follows the working community client; re-verify with real creds.
-export const NINJA_TOKEN_URL = "https://app.ninjarmm.com/oauth/token";
+// Token lives on the regional host, not the central app host: derive it from
+// the Connection endpoint origin (verified live 2026-09-09: us2 answers
+// /oauth/token, app.ninjarmm.com does not know us2 clients). Read-only scope:
+// the M2M app carries monitoring only, and management is rejected for it.
+export const NINJA_TOKEN_PATH = "/oauth/token";
+export const NINJA_SCOPE = "monitoring";
 export const NINJA_ORGS_PATH = "/v2/organizations";
 export const BODY_LIMIT = 4096;
 export const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
@@ -86,8 +88,10 @@ export function executionId(principal: Principal, key: string): Promise<string> 
   return hash(JSON.stringify(["wrangnarok.execution.v1", principal.orgId, principal.userId, parseKey(key)]));
 }
 
-/** Shared byte bound, also used before parsing an external Integration response. */
-export async function boundedJson(body: ReadableStream<Uint8Array> | null): Promise<unknown> {
+/** Shared byte bound, also used before parsing an external Integration response.
+ * Callers with a known vendor shape may pass a higher transport cap; what
+ * gets persisted is still governed by the D1 result CHECK constraints. */
+export async function boundedJson(body: ReadableStream<Uint8Array> | null, limit = BODY_LIMIT): Promise<unknown> {
   if (body === null) throw new Fault(400, "INVALID_JSON", "A JSON body is required.");
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -97,9 +101,9 @@ export async function boundedJson(body: ReadableStream<Uint8Array> | null): Prom
       const chunk = await reader.read();
       if (chunk.done) break;
       length += chunk.value.byteLength;
-      if (length > BODY_LIMIT) {
+      if (length > limit) {
         await reader.cancel();
-        throw new Fault(413, "BODY_TOO_LARGE", "The body exceeds 4096 bytes.");
+        throw new Fault(413, "BODY_TOO_LARGE", `The body exceeds ${limit} bytes.`);
       }
       chunks.push(chunk.value);
     }
