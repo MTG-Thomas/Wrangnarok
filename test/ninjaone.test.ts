@@ -25,7 +25,7 @@ function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus 
       expect(body).toContain("grant_type=client_credentials");
       expect(body).toContain("scope=monitoring");
       expect(body).not.toContain("management");
-      // workerd rejects redirect:"error"; pin the live-safe policy.
+      // workerd has no error-mode redirect; pin the live-safe policy.
       expect(init?.redirect).toBe("manual");
       return new Response(JSON.stringify(token), { status: tokenStatus, headers: { "Content-Type": "application/json" } });
     }
