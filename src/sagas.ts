@@ -3,7 +3,7 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import type { Bindings } from "./bindings";
-import { echoSaga, ECHO_INTEGRATION_ID, Fault, EXECUTION_ID, ninjaSaga, NINJA_INTEGRATION_ID, parseInput, parseNinjaOrgsInput, parseSmokeInput, smokeSaga } from "./domain";
+import { echoSaga, ECHO_INTEGRATION_ID, Fault, EXECUTION_ID, ninjaSaga, NINJA_INTEGRATION_ID, parseInput, parseNinjaOrgsInput, parseSmokeInput, smokeSaga, stepRetryLimit } from "./domain";
 import type { EchoInput, ExecutionParams, NinjaOrgsResult, SafeError, SmokeResult } from "./domain";
 import { beginOperation, failExecution, finishOperation } from "./executions";
 import type { ExecutionRow } from "./executions";
@@ -12,11 +12,13 @@ import { echo } from "./integrations/echo";
 import { listOrganizations } from "./integrations/ninjaone";
 
 /** Native Workflow implementation of the stable echo Saga. No portability runtime.
- * Retry gate (ADR 001 #15, upstream finding 14): Integration/vendor steps use
- * retries 0 unless destination-side idempotency is proven; idempotent D1
- * checkpoint steps only may use retries up to the operator ceiling 2; all
- * business/expected failures throw NonRetryableError so the engine never
- * retries a non-idempotent mutation. Cancelling/Scheduled deferred (see ADR). */
+ * Retry gate (ADR 001 #15, upstream finding 14): every step.do retry limit
+ * resolves through stepRetryLimit — vendor steps 0, idempotent D1 checkpoints
+ * up to the operator ceiling 2; all business/expected failures throw
+ * NonRetryableError. Resilience (#16): native step.sleep wait on the success
+ * path, and an explicit timeout-mark-v1 checkpoint that is the sole writer of
+ * TimedOut. Cancelling is honored via the prepare guard + conditional writes:
+ * a cancelled row never advances to Running here. */
 export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> {
   async run(event: WorkflowEvent<ExecutionParams>, step: WorkflowStep): Promise<EchoInput> {
     const id = event.payload.executionId;
@@ -25,13 +27,17 @@ export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> 
       throw new NonRetryableError("Invalid local Execution invocation.");
     }
     let expectedFailure: SafeError | undefined;
+    let timedOut = false;
     try {
       const prepared = await step.do("prepare-input-v1", {
-        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+        retries: { limit: stepRetryLimit("prepare-input-v1"), delay: "1 second" }, timeout: "10 seconds",
       }, async () => {
         const row = await this.env.DB.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
         if (!row || row.saga_id !== echoSaga.id || row.saga_revision !== echoSaga.revision) {
           throw new NonRetryableError("Unknown Saga revision.");
+        }
+        if (row.status === "Cancelling" || row.status === "Cancelled") {
+          throw new NonRetryableError("Execution was cancelled.");
         }
         const input = parseInput(JSON.parse(row.input_json));
         await this.env.DB.prepare("UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'")
@@ -41,7 +47,7 @@ export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> 
         return { input, orgId: row.org_id };
       });
       const outcome = await step.do("echo-http-v1", {
-        retries: { limit: 0, delay: "1 second" }, timeout: "10 seconds",
+        retries: { limit: stepRetryLimit("echo-http-v1"), delay: "1 second" }, timeout: "10 seconds",
       }, async () => {
         await beginOperation(this.env.DB, id, "echo-http-v1", 1);
         const connection = await this.env.DB.prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
@@ -59,11 +65,26 @@ export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> 
       });
       if (!outcome.ok) {
         expectedFailure = outcome.error;
+        timedOut = outcome.error.code === "ECHO_VENDOR_TIMEOUT";
+        if (timedOut) {
+          // Explicit timeout step: the sole writer of TimedOut. The vendor
+          // deadline fired inside echo-http-v1; nothing here is inferred from
+          // native Workflow introspection. The shared catch below skips its
+          // Failed checkpoint once this marker has persisted.
+          const failure: SafeError = outcome.error;
+          await step.do("timeout-mark-v1", {
+            retries: { limit: stepRetryLimit("timeout-mark-v1"), delay: "1 second" }, timeout: "10 seconds",
+          }, () => failExecution(this.env.DB, id, failure, "TimedOut"));
+        }
         throw new NonRetryableError(expectedFailure.code);
       }
       const output = outcome.result;
+      // Native wait primitive (verified in worker-configuration.d.ts:
+      // WorkflowStep.sleep(name, duration)). Deliberately not a product
+      // Operation: not every infrastructure checkpoint is ExecutionHistory.
+      await step.sleep("settle-wait-v1", "1 second");
       await step.do("persist-success-v1", {
-        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+        retries: { limit: stepRetryLimit("persist-success-v1"), delay: "1 second" }, timeout: "10 seconds",
       }, async () => {
         await this.env.DB.prepare("UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'")
           .bind(new Date().toISOString(), JSON.stringify(output), id).run();
@@ -74,9 +95,11 @@ export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> 
       const safe: SafeError = expectedFailure ?? {
         code: "EXECUTION_FAILED", message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
-      await step.do("persist-failure-v1", {
-        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
-      }, () => failExecution(this.env.DB, id, safe));
+      if (!timedOut) {
+        await step.do("persist-failure-v1", {
+          retries: { limit: stepRetryLimit("persist-failure-v1"), delay: "1 second" }, timeout: "10 seconds",
+        }, () => failExecution(this.env.DB, id, safe));
+      }
       throw new NonRetryableError(safe.code);
     }
   }
@@ -94,11 +117,14 @@ export class NinjaOrgsWorkflow extends WorkflowEntrypoint<Bindings, ExecutionPar
     let expectedFailure: SafeError | undefined;
     try {
       const prepared = await step.do("prepare-input-v1", {
-        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+        retries: { limit: stepRetryLimit("prepare-input-v1"), delay: "1 second" }, timeout: "10 seconds",
       }, async () => {
         const row = await this.env.DB.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
         if (!row || row.saga_id !== ninjaSaga.id || row.saga_revision !== ninjaSaga.revision) {
           throw new NonRetryableError("Unknown Saga revision.");
+        }
+        if (row.status === "Cancelling" || row.status === "Cancelled") {
+          throw new NonRetryableError("Execution was cancelled.");
         }
         parseNinjaOrgsInput(JSON.parse(row.input_json));
         await this.env.DB.prepare("UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'")
@@ -108,7 +134,7 @@ export class NinjaOrgsWorkflow extends WorkflowEntrypoint<Bindings, ExecutionPar
         return { orgId: row.org_id };
       });
       const outcome = await step.do("ninja-list-orgs-v1", {
-        retries: { limit: 0, delay: "1 second" }, timeout: "10 seconds",
+        retries: { limit: stepRetryLimit("ninja-list-orgs-v1"), delay: "1 second" }, timeout: "10 seconds",
       }, async () => {
         await beginOperation(this.env.DB, id, "ninja-list-orgs-v1", 1);
         const connection = await this.env.DB.prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
@@ -135,7 +161,7 @@ export class NinjaOrgsWorkflow extends WorkflowEntrypoint<Bindings, ExecutionPar
       }
       const output = outcome.result;
       await step.do("persist-success-v1", {
-        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+        retries: { limit: stepRetryLimit("persist-success-v1"), delay: "1 second" }, timeout: "10 seconds",
       }, async () => {
         await this.env.DB.prepare("UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'")
           .bind(new Date().toISOString(), JSON.stringify(output), id).run();
@@ -147,7 +173,7 @@ export class NinjaOrgsWorkflow extends WorkflowEntrypoint<Bindings, ExecutionPar
         code: "EXECUTION_FAILED", message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
       await step.do("persist-failure-v1", {
-        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+        retries: { limit: stepRetryLimit("persist-failure-v1"), delay: "1 second" }, timeout: "10 seconds",
       }, () => failExecution(this.env.DB, id, safe));
       throw new NonRetryableError(safe.code);
     }
@@ -175,6 +201,9 @@ export class SmokeWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams>
         const row = await this.env.DB.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
         if (!row || row.saga_id !== smokeSaga.id || row.saga_revision !== smokeSaga.revision) {
           throw new NonRetryableError("Unknown Saga revision.");
+        }
+        if (row.status === "Cancelling" || row.status === "Cancelled") {
+          throw new NonRetryableError("Execution was cancelled.");
         }
         parseSmokeInput(JSON.parse(row.input_json));
         await this.env.DB.prepare("UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'")

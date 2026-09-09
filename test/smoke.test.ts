@@ -7,7 +7,7 @@ import type { Bindings } from "../src/bindings";
 import { echoSaga, executionId, SMOKE_ORG_ID, SMOKE_USER_ID, smokeSaga } from "../src/domain";
 import { USAGE_VERSION } from "../src/usage";
 import migration1 from "../migrations/0001_initial.sql?raw";
-import migration2 from "../migrations/0002_usage_blocks.sql?raw";
+import migration2 from "../migrations/0003_usage_blocks.sql?raw";
 const bindings = env as unknown as Bindings;
 // Disposable smoke Organization per ADR 004: never production tenant data.
 const smokePrincipal = { orgId: SMOKE_ORG_ID, userId: SMOKE_USER_ID };
