@@ -19,7 +19,8 @@ export const smokeSaga = Object.freeze({
   id: "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
   name: "system.smoke",
   revision: "system.smoke-v1",
-  description: "Platform smoke: Worker request handling, D1 write/read verification, multi-Operation Workflow, terminal persistence, usage block — no vendor dependency",
+  description:
+    "Platform smoke: Worker request handling, D1 write/read verification, multi-Operation Workflow, terminal persistence, usage block — no vendor dependency",
 });
 // Disposable smoke Organization (ADR 004): smoke runs here, never against
 // production tenant/Connection data. Seeded in tests; provisioned in dev via
@@ -77,24 +78,48 @@ const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]>
 export function canTransition(from: ExecutionStatus, to: ExecutionStatus): boolean {
   return EXECUTION_TRANSITIONS[from].includes(to);
 }
-export interface Principal { readonly userId: string; readonly orgId: string }
-export interface EchoInput { message: string }
-export interface NinjaOrgsInput { /* empty: read-only census, no parameters */ }
-export interface NinjaOrgSummary { id: number; name: string }
-export interface NinjaOrgsResult { organizationCount: number; organizations: NinjaOrgSummary[] }
+export interface Principal {
+  readonly userId: string;
+  readonly orgId: string;
+}
+export interface EchoInput {
+  message: string;
+}
+export interface NinjaOrgsInput {
+  /* empty: read-only census, no parameters */
+}
+export interface NinjaOrgSummary {
+  id: number;
+  name: string;
+}
+export interface NinjaOrgsResult {
+  organizationCount: number;
+  organizations: NinjaOrgSummary[];
+}
 export const NINJA_ORGS_MAX = 25;
-export interface SmokeInput { /* empty: loopback-free census, no parameters */ }
+export interface SmokeInput {
+  /* empty: loopback-free census, no parameters */
+}
 export interface SmokeResult {
   d1WriteOk: boolean;
   d1ReadOk: boolean;
   operationCount: number;
   operations: string[];
 }
-export interface ExecutionParams { executionId: string }
-export interface SafeError { code: string; message: string }
+export interface ExecutionParams {
+  executionId: string;
+}
+export interface SafeError {
+  code: string;
+  message: string;
+}
 
 export class Fault extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
     super(message);
     this.name = "Fault";
   }
@@ -103,9 +128,13 @@ export function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 export function parseInput(value: unknown): EchoInput {
-  if (!object(value) || Object.keys(value).some((key) => key !== "message") ||
-      typeof value.message !== "string" || value.message.length === 0 ||
-      new TextEncoder().encode(value.message).length > 1024) {
+  if (
+    !object(value) ||
+    Object.keys(value).some((key) => key !== "message") ||
+    typeof value.message !== "string" ||
+    value.message.length === 0 ||
+    new TextEncoder().encode(value.message).length > 1024
+  ) {
     throw new Fault(400, "INVALID_INPUT", "Expected one message of 1 to 1024 UTF-8 bytes.");
   }
   return { message: value.message };
@@ -123,8 +152,11 @@ export function parseSmokeInput(value: unknown): SmokeInput {
   return {};
 }
 export interface SagaDef {
-  readonly id: string; readonly name: string; readonly revision: string;
-  readonly description: string; readonly parse: (value: unknown) => unknown;
+  readonly id: string;
+  readonly name: string;
+  readonly revision: string;
+  readonly description: string;
+  readonly parse: (value: unknown) => unknown;
 }
 const catalog: SagaDef[] = [
   { ...echoSaga, parse: parseInput },
@@ -132,8 +164,11 @@ const catalog: SagaDef[] = [
   { ...smokeSaga, parse: parseSmokeInput },
 ];
 export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {
-  if (!object(value) || Object.keys(value).some((key) => !["sagaId", "input"].includes(key)) ||
-      typeof value.sagaId !== "string") {
+  if (
+    !object(value) ||
+    Object.keys(value).some((key) => !["sagaId", "input"].includes(key)) ||
+    typeof value.sagaId !== "string"
+  ) {
     throw new Fault(400, "INVALID_SUBMISSION", "Provide a built-in Saga ID and its input only.");
   }
   const saga = catalog.find((entry) => entry.id === value.sagaId);
@@ -173,10 +208,18 @@ export async function boundedJson(body: ReadableStream<Uint8Array> | null, limit
       }
       chunks.push(chunk.value);
     }
-  } finally { reader.releaseLock(); }
+  } finally {
+    reader.releaseLock();
+  }
   const bytes = new Uint8Array(length);
   let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)); }
-  catch { throw new Fault(400, "INVALID_JSON", "The body must be valid UTF-8 JSON."); }
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
+  } catch {
+    throw new Fault(400, "INVALID_JSON", "The body must be valid UTF-8 JSON.");
+  }
 }
