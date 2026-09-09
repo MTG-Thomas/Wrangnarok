@@ -80,6 +80,8 @@ jobs:
           test -s docs/architecture/004-ci-cd.md
           test -s docs/architecture/005-secret-storage.md
           test -s docs/architecture/006-naming.md
+          test -s docs/architecture/007-mvp-slice.md
+          test -s docs/architecture/008-full-stack-app.md
 
           grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
           grep -q "END OF TERMS AND CONDITIONS" LICENSE

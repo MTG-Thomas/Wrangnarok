@@ -1,5 +1,7 @@
 # MVP slice implementation handoff
 
+> Status note 2026-09-09: the validation gates below have since passed (PRs #6, #9, #11 — real lockfile, 12/12 workerd tests, live NinjaOne execution Succeeded against us2). A NinjaOne Integration, `NINJA_WORKFLOW` binding, and seed-override pattern postdate this snapshot. Vocabulary below is corrected to ADR 006 terms where pointers would otherwise 404; the session narrative is otherwise preserved as written.
+
 **Repository: MTG-Thomas/Wrangnarok. Branch: codex/mvp-slice (formerly codex/first-acorn).**
 
 This is an incomplete, local-only implementation slice for [issue #4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), based on Wrangnarok commit `abbca6696ac83b490e4e53354468e1e22c01d9b7`. Read `AGENTS.md`, the existing ADRs, and the draft `docs/architecture/007-mvp-slice.md` first.
@@ -9,10 +11,10 @@ This is an incomplete, local-only implementation slice for [issue #4](https://gi
 ## Implemented source
 
 - Root TypeScript Worker/Wrangler project with native D1 and Workflow bindings.
-- Static, explicit Saga UUID and revision; Journey metadata snapshots preserve historical identity.
-- Grove/requester-qualified, idempotent submission; exact-Grove Connection lookup.
-- Two observable Operations: prepare input and call the HTTP echo Realm. Native Workflow steps checkpoint these plus terminal persistence.
-- D1 migration for Groves, Connections, Journeys and Operations; fixture seed kept separate.
+- Static, explicit Saga UUID and revision; Execution metadata snapshots preserve historical identity.
+- Organization/requester-qualified, idempotent submission; exact-Organization Connection lookup.
+- Two observable Operations: prepare input and call the HTTP echo Integration. Native Workflow steps checkpoint these plus terminal persistence.
+- D1 migration for Organizations, Connections, Executions and Operations; fixture seed kept separate.
 - Authenticated local-only API for catalog, submission, individual detail and a bounded first history page.
 - Local echo HTTP fixture and random-token setup script. No customer credentials.
 - Authored Vitest/workerd tests using Cloudflare's plugin and real local bindings; only vendor HTTP is intercepted.
@@ -32,9 +34,9 @@ npm run build
 
 Resolve any dependency/API/typing failures, then commit the real `package-lock.json`. Prove a clean `npm ci` reproduces the result. The manifest pins Wrangler 4.130.0, the Cloudflare Vitest plugin 1.1.6, Vitest 4.1.0 and TypeScript 5.8.3; these have not been resolved or installed together here. Configure formatting/linting before treating ADR 004's pipeline as complete.
 
-The native tests in `test/journeys.test.ts` must actually exercise the Workflow and D1. Confirm the vendor HTTP interceptor applies in the Workflow's runtime; if the test runner isolates that execution, use Cloudflare's documented network interception or the deterministic HTTP fixture instead. Do not replace D1 or Workflows with test doubles to obtain a green result.
+The native tests in `test/executions.test.ts` (plus `test/ninjaone.test.ts`, added later) must actually exercise the Workflow and D1. Confirm the vendor HTTP interceptor applies in the Workflow's runtime; if the test runner isolates that execution, use Cloudflare's documented network interception or the deterministic HTTP fixture instead. Do not replace D1 or Workflows with test doubles to obtain a green result.
 
-Add native-boundary coverage for simultaneous identical submissions, a lost dispatch acknowledgment, recovery expiry, retained D1 replay after native history expiry, and persistence across a Wrangler restart. Existing tests cover the intended happy path, sanitized vendor failure, denied reads, and missing-Grove Connection behavior, but none has executed in workerd here.
+Add native-boundary coverage for simultaneous identical submissions, a lost dispatch acknowledgment, recovery expiry, retained D1 replay after native history expiry, and persistence across a Wrangler restart. Existing tests cover the intended happy path, sanitized vendor failure, denied reads, and missing-Organization Connection behavior, but none has executed in workerd here.
 
 ## Interactive local path (not run in the authoring shell)
 
@@ -47,13 +49,13 @@ npm run fixture
 npm run dev
 ```
 
-The fixture binds `127.0.0.1:8788`; Wrangler binds loopback. Read the random token from the ignored `.dev.vars` locally, without pasting it into chat or committing it. Send `Authorization: Bearer <local token>` on API requests. POST `/api/journeys` with `Content-Type: application/json`, a 16-128 character `Idempotency-Key`, and:
+The fixture binds `127.0.0.1:8788`; Wrangler binds loopback. Read the random token from the ignored `.dev.vars` locally, without pasting it into chat or committing it. Send `Authorization: Bearer <local token>` on API requests. POST `/api/executions` with `Content-Type: application/json`, a 16-128 character `Idempotency-Key`, and:
 
 ```json
 {"sagaId":"720b9ebf-9b6a-4eac-bae9-6ed22c970401","input":{"message":"hello"}}
 ```
 
-Follow the returned `statusUrl`; GET `/api/journeys` returns only the first 20 summaries and `hasMore`. Cursor pagination is not implemented. Changing input under an existing key returns 409. On `DISPATCH_UNCONFIRMED`, repeat the same key/input: execution may already have started.
+Follow the returned `statusUrl`; GET `/api/executions` returns only the first 20 summaries and `hasMore`. Cursor pagination is not implemented. Changing input under an existing key returns 409. On `DISPATCH_UNCONFIRMED`, repeat the same key/input: execution may already have started.
 
 ## Validation actually performed
 
@@ -69,4 +71,4 @@ Follow the returned `statusUrl`; GET `/api/journeys` returns only the first 20 s
 
 Do not provision or deploy as part of the validation pass. The committed D1 ID is a local placeholder; the lab is disabled by default, has no routes/account ID, and disables workers.dev and previews. Those settings are guardrails, not production authentication.
 
-Remaining product gates include durable failure reconciliation when D1 itself is unavailable, archive/retention policy, real authorization, full history pagination, a vendor-independent `system.smoke` Saga, and measured Free-tier consumption. Connection secret storage remains gated by issue #3. No OAuth, arbitrary code/URLs, cross-Grove access, user cancellation, Queues, Durable Objects or R2 are included.
+Remaining product gates include durable failure reconciliation when D1 itself is unavailable, archive/retention policy, real authorization, full history pagination, a vendor-independent `system.smoke` Saga, and measured Free-tier consumption. Connection secret storage remains gated by issue #3. No OAuth, arbitrary code/URLs, cross-Organization access, user cancellation, Queues, Durable Objects or R2 are included.

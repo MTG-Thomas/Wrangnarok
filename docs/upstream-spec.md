@@ -126,6 +126,30 @@ Runtime facts: workerd `fetch` rejects `redirect:error` (use `manual` plus expli
 
 **Wrangnarök implication:** derive the token host from the Connection endpoint (region-portable, no per-region code). Pin OAuth scope as the least-privilege precedent for future OAuth work. Shape and count-cap vendor list responses before persisting; never assume small.
 
+### 14. Execution state machine, retry, timeout, cancellation (upstream sweep, Sep 2026)
+
+Upstream statuses, verbatim from `api/src/models/enums.py`: `Scheduled`, `Pending`, `Running`, `Success`, `Failed`, `Timeout`, `Stuck`, `CompletedWithErrors`, `Cancelling`, `Cancelled`. `Scheduled` is a durable pre-publish row (promotable when due); `Pending` is published-but-unclaimed and is never swept; `Cancelling` is the transient cancel-requested state; `Stuck` is legacy/query-only (the sweeper now writes `Timeout`/`Cancelled`); `CompletedWithErrors` is the success-with-errors variant ADR 001 omits.
+
+Retry is off by default and narrow when on: `ExecutionRetryPolicy` (disabled unless enabled, max 2) plus an operator ceiling, both required. Only engine-loss retries (republish with `Pending` reset) — never business-error retry. Infrastructure redelivery is separate (backed-off delays, poison-letter queue when exhausted).
+
+Timeouts are per-workflow (default 1800s, 0 disables); a 5-minute sweeper moves `Running`-past-timeout to `Timeout`, `Scheduled`-24h-overdue to `Failed`, and `Cancelling`-over-3-minutes to `Cancelled`.
+
+Cancellation is owner-or-superuser only: `Scheduled`/`Pending` cancel immediately, `Running` goes to `Cancelling` with a cancel flag the worker honors, re-cancel is idempotent, terminal states are not cancellable.
+
+Ambiguity is fenced, never guessed: advisory locks plus attempt-token claim fences, stale callbacks rejected unless the row is still `Running`/`Cancelling` with a matching token, `Scheduled` stays durable until broker confirm, and missing state surfaces as failure — never invented success.
+
+**Wrangnarök implication (feeds issue #15):** adopt an explicit `Cancelling` state plus stale-token rejection; gate retries to engine-loss with an operator ceiling (Workflow step retry 2 risks retrying non-idempotent mutations); keep a durable pre-publish `Scheduled` distinct from `Pending` and never sweep `Pending` — the current 10-minute expiry conflates queue backup with lost dispatch.
+
+### 15. Integration SDK and OAuth contracts (upstream sweep, Sep 2026)
+
+The SDK is workflow-facing, not vendor-facing: `@workflow`/`@tool` decorators, typed errors, and `integrations.get(name, scope, oauth_scope)` with decrypted secrets auto-registered for log scrubbing. There are deliberately **no** request/response normalization or pagination helpers — vendor calls are raw workflow HTTP plus OAuth URL templating and config merge. Vendor-call discipline comes from elsewhere: a concurrency admission slot (fail-closed, never retries the vendor op), GET-only 5xx retry, 10s timeouts with backoff, and 4xx-no-retry.
+
+OAuth storage splits portable from per-organization state: global providers/tokens (null org) carry defaults; per-org rows carry overrides; client secrets and tokens are Fernet-encrypted while names, URLs, scopes, and expiry stay plaintext. Refresh runs in one shared primitive used by the scheduler (15-minute cadence, refresh within 20 minutes of expiry), the on-demand endpoint, and inline client-credentials auto-refresh; failures mark the token failed and emit events. Requested scopes must be a subset of configured scopes.
+
+Portable definitions declare needs (`SolutionConnectionSchema`); resolution falls back org row → defaults, org overrides winning, token mapping → org token → most-recent global token. Requirement failures are loud when declared (HTTP 424) and silent (`None`/404) when undeclared; 403s propagate.
+
+**Wrangnarök implication (feeds Phase 3):** copy the 424-fail-loud-on-declared vs silent-None-otherwise split instead of a uniform `CONNECTION_NOT_CONFIGURED`; put refresh in one shared primitive with per-Connection status rather than per-Saga code; enforce subset-only scope overrides with an explicit, auditable fallback order before adopting any global cascade.
+
 ## Candidate product invariants
 
 These are stronger than implementation preferences and should guide design reviews:
