@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
-import { boundedJson, echoSaga, Fault, ninjaSaga, parseKey, parseSubmission } from "./domain";
-import { submit, summary, visibleExecution } from "./executions";
+import { boundedJson, canTransition, echoSaga, Fault, ninjaSaga, parseKey, parseSubmission } from "./domain";
+import { cancelExecution, submit, summary, visibleExecution } from "./executions";
 import type { ExecutionRow } from "./executions";
 export { EchoWorkflow, NinjaOrgsWorkflow } from "./sagas";
 
@@ -36,6 +36,40 @@ export default {
         const rows = await env.DB.prepare("SELECT id,saga_id,saga_name,saga_revision,org_id,user_id,dispatched,status,created_at,started_at,completed_at FROM executions WHERE org_id=? AND user_id=? ORDER BY created_at DESC,id DESC LIMIT 21")
           .bind(caller.orgId, caller.userId).all<Omit<ExecutionRow, "input_json" | "result_json" | "error_json">>();
         return json({ executions: rows.results.slice(0, 20).map(summary), hasMore: rows.results.length > 20 });
+      }
+      const cancel = /^\/api\/executions\/([a-f0-9]{64})\/cancel$/.exec(url.pathname);
+      if (cancel?.[1] && request.method === "POST") {
+        // Owner-only cancellation (issue #16): same fixture auth plus the
+        // same org/requester scoping as reads — foreign owners get 404, never
+        // a leak. Pending cancels immediately; Running moves
+        // Running -> Cancelling -> Cancelled onto the native terminate
+        // control. Re-cancel while Cancelling is idempotent; terminal states
+        // answer 409 and are never rewritten.
+        const row = await visibleExecution(env.DB, cancel[1], caller);
+        if (!canTransition(row.status, "Cancelling")) {
+          throw new Fault(409, "EXECUTION_NOT_CANCELLABLE", "Terminal Executions cannot be cancelled.");
+        }
+        if (row.status === "Cancelling") {
+          return json({ executionId: row.id, status: "Cancelling", cancelled: false });
+        }
+        const marked = await env.DB.prepare("UPDATE executions SET status='Cancelling' WHERE id=? AND status IN ('Pending','Running')")
+          .bind(row.id).run();
+        if (marked.meta.changes === 0) {
+          const current = await visibleExecution(env.DB, row.id, caller);
+          if (current.status === "Cancelling") {
+            return json({ executionId: row.id, status: "Cancelling", cancelled: false });
+          }
+          throw new Fault(409, "EXECUTION_NOT_CANCELLABLE", "Terminal Executions cannot be cancelled.");
+        }
+        const binding = row.saga_id === ninjaSaga.id ? env.NINJA_WORKFLOW : env.ECHO_WORKFLOW;
+        try {
+          await (await binding.get(row.id)).terminate();
+        } catch {
+          // Already settled natively (complete/errored/terminated): the D1
+          // marker below still applies, fenced by its Cancelling condition.
+        }
+        await cancelExecution(env.DB, row.id);
+        return json({ executionId: row.id, status: "Cancelled", cancelled: true });
       }
       const match = /^\/api\/executions\/([a-f0-9]{64})$/.exec(url.pathname);
       if (match?.[1] && request.method === "GET") {

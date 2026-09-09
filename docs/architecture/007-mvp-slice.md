@@ -1,8 +1,8 @@
 # ADR 007: MVP slice submission and local execution slice
 
-**Status: Conforming to ADR 001 (reconciled per issue #15, 2026-09-09). Runtime validation: 13/13 workerd tests (see Verification).**
+**Status: Conforming to ADR 001 (reconciled per issue #15, resilience per issue #16, 2026-09-09). Runtime validation: 32/32 workerd tests (see Verification).**
 
-Related: [#4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), [#2](https://github.com/MTG-Thomas/Wrangnarok/issues/2), [#15](https://github.com/MTG-Thomas/Wrangnarok/issues/15). Implements a narrow slice of ADRs 001-004; does not replace them or claim their open questions are settled. All divergence decisions defer to ADR 001 canonical rules.
+Related: [#4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), [#2](https://github.com/MTG-Thomas/Wrangnarok/issues/2), [#15](https://github.com/MTG-Thomas/Wrangnarok/issues/15), [#16](https://github.com/MTG-Thomas/Wrangnarok/issues/16). Implements a narrow slice of ADRs 001-004; does not replace them or claim their open questions are settled. All divergence decisions defer to ADR 001 canonical rules.
 
 ## Primitive and identity boundaries
 
@@ -28,11 +28,13 @@ This safety argument assumes Cloudflare retains instance IDs throughout that rec
 
 Two product Operations are persisted in order: `prepare-input-v1` and `echo-http-v1` (ninja slice: `prepare-input-v1` and `ninja-list-orgs-v1`). Separate native steps persist terminal success/failure; not every infrastructure checkpoint is a product Operation. Prepared input and the echo outcome are checkpointed JSON. Expected Integration failures return a structured outcome so their code survives replay without relying on Error subclass transport.
 
-Retry gate (ADR 001, upstream finding 14): vendor/Integration steps use `retries: 0` (fixture echo and Ninja list are both 0); only idempotent D1 checkpoint steps (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`) may use retries up to the operator ceiling 2, and all business failures throw `NonRetryableError`. The fixture Action has zero configured retries. It is a read-like echo POST, not a mutating vendor integration. A stable operation ID is sent, but the implementation does not claim exactly-once external effects. Future retryable mutations require destination-side idempotency and a deliberate policy.
+Retry gate (ADR 001, upstream finding 14): every step.do retry limit resolves through the `stepRetryLimit()` code table — vendor/Integration steps 0 (fixture echo and Ninja list both resolve 0), only idempotent D1 checkpoint steps (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`, `timeout-mark-v1`) up to the operator ceiling 2, unknown names fail closed to 0; all business failures throw `NonRetryableError`. A workerd test counts exactly one outbound vendor call on failure. The fixture Action has zero configured retries. It is a read-like echo POST, not a mutating vendor integration. A stable operation ID is sent, but the implementation does not claim exactly-once external effects. Future retryable mutations require destination-side idempotency and a deliberate policy.
+
+Resilience (issue #16): the echo success path waits on the native `step.sleep("settle-wait-v1", "1 second")` primitive — an infrastructure checkpoint, not a product Operation. The echo vendor step enforces its own deadline (`VENDOR_TIMEOUT_MS`); a slow vendor surfaces `ECHO_VENDOR_TIMEOUT`, persisted as `TimedOut` solely by the explicit `timeout-mark-v1` checkpoint via `failExecution`. Owner-only `POST /api/executions/:id/cancel` (same fixture auth + org/requester scoping as reads; 404 for foreign owners) moves `Pending`/`Running -> Cancelling -> Cancelled` onto native `terminate()` (proven in local workerd), is idempotent while `Cancelling`, answers 409 on terminal states, and never lets a cancelled Execution dispatch (again).
 
 List results omit input/results and return a maximum of 20 records plus `hasMore`. Cursor pagination is deferred. Detail exposes stored status, Operation records and a separate advisory `runtimeStatus` when native inspection succeeds. Native exception bodies are never public.
 
-Normal success and expected failure are persisted in D1. If D1 or the runtime fails during the terminal checkpoint, D1 can remain Pending/Running. A missing native status is not interpreted as success, failure or expiry. Autonomous reconciliation stays deferred; caller-driven retry on `503` plus the refusal gate above is the complete MVP lifecycle. `TimedOut`/`Cancelled` are reserved domain states, not implemented controls; `Cancelling`/`Scheduled` are deferred distinct states per ADR 001 (no cancel endpoint, flag, or stale-token path in this slice).
+Normal success and expected failure are persisted in D1. If D1 or the runtime fails during the terminal checkpoint, D1 can remain Pending/Running. A missing native status is not interpreted as success, failure or expiry. Autonomous reconciliation stays deferred; caller-driven retry on `503` plus the refusal gate above is the complete MVP lifecycle. `TimedOut`/`Cancelled`/`Cancelling` are implemented controls per issue #16 (see above); `Scheduled` is the remaining deferred distinct state per ADR 001 (no delayed-start path, no promotion).
 
 Admission/history records currently have no automatic cleanup. Growth is bounded by usage, not by a retention policy; this is another pre-production gate. Workflow source/step changes need versioning discipline before in-flight deployment upgrades are supported.
 
@@ -48,7 +50,7 @@ Use the repo's Cloudflare Vitest plugin with real local bindings, not fake D1/Wo
 
 Gates (all in real workerd; D1/Workflow bindings never replaced):
 
-- `npm run typecheck`, `npm test` (13/13: same-key replay `200 replayed:true` with single vendor call, conflicting-key `409 IDEMPOTENCY_CONFLICT`, expired-window `409 RECOVERY_EXPIRED` with no resurrection and no invented success, plus existing happy-path/failure/auth/tenant/ninja suites), `npm run build` (wrangler dry-run).
+- `npm run typecheck`, `npm test` (32/32: same-key replay `200 replayed:true` with single vendor call, conflicting-key `409 IDEMPOTENCY_CONFLICT`, expired-window `409 RECOVERY_EXPIRED` with no resurrection and no invented success, plus the issue #16 resilience suite — native sleep wake+continue, vendor zero-retry call count, slow-vendor `TimedOut` with `ECHO_VENDOR_TIMEOUT`, owner-only cancel `Running -> Cancelling -> Cancelled` via proven native `terminate()`, Pending immediate-cancel with no redispatch, terminal 409s — plus existing happy-path/failure/auth/tenant/ninja suites), `npm run build` (wrangler dry-run).
 
 The design avoids paid-only primitives (no Cron/outbox, no extra index), but Free-tier viability has not been demonstrated. Measure Worker CPU, Workflow steps/requests, D1 rows read/written and retained storage for a full Execution and retries on the actual runtime. Do not equate the absence of an account ID with proven cost or performance behavior.
 

@@ -26,9 +26,43 @@ export const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 // scoped to (org, user, key); required Idempotency-Key 16-128; Pending never
 // auto-swept; Scheduled distinct (deferred); operator step-retry ceiling 2.
 export const STEP_RETRY_CEILING = 2;
+// Explicit vendor deadline (issue #16): the echo vendor step enforces its own
+// deadline and surfaces ECHO_VENDOR_TIMEOUT. TimedOut is only ever written by
+// the explicit timeout-mark-v1 checkpoint, never inferred from introspection.
+export const VENDOR_TIMEOUT_MS = 1000;
 export const EXECUTION_ID = /^[a-f0-9]{64}$/;
 export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";
+export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelling" | "Cancelled";
+// Retry policy table (upstream finding 14, issue #16): vendor/Integration
+// steps never auto-retry (0) unless destination-side idempotency is proven and
+// an explicit policy exists; only idempotent D1 checkpoint steps may retry, up
+// to the operator ceiling. Unknown step names fail closed to 0. Unit-tested as
+// pure TypeScript; Sagas must resolve every step.do retry limit through here.
+const CHECKPOINT_STEPS: ReadonlySet<string> = new Set([
+  "prepare-input-v1",
+  "persist-success-v1",
+  "persist-failure-v1",
+  "timeout-mark-v1",
+]);
+export function stepRetryLimit(stepName: string): number {
+  return CHECKPOINT_STEPS.has(stepName) ? STEP_RETRY_CEILING : 0;
+}
+// Canonical transition table (ADR 001, issue #16). Cancelling is transient:
+// Pending/Running -> Cancelling -> Cancelled. Pending cancels immediately;
+// Running cancels via terminate + marker. Terminal states have no outgoing
+// transitions. Unit-tested as pure TypeScript.
+const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]> = {
+  Pending: ["Running", "Failed", "Cancelling"],
+  Running: ["Succeeded", "Failed", "TimedOut", "Cancelling"],
+  Cancelling: ["Cancelled"],
+  Succeeded: [],
+  Failed: [],
+  TimedOut: [],
+  Cancelled: [],
+};
+export function canTransition(from: ExecutionStatus, to: ExecutionStatus): boolean {
+  return EXECUTION_TRANSITIONS[from].includes(to);
+}
 export interface Principal { readonly userId: string; readonly orgId: string }
 export interface EchoInput { message: string }
 export interface NinjaOrgsInput { /* empty: read-only census, no parameters */ }
