@@ -95,4 +95,4 @@ Additional Cloudflare primitives are deliberately absent until a concrete requir
 
 ## Attribution and licensing
 
-Wrangnarök is inspired by the open-source [Bifrost Integrations](https://github.com/gobifrost/bifrost) project. Upstream Bifrost is AGPL-3.0 licensed. Before copying or adapting upstream source code, schemas, or other copyrightable implementation material, Wrangnarök's licensing and derivative-work obligations must be made explicit. Early work should prefer clean-room behavioral reimplementation from documented concepts.
+Wrangnarök is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**, matching upstream [Bifrost Integrations](https://github.com/gobifrost/bifrost). Bifrost is the reference product and a potential source of compatible implementation ideas; preserve upstream copyright and attribution where upstream code is actually adapted or copied.
