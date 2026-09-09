@@ -37,9 +37,7 @@ afterEach(() => {
 });
 
 it("renders ExecutionHistory rows from a mocked /api/* payload (no input/results in rows)", async () => {
-  vi.spyOn(globalThis, "fetch").mockResolvedValue(
-    Response.json({ executions: payload.executions, hasMore: true }),
-  );
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ executions: payload.executions, hasMore: true }));
   const data = await fetchExecutionHistory();
   expect(data.executions).toHaveLength(1);
   expect(data.hasMore).toBe(true);

@@ -1,22 +1,9 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "lib": [
-      "ES2022",
-      "ESNext.Disposable",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": [
-      "@cloudflare/vitest-plugin/types"
-    ]
+    "types": ["@cloudflare/vitest-plugin/types"]
   },
-  "include": [
-    "./**/*.ts",
-    "./**/*.tsx",
-    "../src/**/*.ts",
-    "../client/src/**/*",
-    "../worker-configuration.d.ts"
-  ]
+  "include": ["./**/*.ts", "./**/*.tsx", "../src/**/*.ts", "../client/src/**/*", "../worker-configuration.d.ts"]
 }

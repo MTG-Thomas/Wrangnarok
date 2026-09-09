@@ -46,12 +46,14 @@ describe("mailbox send validation", () => {
   });
   it("steer defaults to high priority but rejects standard steer", () => {
     expect(buildMessage("s", { to: "t", kind: "steer", body: "x" }, "i", "ts").priority).toBe("high");
-    expect(() => buildMessage("s", { to: "t", kind: "steer", priority: "standard", body: "x" }, "i", "ts")).toThrowError(
-      MailboxFault,
-    );
+    expect(() =>
+      buildMessage("s", { to: "t", kind: "steer", priority: "standard", body: "x" }, "i", "ts"),
+    ).toThrowError(MailboxFault);
   });
   it("reply requires replyTo, rejects bad kind/priority and bounds", () => {
-    expect(faultCode(() => buildMessage("s", { to: "t", kind: "reply", body: "x" }, "i", "ts"))).toBe("REPLY_NO_TARGET");
+    expect(faultCode(() => buildMessage("s", { to: "t", kind: "reply", body: "x" }, "i", "ts"))).toBe(
+      "REPLY_NO_TARGET",
+    );
     expect(faultCode(() => buildMessage("s", { to: "t", kind: "yell", body: "x" }, "i", "ts"))).toBe("BAD_KIND");
     expect(faultCode(() => buildMessage("s", { to: "t", body: "" }, "i", "ts"))).toBe("BODY_EMPTY");
     expect(faultCode(() => buildMessage("s", { to: "t", body: "x".repeat(4097) }, "i", "ts"))).toBe("BODY_TOO_LARGE");

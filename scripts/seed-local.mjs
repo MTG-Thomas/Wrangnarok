@@ -12,9 +12,11 @@ if (existsSync("scripts/seed-local.override.sql")) files.push("scripts/seed-loca
 else console.log("No scripts/seed-local.override.sql; base seed only (see .example template).");
 for (const file of files) {
   await new Promise((resolve, reject) => {
-    execFile(process.execPath, ["./node_modules/wrangler/bin/wrangler.js",
-      "d1", "execute", "DB", "--local", "--file", file],
-    (error, stdout, stderr) => error ? reject(new Error(`${file}: ${stderr || error.message}`)) : resolve(stdout));
+    execFile(
+      process.execPath,
+      ["./node_modules/wrangler/bin/wrangler.js", "d1", "execute", "DB", "--local", "--file", file],
+      (error, stdout, stderr) => (error ? reject(new Error(`${file}: ${stderr || error.message}`)) : resolve(stdout)),
+    );
   });
   console.log(`Seeded ${file}.`);
 }

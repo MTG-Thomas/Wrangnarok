@@ -9,12 +9,8 @@ import { fetchExecutionHistory, getToken, setToken } from "../lib/api-client";
 import { getErrorMessage } from "../lib/api-error";
 import type { ExecutionHistoryResponse } from "../lib/client-types";
 
-export function ExecutionHistoryList(props: {
-  initial?: ExecutionHistoryResponse;
-}): React.JSX.Element {
-  const [data, setData] = useState<ExecutionHistoryResponse | null>(
-    props.initial ?? null,
-  );
+export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse }): React.JSX.Element {
+  const [data, setData] = useState<ExecutionHistoryResponse | null>(props.initial ?? null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(props.initial ? false : true);
   const [token, setTokenState] = useState(getToken());
@@ -22,7 +18,7 @@ export function ExecutionHistoryList(props: {
   useEffect(() => {
     if (props.initial) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         setData(await fetchExecutionHistory());
       } catch (err) {
@@ -47,15 +43,11 @@ export function ExecutionHistoryList(props: {
           setError(null);
           void fetchExecutionHistory()
             .then((next) => setData(next))
-            .catch((err: unknown) =>
-              setError(getErrorMessage(err, "Could not load history.")),
-            )
+            .catch((err: unknown) => setError(getErrorMessage(err, "Could not load history.")))
             .finally(() => setLoading(false));
         }}
       >
-        <label htmlFor="token">
-          Bearer token (local fixture only, never committed)
-        </label>
+        <label htmlFor="token">Bearer token (local fixture only, never committed)</label>
         <input
           id="token"
           name="token"
@@ -70,10 +62,7 @@ export function ExecutionHistoryList(props: {
       {loading ? <p role="status">Loading ExecutionHistory…</p> : null}
       {error ? (
         <p role="alert">
-          {error}{" "}
-          {error.includes("UNIMPLEMENTED") ? (
-            <span>(server reports this surface UNIMPLEMENTED)</span>
-          ) : null}
+          {error} {error.includes("UNIMPLEMENTED") ? <span>(server reports this surface UNIMPLEMENTED)</span> : null}
         </p>
       ) : null}
       {data ? (

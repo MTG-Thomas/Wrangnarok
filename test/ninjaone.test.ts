@@ -12,7 +12,8 @@ const key = "ninjaone-test-001";
 const SECRET_SENTINEL = "test-client-secret-sentinel";
 const TOKEN_SENTINEL = "test-access-token-sentinel";
 function request(path: string, method = "GET", body: unknown = {}) {
-  return new Request(`http://local.test${path}`, { method,
+  return new Request(`http://local.test${path}`, {
+    method,
     headers: { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json", "Idempotency-Key": key },
     ...(method === "POST" ? { body: JSON.stringify({ sagaId: ninjaSaga.id, input: body }) } : {}),
   });
@@ -27,7 +28,10 @@ function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus 
       expect(body).not.toContain("management");
       // workerd has no error-mode redirect; pin the live-safe policy.
       expect(init?.redirect).toBe("manual");
-      return new Response(JSON.stringify(token), { status: tokenStatus, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(token), {
+        status: tokenStatus,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     if (url === "https://ninja-in-test.invalid/api/v2/organizations") {
       // Read headers without rebuilding a Request: init may carry a
@@ -35,8 +39,10 @@ function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus 
       const headers = input instanceof Request ? input.headers : new Headers(init?.headers as HeadersInit);
       expect(headers.get("Authorization")).toBe(`Bearer ${TOKEN_SENTINEL}`);
       expect(init?.redirect).toBe("manual");
-      return new Response(typeof orgs === "string" ? orgs : JSON.stringify(orgs),
-        { status: orgsStatus, headers: { "Content-Type": "application/json" } });
+      return new Response(typeof orgs === "string" ? orgs : JSON.stringify(orgs), {
+        status: orgsStatus,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     throw new Error(`Unexpected outbound request: ${url}`);
   });
@@ -49,10 +55,18 @@ beforeEach(async () => {
   // suite owns its fixture Connection rows. Dummy host: never contacted
   // (vendor HTTP is intercepted below) and never a real instance.
   await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
-    .bind("00000000-0000-4000-8000-000000000102", principal.orgId, "0606e237-137b-4629-8346-85468e1c2df6", "https://ninja-in-test.invalid/api").run();
+    .bind(
+      "00000000-0000-4000-8000-000000000102",
+      principal.orgId,
+      "0606e237-137b-4629-8346-85468e1c2df6",
+      "https://ninja-in-test.invalid/api",
+    )
+    .run();
   // Intercept only outbound vendor HTTP. Native D1/Workflow bindings are never replaced.
-  mockNinja({ access_token: TOKEN_SENTINEL, expires_in: 3600, token_type: "Bearer" },
-    [{ id: 1, name: "Acme" }, { id: 2, name: "Globex" }]);
+  mockNinja({ access_token: TOKEN_SENTINEL, expires_in: 3600, token_type: "Bearer" }, [
+    { id: 1, name: "Acme" },
+    { id: 2, name: "Globex" },
+  ]);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -67,9 +81,21 @@ it("lists NinjaOne organizations end to end and reuses a submission", async () =
   expect(await accepted.json()).toMatchObject({ executionId: id, replayed: false });
   await instance.waitForStatus("complete");
   const detail = await worker.fetch(request(`/api/executions/${id}`), bindings);
-  expect(await detail.json()).toMatchObject({ executionId: id, status: "Succeeded",
-    result: { organizationCount: 2, organizations: [{ id: 1, name: "Acme" }, { id: 2, name: "Globex" }] },
-    operations: [{ name: "prepare-input-v1", status: "Succeeded" }, { name: "ninja-list-orgs-v1", status: "Succeeded" }] });
+  expect(await detail.json()).toMatchObject({
+    executionId: id,
+    status: "Succeeded",
+    result: {
+      organizationCount: 2,
+      organizations: [
+        { id: 1, name: "Acme" },
+        { id: 2, name: "Globex" },
+      ],
+    },
+    operations: [
+      { name: "prepare-input-v1", status: "Succeeded" },
+      { name: "ninja-list-orgs-v1", status: "Succeeded" },
+    ],
+  });
   const replay = await worker.fetch(request("/api/executions", "POST"), bindings);
   expect(replay.status).toBe(200);
   expect(await replay.json()).toMatchObject({ executionId: id, replayed: true });
@@ -97,9 +123,11 @@ it("persists NINJA_UNAUTHORIZED without copying vendor bodies", async () => {
 });
 it("rejects non-empty input and unknown sagas", async () => {
   expect((await worker.fetch(request("/api/executions", "POST", { message: "x" }), bindings)).status).toBe(400);
-  const unknown = new Request("http://local.test/api/executions", { method: "POST",
+  const unknown = new Request("http://local.test/api/executions", {
+    method: "POST",
     headers: { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json", "Idempotency-Key": key },
-    body: JSON.stringify({ sagaId: "00000000-0000-0000-0000-000000000000", input: {} }) });
+    body: JSON.stringify({ sagaId: "00000000-0000-0000-0000-000000000000", input: {} }),
+  });
   expect((await worker.fetch(unknown, bindings)).status).toBe(400);
 });
 it("truncates large organization lists to a bounded persisted summary", async () => {
@@ -110,7 +138,10 @@ it("truncates large organization lists to a bounded persisted summary", async ()
   expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
   await instance.waitForStatus("complete");
   const detail = await worker.fetch(request(`/api/executions/${id}`), bindings);
-  const body = await detail.json() as { status: string; result: { organizationCount: number; organizations: unknown[] } };
+  const body = (await detail.json()) as {
+    status: string;
+    result: { organizationCount: number; organizations: unknown[] };
+  };
   expect(body.status).toBe("Succeeded");
   expect(body.result.organizationCount).toBe(100);
   expect(body.result.organizations).toHaveLength(25);

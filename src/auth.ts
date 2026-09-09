@@ -10,9 +10,14 @@ export interface LabAuth {
 /** Local fixture only. Organization and user never come from request headers or JSON. */
 export async function authenticate(request: Request, env: LabAuth): Promise<Principal> {
   if (env.LAB_ENABLED !== "true") throw new Fault(404, "NOT_FOUND", "Not found.");
-  if (!env.LAB_TOKEN || !/^[a-f0-9]{64}$/.test(env.LAB_TOKEN) ||
-      !env.LAB_ORG_ID || !UUID.test(env.LAB_ORG_ID) ||
-      !env.LAB_USER_ID || !UUID.test(env.LAB_USER_ID)) {
+  if (
+    !env.LAB_TOKEN ||
+    !/^[a-f0-9]{64}$/.test(env.LAB_TOKEN) ||
+    !env.LAB_ORG_ID ||
+    !UUID.test(env.LAB_ORG_ID) ||
+    !env.LAB_USER_ID ||
+    !UUID.test(env.LAB_USER_ID)
+  ) {
     throw new Fault(503, "LOCAL_AUTH_NOT_CONFIGURED", "Run the local setup script.");
   }
   const supplied = request.headers.get("Authorization") ?? "";

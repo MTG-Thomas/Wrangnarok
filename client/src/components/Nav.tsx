@@ -75,12 +75,7 @@ export function Nav(): React.JSX.Element {
             >
               <span>{entry.label} (soon)</span>{" "}
               {entry.issue ? (
-                <a
-                  href={entry.issue}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label={`${entry.label} tracking issue`}
-                >
+                <a href={entry.issue} target="_blank" rel="noreferrer" aria-label={`${entry.label} tracking issue`}>
                   {entry.issue.split("/").pop()} · {entry.phase}
                 </a>
               ) : null}

@@ -3,13 +3,7 @@
 // (reference: vendor/upstream). Structure borrowed; Wrangnarök shapes only.
 
 /** Execution status values served by the Wrangnarök Worker. */
-export type ExecutionStatus =
-  | "Pending"
-  | "Running"
-  | "Succeeded"
-  | "Failed"
-  | "TimedOut"
-  | "Cancelled";
+export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";
 
 /** One durable unit of Saga execution (maps to a Workflow step). */
 export interface OperationSummary {

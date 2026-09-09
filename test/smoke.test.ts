@@ -13,9 +13,20 @@ const bindings = env as unknown as Bindings;
 const smokePrincipal = { orgId: SMOKE_ORG_ID, userId: SMOKE_USER_ID };
 const smokeBindings = { ...bindings, LAB_ORG_ID: SMOKE_ORG_ID, LAB_USER_ID: SMOKE_USER_ID };
 const key = "system-smoke-test-001";
-function smokeRequest(path: string, method = "GET", sagaId: string = smokeSaga.id, body: unknown = {}, idempotencyKey = key) {
-  return new Request(`http://local.test${path}`, { method,
-    headers: { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+function smokeRequest(
+  path: string,
+  method = "GET",
+  sagaId: string = smokeSaga.id,
+  body: unknown = {},
+  idempotencyKey = key,
+) {
+  return new Request(`http://local.test${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${"a".repeat(64)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
     ...(method === "POST" ? { body: JSON.stringify({ sagaId, input: body }) } : {}),
   });
 }
@@ -24,7 +35,8 @@ beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
   await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?) ON CONFLICT(id) DO NOTHING")
-    .bind(SMOKE_ORG_ID, "org_system_smoke").run();
+    .bind(SMOKE_ORG_ID, "org_system_smoke")
+    .run();
   // Guard, not a fixture: system.smoke has no vendor boundary, so any
   // outbound fetch is a failure. No URL is stubbed or served here.
   vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
@@ -40,36 +52,53 @@ it("runs the loopback-free system.smoke saga end to end with a usage block", asy
   await using instance = await introspectWorkflowInstance(bindings.SMOKE_WORKFLOW, id);
   const logs: unknown[] = [];
   const originalLog = console.log;
-  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  console.log = (...args: unknown[]) => {
+    logs.push(args.join(" "));
+  };
   try {
     const listed = await worker.fetch(smokeRequest("/api/sagas"), smokeBindings);
-    expect(await listed.json()).toMatchObject({ sagas: expect.arrayContaining([expect.objectContaining({ name: "system.smoke" })]) });
+    expect(await listed.json()).toMatchObject({
+      sagas: expect.arrayContaining([expect.objectContaining({ name: "system.smoke" })]),
+    });
     const accepted = await worker.fetch(smokeRequest("/api/executions", "POST"), smokeBindings);
     expect(accepted.status).toBe(202);
     expect(accepted.headers.get("Location")).toBe(`/api/executions/${id}`);
     expect(await accepted.json()).toMatchObject({ executionId: id, replayed: false });
     await instance.waitForStatus("complete");
     const detail = await worker.fetch(smokeRequest(`/api/executions/${id}`), smokeBindings);
-    const body = await detail.json() as {
-      executionId: string; status: string; runtimeStatus: string | null;
+    const body = (await detail.json()) as {
+      executionId: string;
+      status: string;
+      runtimeStatus: string | null;
       result: { d1WriteOk: boolean; d1ReadOk: boolean; operationCount: number; operations: string[] };
       operations: { name: string; status: string }[];
     };
-    expect(body).toMatchObject({ executionId: id, status: "Succeeded",
+    expect(body).toMatchObject({
+      executionId: id,
+      status: "Succeeded",
       result: { d1WriteOk: true, d1ReadOk: true },
       operations: [
         { name: "prepare-input-v1", status: "Succeeded" },
         { name: "smoke-write-v1", status: "Succeeded" },
         { name: "smoke-verify-v1", status: "Succeeded" },
-      ] });
-    expect(body.result.operations).toEqual(expect.arrayContaining(["prepare-input-v1", "smoke-write-v1", "smoke-verify-v1"]));
+      ],
+    });
+    expect(body.result.operations).toEqual(
+      expect.arrayContaining(["prepare-input-v1", "smoke-write-v1", "smoke-verify-v1"]),
+    );
     // Machine-readable usage block: console emission + persisted record, no secrets.
     const usageLine = logs.find((line) => typeof line === "string" && line.startsWith("WRANGNAROK_USAGE "));
     expect(usageLine).toBeDefined();
     const usage = JSON.parse((usageLine as string).replace("WRANGNAROK_USAGE ", "")) as Record<string, unknown>;
-    expect(usage).toMatchObject({ version: USAGE_VERSION, saga: "system.smoke", executionId: id, orgId: SMOKE_ORG_ID,
-      workflows: { instancesStarted: 1, stepsExecuted: 4 } });
-    const stored = await bindings.DB.prepare("SELECT usage_json FROM usage_blocks WHERE execution_id=?").bind(id)
+    expect(usage).toMatchObject({
+      version: USAGE_VERSION,
+      saga: "system.smoke",
+      executionId: id,
+      orgId: SMOKE_ORG_ID,
+      workflows: { instancesStarted: 1, stepsExecuted: 4 },
+    });
+    const stored = await bindings.DB.prepare("SELECT usage_json FROM usage_blocks WHERE execution_id=?")
+      .bind(id)
       .first<{ usage_json: string }>();
     expect(stored).not.toBeNull();
     const storedJson = JSON.stringify(JSON.parse(stored?.usage_json ?? "{}"));
@@ -80,11 +109,20 @@ it("runs the loopback-free system.smoke saga end to end with a usage block", asy
     const replay = await worker.fetch(smokeRequest("/api/executions", "POST"), smokeBindings);
     expect(replay.status).toBe(200);
     expect(await replay.json()).toMatchObject({ executionId: id, replayed: true });
-    const conflict = await worker.fetch(smokeRequest("/api/executions", "POST", echoSaga.id, { message: "hello" }), smokeBindings);
+    const conflict = await worker.fetch(
+      smokeRequest("/api/executions", "POST", echoSaga.id, { message: "hello" }),
+      smokeBindings,
+    );
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ error: { code: "IDEMPOTENCY_CONFLICT" } });
-    expect((await worker.fetch(smokeRequest(`/api/executions/${id}`),
-      { ...smokeBindings, LAB_USER_ID: "00000000-0000-4000-8000-000000000003" })).status).toBe(404);
+    expect(
+      (
+        await worker.fetch(smokeRequest(`/api/executions/${id}`), {
+          ...smokeBindings,
+          LAB_USER_ID: "00000000-0000-4000-8000-000000000003",
+        })
+      ).status,
+    ).toBe(404);
     // History stays summary-only.
     const history = await worker.fetch(smokeRequest("/api/executions"), smokeBindings);
     const text = await history.text();
@@ -96,7 +134,10 @@ it("runs the loopback-free system.smoke saga end to end with a usage block", asy
   expect(fetch).not.toHaveBeenCalled();
 });
 it("rejects non-empty system.smoke input", async () => {
-  const res = await worker.fetch(smokeRequest("/api/executions", "POST", smokeSaga.id, { probe: "x" }, "system-smoke-bad-001"), smokeBindings);
+  const res = await worker.fetch(
+    smokeRequest("/api/executions", "POST", smokeSaga.id, { probe: "x" }, "system-smoke-bad-001"),
+    smokeBindings,
+  );
   expect(res.status).toBe(400);
   expect(fetch).not.toHaveBeenCalled();
 });
