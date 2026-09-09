@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
-import { echoSaga, Fault, executionId, RECOVERY_WINDOW_MS } from "./domain";
-import type { EchoInput, ExecutionStatus, Principal, SafeError } from "./domain";
+import { Fault, executionId, ninjaSaga, RECOVERY_WINDOW_MS } from "./domain";
+import type { ExecutionStatus, Principal, SafeError, SagaDef } from "./domain";
 import type { Bindings } from "./bindings";
 export interface ExecutionRow {
   id: string; saga_id: string; saga_name: string; saga_revision: string;
@@ -14,23 +14,25 @@ export async function visibleExecution(db: D1Database, id: string, caller: Princ
   if (!row) throw new Fault(404, "EXECUTION_NOT_FOUND", "Execution not found.");
   return row;
 }
-export async function submit(env: Bindings, caller: Principal, key: string, input: EchoInput) {
+export async function submit(env: Bindings, caller: Principal, key: string, saga: SagaDef, input: unknown) {
   const id = await executionId(caller, key);
   const inputJson = JSON.stringify(input);
   const inserted = await env.DB.prepare(
     "INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,created_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
-  ).bind(id, echoSaga.id, echoSaga.name, echoSaga.revision, caller.orgId, caller.userId, inputJson, new Date().toISOString()).run();
+  ).bind(id, saga.id, saga.name, saga.revision, caller.orgId, caller.userId, inputJson, new Date().toISOString()).run();
   const row = await visibleExecution(env.DB, id, caller);
-  if (row.saga_id !== echoSaga.id || row.input_json !== inputJson) {
+  if (row.saga_id !== saga.id || row.input_json !== inputJson) {
     throw new Fault(409, "IDEMPOTENCY_CONFLICT", "This key already identifies different input.");
   }
   if (!row.dispatched) {
-    if (row.saga_revision !== echoSaga.revision || Date.now() - Date.parse(row.created_at) >= RECOVERY_WINDOW_MS) {
+    if (row.saga_revision !== saga.revision || Date.now() - Date.parse(row.created_at) >= RECOVERY_WINDOW_MS) {
       throw new Fault(409, "RECOVERY_EXPIRED", "Inspect the existing Execution; it must not be automatically relaunched.");
     }
+    // One native Workflow binding per Saga. Never infer the binding from the request.
+    const workflow = saga.id === ninjaSaga.id ? env.NINJA_WORKFLOW : env.ECHO_WORKFLOW;
     try {
       // Cloudflare createBatch skips existing retained IDs. Never parse error strings as duplicates.
-      await env.ECHO_WORKFLOW.createBatch([{ id, params: { executionId: id } }]);
+      await workflow.createBatch([{ id, params: { executionId: id } }]);
       await env.DB.prepare("UPDATE executions SET dispatched = 1 WHERE id = ?").bind(id).run();
     } catch {
       throw new Fault(503, "DISPATCH_UNCONFIRMED", "Work may have started. Retry the same request and Idempotency-Key.");
@@ -42,7 +44,7 @@ export async function beginOperation(db: D1Database, id: string, name: string, p
   await db.prepare("INSERT INTO operations(execution_id,name,position,status,started_at) VALUES (?,?,?,'Running',?) ON CONFLICT(execution_id,name) DO UPDATE SET status='Running',completed_at=NULL,result_json=NULL,error_json=NULL")
     .bind(id, name, position, new Date().toISOString()).run();
 }
-export async function finishOperation(db: D1Database, id: string, name: string, result: EchoInput): Promise<void> {
+export async function finishOperation(db: D1Database, id: string, name: string, result: unknown): Promise<void> {
   await db.prepare("UPDATE operations SET status='Succeeded',completed_at=?,result_json=? WHERE execution_id=? AND name=?")
     .bind(new Date().toISOString(), JSON.stringify(result), id, name).run();
 }

@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { boundedJson, echoSaga, executionId, parseInput, parseSubmission } from "../src/domain";
+import { boundedJson, echoSaga, executionId, ninjaSaga, parseInput, parseSubmission } from "../src/domain";
 
 describe("First Acorn contracts", () => {
   it("uses a stable Saga UUID rather than a class or file name", () => {
     expect(echoSaga.id).toBe("720b9ebf-9b6a-4eac-bae9-6ed22c970401");
-    expect(parseSubmission({ sagaId: echoSaga.id, input: { message: "hello" } })).toEqual({ message: "hello" });
+    expect(parseSubmission({ sagaId: echoSaga.id, input: { message: "hello" } })).toEqual({
+      saga: expect.objectContaining({ id: echoSaga.id }), input: { message: "hello" },
+    });
+    expect(ninjaSaga.id).toBe("2c79a880-f1ac-4183-b324-d05daffc321a");
+    expect(parseSubmission({ sagaId: ninjaSaga.id, input: {} })).toEqual({
+      saga: expect.objectContaining({ id: ninjaSaga.id }), input: {},
+    });
   });
   it("rejects submitted Organization overrides and unexpected input", () => {
     expect(() => parseSubmission({ sagaId: echoSaga.id, orgId: "other", input: { message: "x" } })).toThrow();

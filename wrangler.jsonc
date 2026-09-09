@@ -11,7 +11,9 @@
     "LAB_ENABLED": "false",
     "LAB_TOKEN": "",
     "LAB_ORG_ID": "",
-    "LAB_USER_ID": ""
+    "LAB_USER_ID": "",
+    "NINJA_CLIENT_ID": "",
+    "NINJA_CLIENT_SECRET": ""
   },
   "d1_databases": [{
     "binding": "DB",
@@ -23,5 +25,9 @@
     "binding": "ECHO_WORKFLOW",
     "name": "wrangnarok-echo-v1",
     "class_name": "EchoWorkflow"
+  }, {
+    "binding": "NINJA_WORKFLOW",
+    "name": "wrangnarok-ninjaone-orgs-v1",
+    "class_name": "NinjaOrgsWorkflow"
   }]
 }
