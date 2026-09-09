@@ -13,6 +13,20 @@ export const ninjaSaga = Object.freeze({
   description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
 });
 export const NINJA_INTEGRATION_ID = "0606e237-137b-4629-8346-85468e1c2df6";
+// system.smoke is loopback-free: D1-only Operations + transform steps, zero
+// external vendor dependency. Stable identity per ADR 002 (UUID + revision).
+export const smokeSaga = Object.freeze({
+  id: "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
+  name: "system.smoke",
+  revision: "system.smoke-v1",
+  description: "Platform smoke: Worker request handling, D1 write/read verification, multi-Operation Workflow, terminal persistence, usage block — no vendor dependency",
+});
+// Disposable smoke Organization (ADR 004): smoke runs here, never against
+// production tenant/Connection data. Seeded in tests; provisioned in dev via
+// the runbook (docs/architecture/004-ci-cd.md).
+export const SMOKE_ORG_NAME = "org_system_smoke";
+export const SMOKE_ORG_ID = "11111111-1111-4111-8111-111111111111";
+export const SMOKE_USER_ID = "22222222-2222-4222-8222-222222222222";
 // Token lives on the regional host, not the central app host: derive it from
 // the Connection endpoint origin (verified live 2026-09-09: us2 answers
 // /oauth/token, app.ninjarmm.com does not know us2 clients). Read-only scope:
@@ -69,6 +83,13 @@ export interface NinjaOrgsInput { /* empty: read-only census, no parameters */ }
 export interface NinjaOrgSummary { id: number; name: string }
 export interface NinjaOrgsResult { organizationCount: number; organizations: NinjaOrgSummary[] }
 export const NINJA_ORGS_MAX = 25;
+export interface SmokeInput { /* empty: loopback-free census, no parameters */ }
+export interface SmokeResult {
+  d1WriteOk: boolean;
+  d1ReadOk: boolean;
+  operationCount: number;
+  operations: string[];
+}
 export interface ExecutionParams { executionId: string }
 export interface SafeError { code: string; message: string }
 
@@ -95,6 +116,12 @@ export function parseNinjaOrgsInput(value: unknown): NinjaOrgsInput {
   }
   return {};
 }
+export function parseSmokeInput(value: unknown): SmokeInput {
+  if (!object(value) || Object.keys(value).length !== 0) {
+    throw new Fault(400, "INVALID_INPUT", "The system.smoke Saga takes an empty input object.");
+  }
+  return {};
+}
 export interface SagaDef {
   readonly id: string; readonly name: string; readonly revision: string;
   readonly description: string; readonly parse: (value: unknown) => unknown;
@@ -102,6 +129,7 @@ export interface SagaDef {
 const catalog: SagaDef[] = [
   { ...echoSaga, parse: parseInput },
   { ...ninjaSaga, parse: parseNinjaOrgsInput },
+  { ...smokeSaga, parse: parseSmokeInput },
 ];
 export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {
   if (!object(value) || Object.keys(value).some((key) => !["sagaId", "input"].includes(key)) ||

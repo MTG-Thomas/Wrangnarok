@@ -61,6 +61,13 @@ jobs:
         if: steps.scaffold.outputs.present == 'true'
         run: npm test
 
+      # system.smoke exercises the same path locally that post-deploy smoke
+      # exercises in dev: Worker request handling, D1, Workflow Operations,
+      # terminal persistence, and the usage block. Credential-free workerd.
+      - name: Smoke saga (local, credential-free)
+        if: steps.scaffold.outputs.present == 'true'
+        run: npx vitest run test/smoke.test.ts
+
       - name: Build UI
         if: steps.scaffold.outputs.present == 'true'
         run: npm run build:ui
@@ -68,6 +75,10 @@ jobs:
       - name: Wrangler dry run
         if: steps.scaffold.outputs.present == 'true'
         run: npx wrangler deploy --dry-run
+
+      - name: Wrangler dry run (dev environment)
+        if: steps.scaffold.outputs.present == 'true'
+        run: npx wrangler deploy --dry-run --env dev
 
       - name: Validate repository contract
         shell: bash

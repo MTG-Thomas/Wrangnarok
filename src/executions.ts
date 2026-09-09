@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-import { Fault, executionId, ninjaSaga, RECOVERY_WINDOW_MS } from "./domain";
+import { Fault, executionId, ninjaSaga, RECOVERY_WINDOW_MS, smokeSaga } from "./domain";
 import type { ExecutionStatus, Principal, SafeError, SagaDef } from "./domain";
 import type { Bindings } from "./bindings";
 export interface ExecutionRow {
@@ -13,6 +13,12 @@ export async function visibleExecution(db: D1Database, id: string, caller: Princ
     .bind(id, caller.orgId, caller.userId).first<ExecutionRow>();
   if (!row) throw new Fault(404, "EXECUTION_NOT_FOUND", "Execution not found.");
   return row;
+}
+/** One native Workflow binding per Saga. Never inferred from the request. */
+export function workflowForSaga(env: Bindings, sagaId: string): Workflow<{ executionId: string }> {
+  if (sagaId === ninjaSaga.id) return env.NINJA_WORKFLOW;
+  if (sagaId === smokeSaga.id) return env.SMOKE_WORKFLOW;
+  return env.ECHO_WORKFLOW;
 }
 export async function submit(env: Bindings, caller: Principal, key: string, saga: SagaDef, input: unknown) {
   // Canonical per ADR 001 (reconciled #15): deterministic SHA execution ID
@@ -39,8 +45,8 @@ export async function submit(env: Bindings, caller: Principal, key: string, saga
     if (row.saga_revision !== saga.revision || Date.now() - Date.parse(row.created_at) >= RECOVERY_WINDOW_MS) {
       throw new Fault(409, "RECOVERY_EXPIRED", "Inspect the existing Execution; it must not be automatically relaunched.");
     }
-    // One native Workflow binding per Saga. Never infer the binding from the request.
-    const workflow = saga.id === ninjaSaga.id ? env.NINJA_WORKFLOW : env.ECHO_WORKFLOW;
+    // One native Workflow binding per Saga. Never inferred from the request.
+    const workflow = workflowForSaga(env, saga.id);
     try {
       // Cloudflare createBatch skips existing retained IDs. Never parse error strings as duplicates.
       await workflow.createBatch([{ id, params: { executionId: id } }]);

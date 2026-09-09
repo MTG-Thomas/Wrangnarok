@@ -123,6 +123,70 @@ For the MVP, Sagas ship inside the Worker/application bundle. Deploying Wrangnar
 
 Do not create a second deployment system for Saga/Integration content yet. If Wrangnarök later supports portable bundles analogous to Bifrost Solutions, content installation/versioning becomes a separate architecture problem from deploying the Wrangnarök platform itself.
 
+## Runbook: dev deployment + system.smoke (issue #18)
+
+Credential-free CI proves everything below except the actual Cloudflare
+account calls. A human with account access runs these in order; no step
+requires committing secrets or IDs.
+
+```bash
+# 0. Local gates first (no credentials needed).
+npm ci
+npm run typecheck
+npm test
+npx vitest run test/smoke.test.ts
+npx wrangler deploy --dry-run
+npx wrangler deploy --dry-run --env dev
+
+# 1. Create the distinct dev D1 database (one-time).
+wrangler d1 create wrangnarok-dev
+# Paste the returned UUID into wrangler.jsonc env.dev d1_databases,
+# replacing REPLACE-ME-wrangler-d1-create-wrangnarok-dev. Never invent,
+# forge, or reuse another environment's ID.
+
+# 2. Apply migrations to dev (forward-compatible; 0002 is additive-only).
+wrangler d1 migrations apply DB --env dev --remote
+# Verify: `wrangler d1 migrations list DB --env dev --remote` shows none
+# unapplied; `executions` + `operations` + `usage_blocks` exist.
+
+# 3. Set dev secrets (values never committed; smoke itself needs none).
+wrangler secret put LAB_TOKEN --env dev
+wrangler secret put LAB_ORG_ID --env dev
+wrangler secret put LAB_USER_ID --env dev
+# Optional, only for the ninjaone-orgs path: NINJA_CLIENT_ID / NINJA_CLIENT_SECRET.
+
+# 4. Deploy dev.
+wrangler deploy --env dev
+
+# 5. Run system.smoke against dev (disposable org_system_smoke only).
+SMOKE_SAGA_ID=7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e
+curl -X POST "$DEV_WORKER_URL/api/executions" \
+  -H "Authorization: Bearer $LAB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: dev-smoke-001" \
+  -d "{\"sagaId\":\"$SMOKE_SAGA_ID\",\"input\":{}}"
+# Expect 202 + { executionId, replayed:false, statusUrl }. Poll statusUrl
+# until status Succeeded; expect operations prepare-input-v1, smoke-write-v1,
+# smoke-verify-v1 all Succeeded and result { d1WriteOk:true, d1ReadOk:true }.
+
+# 6. Archive the usage block: capture the WRANGNAROK_USAGE JSON log line and
+# the usage_blocks row, store as a CI artifact, and update the
+# allowance-vs-actuals table in docs/upstream-spec.md#free-tier-rule-measurable.
+```
+
+What to verify: 202-then-Succeeded lifecycle, D1 write/read verification in
+the result, terminal persistence, detail retrieval, the usage block (console +
+`usage_blocks` row, counts/IDs/durations only, no secrets), and that no
+production tenant/Connection row was touched. Restart persistence
+(stop/restart, replay same key => same Execution + same result) is a manual
+post-deploy check, not covered by workerd CI.
+
+Expected consumption per smoke run (Free-tier viable): ~1 Workflow instance
+with 4 steps, ~12 application-observed D1 statements over a handful of rows,
+and a handful of Worker requests. Allowance figures are placeholders until
+verified against current Cloudflare pricing; record the docs URL + check date
+with each figure.
+
 ## Consequences
 
 ### Positive
