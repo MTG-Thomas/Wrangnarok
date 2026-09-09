@@ -1,6 +1,6 @@
 # Wrangnarök lexicon
 
-Wrangnarök uses a small amount of Norse-inspired domain language. The goal is memorable concepts, not renaming infrastructure for the joke.
+Wrangnarök prefers boring, industry-standard names for load-bearing concepts (see ADR 006). A small amount of Norse-inspired language remains where it carries a real distinction, not for the joke.
 
 ## Naming rule
 
@@ -8,19 +8,21 @@ Wrangnarök uses a small amount of Norse-inspired domain language. The goal is m
 
 Do not alias or obscure established Cloudflare terms such as Worker, Workflow, workflow step, Queue, Durable Object, D1, R2, KV, binding, or Cron Trigger.
 
+Display name `Wrangnarök` is permitted in prose and titles. All code, binding, package, D1, and identifier names MUST use ascii `wrangnarok` (no diacritics).
+
 ## Domain terms
 
 ### Saga
 
 A code-first automation definition written in TypeScript.
 
-A Saga describes orchestration logic. Cloudflare Workflows are the initial durable runtime used to implement Sagas, but the domain concept is intentionally distinct from the Cloudflare product.
+A Saga describes orchestration logic. Cloudflare Workflows are the initial durable runtime used to implement Sagas, but the domain concept is intentionally distinct from the Cloudflare product. (Unrelated to the distributed-systems "saga pattern" of compensating transactions; no compensation semantics are implied.)
 
-### Journey
+### Execution
 
 One execution of a Saga.
 
-A Journey maps naturally to a Cloudflare Workflow instance and carries Wrangnarök-specific identity, Grove context, status, and Trail metadata.
+An Execution maps naturally to a Cloudflare Workflow instance and carries Wrangnarök-specific identity, Organization context, status, and ExecutionHistory metadata.
 
 ### Operation
 
@@ -28,35 +30,35 @@ A durable unit of execution within a Saga.
 
 Operations are expected to map to Cloudflare Workflow steps initially. `Operation` exists so Wrangnarök code and documentation can distinguish its execution contract from Cloudflare's `WorkflowStep` API.
 
-### Realm
+### Integration
 
 A reusable integration/provider boundary: for example NinjaOne, Microsoft Graph, HaloPSA, Meraki, or a generic HTTP service.
 
-A Realm should expose ordinary typed TypeScript APIs. Avoid ceremonial wrappers that make normal code harder to write.
+An Integration should expose ordinary typed TypeScript APIs. Avoid ceremonial wrappers that make normal code harder to write.
 
 ### Connection
 
-A configured/authenticated instance of a Realm, usually scoped to a Grove.
+A configured/authenticated instance of an Integration, usually scoped to an Organization.
 
-### Grove
+### Organization
 
 An organization/tenant boundary.
 
-The name is domain flavor, not an excuse to hide tenancy semantics. Authorization and isolation should remain explicit in code and tests.
+Authorization and isolation across Organizations must remain explicit in code and tests; the name must never soften that boundary.
 
-### Signal
+### Trigger
 
 An event capable of starting a Saga. Examples may include HTTP requests, schedules, or future event sources.
 
-### Trail
+### ExecutionHistory
 
-The durable execution/audit history associated with Journeys and Operations.
+The durable execution/audit history associated with Executions and Operations.
 
-### Yggdrasil
+### Catalog
 
-The application-level catalog/graph connecting Groves, Realms, Connections, Signals, and Sagas.
+The application-level catalog connecting Organizations, Integrations, Connections, Triggers, and Sagas: Saga discovery/registration metadata and cross-references.
 
-Use sparingly. `Yggdrasil` should describe the whole domain/catalog, not become a generic synonym for "the app."
+`Catalog` describes that discovery metadata, not the app as a whole. Do not let it become a junk-drawer module.
 
 ## Deliberately boring terms
 

@@ -20,17 +20,19 @@ This is a greenfield experiment, not a line-by-line port. Upstream Bifrost is tr
 
 ## Working vocabulary
 
+The canonical domain vocabulary is defined in `docs/lexicon.md`; the table below is a non-normative summary. In case of conflict, `docs/lexicon.md` prevails.
+
 | Wrangnarök | Meaning | Likely Cloudflare implementation |
 | --- | --- | --- |
 | **Saga** | Code-first automation definition | Cloudflare Workflow |
-| **Journey** | One execution of a Saga | Workflow instance |
+| **Execution** | One execution of a Saga | Workflow instance |
 | **Operation** | A durable unit of Saga execution | Workflow step |
-| **Realm** | Integration/provider such as NinjaOne or Microsoft Graph | TypeScript module |
-| **Connection** | Configured/authenticated instance of a Realm | D1 metadata + secrets |
-| **Grove** | Organization/tenant boundary | D1-backed domain model |
-| **Signal** | Something that starts a Saga | HTTP, Cron, event, etc. |
-| **Trail** | Execution/audit history | D1 initially |
-| **Yggdrasil** | The catalog/graph tying Sagas, Realms, Signals, and Groves together | Application/domain layer |
+| **Integration** | Provider such as NinjaOne or Microsoft Graph | TypeScript module |
+| **Connection** | Configured/authenticated instance of an Integration | D1 metadata + secrets |
+| **Organization** | Organization/tenant boundary | D1-backed domain model |
+| **Trigger** | Something that starts a Saga | HTTP, Cron, event, etc. |
+| **ExecutionHistory** | Execution/audit history | D1 initially |
+| **Catalog** | The catalog/graph tying Sagas, Integrations, Triggers, and Organizations together | Application/domain layer |
 
 This vocabulary is intentionally conservative. Forms remain forms. Tables remain tables. Secrets remain secrets. Cloudflare Queues remain Queues. Mythology should clarify the domain, not turn the codebase into a crossword puzzle.
 
@@ -41,10 +43,10 @@ The first milestone is intentionally tiny:
 - TypeScript Worker deployable with Wrangler
 - D1-backed minimal application state
 - one code-first Saga
-- one Journey launched through the API
+- one Execution launched through the API
 - multiple durable Operations backed by Cloudflare Workflow steps
-- persisted Journey/Operation status and results
-- one simple HTTP-based Realm
+- persisted Execution/Operation status and results
+- one simple HTTP-based Integration
 - basic execution-history API
 - demonstrated operation within Cloudflare Free limits
 
@@ -72,16 +74,16 @@ Client / API caller
        v
  Cloudflare Worker
        |
-       +---- D1 ----------------> Groves / Connections / Trails
+       +---- D1 ----------------> Organizations / Connections / ExecutionHistory
        |
-       +---- Workflow ----------> Saga Journey
+       +---- Workflow ----------> Saga Execution
                                   |
                                   +-- Operation
                                   +-- Operation
                                   +-- Operation
                                         |
                                         v
-                                      Realm
+                                      Integration
                                         |
                                         v
                                    External API

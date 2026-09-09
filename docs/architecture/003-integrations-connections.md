@@ -1,4 +1,4 @@
-# ADR 003: Realms and Connections
+# ADR 003: Integrations and Connections
 
 Status: **Proposed**
 
@@ -10,11 +10,11 @@ Wrangnarök needs the same product boundary without inheriting Bifrost's impleme
 
 ## Decision
 
-### Realm
+### Integration
 
-A **Realm** is code: a reusable, typed TypeScript integration/provider definition.
+A **Integration** is code: a reusable, typed TypeScript integration/provider definition.
 
-A Realm owns:
+An Integration owns:
 
 - a stable machine identifier;
 - human discovery metadata;
@@ -25,12 +25,12 @@ A Realm owns:
 - vendor-specific request/response normalization;
 - vendor-specific pagination/rate-limit/error behavior where useful.
 
-A Realm does **not** own tenant credentials or mutable OAuth tokens.
+An Integration does **not** own tenant credentials or mutable OAuth tokens.
 
 Example shape (illustrative, not yet API-stable):
 
 ```ts
-export const echo = defineRealm({
+export const echo = defineIntegration({
   id: "00000000-0000-0000-0000-000000000101",
   name: "echo",
   config: EchoConfig,
@@ -48,62 +48,62 @@ export const echo = defineRealm({
 
 ### Connection
 
-A **Connection** is environment state: a configured instance of a Realm for a Grove.
+A **Connection** is environment state: a configured instance of an Integration for an Organization.
 
 A Connection owns:
 
 - stable Connection ID;
-- Realm ID;
-- Grove ID;
+- Integration ID;
+- Organization ID;
 - optional external entity/tenant ID and display name;
 - non-secret configuration;
 - references to secret material;
 - authentication state/metadata;
 - created/updated timestamps.
 
-A Connection must never serialize decrypted credentials through the ordinary public API, Trail, Journey result, or browser-facing state.
+A Connection must never serialize decrypted credentials through the ordinary public API, ExecutionHistory, Execution result, or browser-facing state.
 
 ### Resolution
 
-A Saga normally asks for a Realm in the current Journey's Grove context. The runtime resolves the corresponding Connection.
+A Saga normally asks for an Integration in the current Execution's Organization context. The runtime resolves the corresponding Connection.
 
 The MVP resolution rule is deliberately strict:
 
-1. Resolve the requested Realm by stable ID/name.
-2. Resolve a Connection for exactly the current Grove.
+1. Resolve the requested Integration by stable ID/name.
+2. Resolve a Connection for exactly the current Organization.
 3. If none exists, fail with a structured `CONNECTION_NOT_CONFIGURED` error.
 
-There is **no implicit global credential fallback in the MVP**. Upstream supports org/global cascades, but explicit Grove isolation is safer and simpler for the experiment. Shared/default Connections may be introduced later only with explicit lookup and write-boundary semantics.
+There is **no implicit global credential fallback in the MVP**. Upstream supports org/global cascades, but explicit Organization isolation is safer and simpler for the experiment. Shared/default Connections may be introduced later only with explicit lookup and write-boundary semantics.
 
-Explicit cross-Grove Connection lookup is an administrative capability, not something arbitrary Saga code receives by passing another Grove ID.
+Explicit cross-Organization Connection lookup is an administrative capability, not something arbitrary Saga code receives by passing another Organization ID.
 
 ### Actions
 
-An **Action** is a typed callable exposed by a Realm. Keep this boring term.
+An **Action** is a typed callable exposed by an Integration. Keep this boring term.
 
 Sagas should ideally read like ordinary TypeScript:
 
 ```ts
-const echo = await ctx.realms.echo.echo({ message: "hello" });
+const echo = await ctx.integrations.echo.echo({ message: "hello" });
 ```
 
 Do not require Saga authors to manipulate Connection records, tokens, D1 rows, or Cloudflare bindings directly.
 
 ### Secret boundary
 
-Cloudflare Worker secrets and Secrets Store are suitable for deployment/account-level secrets, but they are not by themselves a scalable per-Grove Connection store: Worker secrets are deployment bindings, while Secrets Store is account-level and currently limited in count.
+Cloudflare Worker secrets and Secrets Store are suitable for deployment/account-level secrets, but they are not by themselves a scalable per-Organization Connection store: Worker secrets are deployment bindings, while Secrets Store is account-level and currently limited in count.
 
 D1 is encrypted at rest, but D1 encryption alone does not make plaintext credential columns an acceptable application secret design. Before multi-tenant Connections ship, Wrangnarök must choose an application-level secret-storage scheme.
 
-Likely direction to investigate:
+Proposed direction is now ADR 005 (per-Organization envelope encryption, Proposed — not yet approved for production use):
 
-- one deployment-level master encryption key stored as a Worker secret;
-- per-Connection secret payload encrypted/decrypted inside the Worker with Web Crypto (AES-GCM or an envelope scheme);
-- ciphertext, nonce/version/key metadata persisted in D1;
+- one deployment-level master encryption key (KEK) stored as a Worker secret;
+- per-Connection secret payload encrypted/decrypted inside the Worker with Web Crypto (AES-GCM envelope);
+- ciphertext, nonce, wrapped DEK, key version, and algorithm persisted in D1;
 - decrypted material exists only transiently inside server-side Worker/Workflow execution;
 - key rotation/versioning designed before declaring the format stable.
 
-This is **not yet approved for production use**. The First Acorn does not need tenant credentials; its demo Realm can use a mock endpoint with non-secret configuration.
+This is **not yet approved for production use**. The First Acorn does not need tenant credentials; its demo Integration can use a mock endpoint with non-secret configuration.
 
 ### OAuth
 
@@ -120,12 +120,12 @@ Token refresh must not be implemented independently in every Saga.
 
 ## Consequences
 
-- Realm code remains portable and Git-versioned.
-- Connection state remains Grove/environment-specific.
+- Integration code remains portable and Git-versioned.
+- Connection state remains Organization/environment-specific.
 - A Saga cannot accidentally carry credentials in source.
 - MVP tenant resolution is stricter than upstream Bifrost's global fallback behavior.
 - Secret storage becomes an explicit security design task rather than an accidental D1 schema detail.
-- The First Acorn can implement the Realm abstraction without blocking on OAuth/secret storage.
+- The First Acorn can implement the Integration abstraction without blocking on OAuth/secret storage.
 
 ## Upstream behavior intentionally not copied yet
 

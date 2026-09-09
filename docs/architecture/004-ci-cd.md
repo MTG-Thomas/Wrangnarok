@@ -13,7 +13,7 @@ Cloudflare infrastructure terminology remains visible. CI should test Workers in
 
 ### Pull requests are credential-free CI
 
-Normal pull-request CI MUST NOT require Cloudflare account credentials or real Realm credentials.
+Normal pull-request CI MUST NOT require Cloudflare account credentials or real Integration credentials.
 
 The baseline PR pipeline is:
 
@@ -25,13 +25,13 @@ The baseline PR pipeline is:
 6. Worker-runtime integration tests using Cloudflare's Vitest/workerd tooling and local bindings;
 7. `wrangler deploy --dry-run` or the closest current non-mutating build validation.
 
-External Realm/vendor behavior is mocked or served by deterministic fixtures. Cloudflare services are locally emulated wherever Cloudflare provides supported local bindings.
+External Integration/vendor behavior is mocked or served by deterministic fixtures. Cloudflare services are locally emulated wherever Cloudflare provides supported local bindings.
 
 ### Deployment is separate from validation
 
 Only trusted deployment workflows receive Cloudflare credentials. Deployment credentials MUST be scoped API tokens rather than global account credentials where Cloudflare supports the required permissions.
 
-Real Realm/Connection credentials MUST NOT be stored as GitHub deployment secrets merely to run application CI.
+Real Integration/Connection credentials MUST NOT be stored as GitHub deployment secrets merely to run application CI.
 
 ### Environments
 
@@ -67,15 +67,24 @@ Wrangnarök SHOULD permanently include a safe internal `system.smoke` Saga once 
 The smoke Saga should prove the deployed control plane rather than merely return HTTP 200. It should exercise, at minimum:
 
 1. Worker/API request handling;
-2. Journey creation;
-3. D1 write;
+2. Execution creation (202-only-after-confirm; ambiguous create reconciled by status lookup, never treated as duplicate on unknown);
+3. D1 write (Pending row + input fingerprint);
 4. Cloudflare Workflow execution;
-5. multiple Operations;
+5. multiple Operations with stable names/operation IDs;
 6. D1 read/write verification;
-7. terminal Journey persistence;
-8. Journey status/detail retrieval.
+7. terminal Execution persistence;
+8. Execution status/detail retrieval;
+9. duplicate-submit (same key + same input => same Execution, `replayed: true`), conflict-submit (same key + different input => 409 + lookup path), and isolation-submit (different Organization/principal => different Execution, foreign inspect => 404 without touching Workflow binding);
+10. restart persistence (stop/restart local Wrangler, replay same key => same Execution + same result).
 
-It MUST NOT require an external vendor, tenant credentials, or destructive production data. Test records should be identifiable and safely disposable.
+It MUST run in a dedicated disposable organization (e.g. `org_system_smoke`) with identifiable `smoke_`-prefixed Execution IDs/records, never touch production tenant/Connection data, and MUST NOT require an external vendor, tenant credentials, or destructive production data.
+
+Cost-logging requirement (Free-tier rule enforcement):
+
+1. `system.smoke` MUST emit a machine-readable `usage` block per run (JSON log + persisted ExecutionHistory-adjacent record without secrets) containing: D1 rows written/read and read/write/query counts; Workflow instances started, steps executed, and Execution duration; Worker requests handled and CPU-ms where exposed.
+2. Post-deploy smoke (`dev` and `production` promotion per ladder below) MUST archive that `usage` block as a CI artifact and update the docs allowance-vs-actuals table referenced in `docs/upstream-spec.md#free-tier-rule-measurable`.
+3. Smoke MUST NOT log secret material, Connection plaintext, or full vendor payloads — counts, IDs, durations, and status codes only.
+4. Tracked Free limits, minimum set: D1 (stored rows/data, reads, writes), Workflows (steps, instances), Workers (requests, CPU-ms). Use `[verify vs current Cloudflare pricing]` placeholders for allowance figures; record the docs URL + check date alongside each figure.
 
 ### CI/CD ladder
 
@@ -112,7 +121,7 @@ Progressive/canary traffic deployment is deferred until real usage makes it usef
 
 For the MVP, Sagas ship inside the Worker/application bundle. Deploying Wrangnarök deploys its built-in Sagas.
 
-Do not create a second deployment system for Saga/Realm content yet. If Wrangnarök later supports portable bundles analogous to Bifrost Solutions, content installation/versioning becomes a separate architecture problem from deploying the Wrangnarök platform itself.
+Do not create a second deployment system for Saga/Integration content yet. If Wrangnarök later supports portable bundles analogous to Bifrost Solutions, content installation/versioning becomes a separate architecture problem from deploying the Wrangnarök platform itself.
 
 ## Consequences
 

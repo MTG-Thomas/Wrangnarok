@@ -7,19 +7,19 @@ Status vocabulary: **Adopt** preserves the product capability; **Adapt** preserv
 | Upstream capability | Status | Wrangnarök direction | Candidate Cloudflare primitive |
 | --- | --- | --- | --- |
 | Code-first workflows | **Adopt** | TypeScript **Sagas** | Workflows |
-| Workflow executions | **Adapt** | **Journeys** with durable Operations | Workflow instances + D1 Trail |
+| Workflow executions | **Adapt** | **Executions** with durable Operations | Workflow instances + D1 ExecutionHistory |
 | Stable workflow identity | **Adopt** | Source edits must not silently mint a new Saga identity | D1 catalog + source metadata |
 | Workflow discovery metadata | **Adopt** | Name, description, category/tags or equivalent | D1/catalog |
-| Reusable integrations | **Adopt** | Typed **Realms** | Worker TypeScript modules |
-| Multi-tenancy / organizations | **Adopt** | **Groves** | D1 initially |
+| Reusable integrations | **Adopt** | Typed **Integrations** | Worker TypeScript modules |
+| Multi-tenancy / organizations | **Adopt** | **Organizations** | D1 initially |
 | Explicit access boundary | **Adopt** | A caller must be authorized through the complete dependency chain | Worker auth + D1 policies/application checks |
-| Connection/config management | **Adopt** | **Connections** scoped/resolved through Groves | D1 + secret mechanism |
-| OAuth management / refresh | **Defer** | Realm-specific auth contract with common lifecycle helpers | Worker + D1/secrets |
-| Secret management | **Investigate** | Determine a safe Cloudflare-native per-Grove secret model | Secrets / encrypted D1 or another native facility |
+| Connection/config management | **Adopt** | **Connections** scoped/resolved through Organizations | D1 + secret mechanism |
+| OAuth management / refresh | **Defer** | Integration-specific auth contract with common lifecycle helpers | Worker + D1/secrets |
+| Secret management | **Investigate** | Determine a safe Cloudflare-native per-Organization secret model | Secrets / encrypted D1 or another native facility |
 | Dynamic forms | **Defer** | Form field names bind to Saga inputs | Worker + static UI + D1 |
 | Tables / application storage | **Adapt** | JSON/document-like author storage over D1, if justified | D1 |
 | Row-level authorization/policies | **Defer / Investigate** | Preserve deny-by-absence and tenant-safe query semantics if Tables ship | Application policy layer over D1 |
-| Triggers/events | **Adopt** | **Signals** include HTTP/webhook, schedule, and potentially topic events | Worker / Cron / Workflows |
+| Triggers/events | **Adopt** | **Triggers** include HTTP/webhook, schedule, and potentially topic events | Worker / Cron / Workflows |
 | Topic emission/subscription | **Defer** | Preserve event decoupling only if needed | Queues / Workflows |
 | Async execution queue | **Adapt** | Workflows first; Queue only for real broker/backpressure semantics | Queues if earned |
 | Cache/session layer | **Reject as required architecture** | Add caching only for demonstrated need | KV / Cache API / DO if earned |
@@ -28,11 +28,11 @@ Status vocabulary: **Adopt** preserves the product capability; **Adapt** preserv
 | Persistent worker processes | **Reject** | Execution lives in Cloudflare primitives | Workers / Workflows |
 | Local source execution | **Adopt** | Fast local execution without registration/deploy should remain possible | Wrangler/local runtime |
 | Hot reload | **Adapt** | Standard local Worker development | Wrangler |
-| Portable bundles / Solutions | **Defer but important** | One source definition installable into multiple Groves; separate source from environment state | Git + manifests + D1 install state |
+| Portable bundles / Solutions | **Defer but important** | One source definition installable into multiple Organizations; separate source from environment state | Git + manifests + D1 install state |
 | Deploy-owned vs loose entities | **Investigate** | Upstream distinction is valuable but may be too heavy for early Wrangnarök | Catalog/manifests |
-| Git-based management | **Adopt** | Sagas and Realms are ordinary version-controlled TypeScript | GitHub |
+| Git-based management | **Adopt** | Sagas and Integrations are ordinary version-controlled TypeScript | GitHub |
 | AI-assisted development | **Adopt as philosophy** | Types, docs, tests, and boring APIs should be agent-friendly | TypeScript |
-| Monitoring / execution history | **Adopt** | **Trail** | D1 + Workers observability |
+| Monitoring / execution history | **Adopt** | **ExecutionHistory** | D1 + Workers observability |
 | Agents / tool workflows | **Defer** | A Saga may eventually opt into tool exposure; normal Sagas remain distinct | Workers AI / external model APIs later |
 | Self-host anywhere | **Reject** | This experiment is intentionally Cloudflare-native | Cloudflare |
 | PostgreSQL / Redis / RabbitMQ | **Reject as dependencies** | Port behavior, not products | Native primitives as earned |
@@ -44,13 +44,13 @@ Status vocabulary: **Adopt** preserves the product capability; **Adapt** preserv
 
 Upstream workflows are ordinary async Python functions whose typed function signature defines inputs and whose result must be serializable. The decorated workflow should remain thin: validate input, orchestrate reusable module behavior, and shape output. Reusable integration/domain logic belongs outside the workflow body.
 
-**Wrangnarök implication:** Sagas should be ordinary TypeScript, not serialized workflow definitions. Type inference/schema generation should derive as much as practical from code. Realm logic should remain independently testable.
+**Wrangnarök implication:** Sagas should be ordinary TypeScript, not serialized workflow definitions. Type inference/schema generation should derive as much as practical from code. Integration logic should remain independently testable.
 
 ### 2. Source identity and persisted execution identity are separate
 
 Upstream registers a callable as a stable, scoped, permissioned workflow record. Editing its implementation preserves registration. Moving/renaming has explicit replacement/remap behavior because blindly re-registering creates a new UUID and breaks dependents.
 
-**Wrangnarök implication:** do not equate `export function foo` with durable identity. A Saga needs stable identity independent of source edits, and references from Signals/forms/etc. should survive implementation changes. Exact registration UX is TBD.
+**Wrangnarök implication:** do not equate `export function foo` with durable identity. A Saga needs stable identity independent of source edits, and references from Triggers/forms/etc. should survive implementation changes. Exact registration UX is TBD.
 
 ### 3. Runtime policy is environment state, not source decorator trivia
 
@@ -68,19 +68,19 @@ Upstream explicitly supports executing local workflow source without registratio
 
 Upstream organizations are tenant boundaries. Apps/forms/workflows/resources each carry scope/access, and successful admin execution does not prove an ordinary caller can traverse the dependency chain.
 
-**Wrangnarök implication:** Grove context should be explicit and propagated through Journeys, Realm Connection resolution, Tables, and Signals. Tests need representative allowed and denied non-admin/non-owner callers once auth exists.
+**Wrangnarök implication:** Organization context should be explicit and propagated through Executions, Integration Connection resolution, Tables, and Triggers. Tests need representative allowed and denied non-admin/non-owner callers once auth exists.
 
 ### 6. Integrations separate service definition from tenant mapping
 
 Upstream Integration entities define a service/config schema; organization mappings bind them to tenant-specific OAuth/config state. Packages declare requirements but do not carry environment credentials.
 
-**Wrangnarök implication:** distinguish **Realm** (code/service definition) from **Connection** (environment/Grove-specific configuration and credentials). Portable Saga code must never embed Connection state.
+**Wrangnarök implication:** distinguish **Integration** (code/service definition) from **Connection** (environment/Organization-specific configuration and credentials). Portable Saga code must never embed Connection state.
 
 ### 7. Events are source + subscription, not merely cron annotations
 
 Upstream event sources include schedule, webhook, and topic. A subscription targets one workflow or agent, and topic events carry metadata/payload into execution context.
 
-**Wrangnarök implication:** Signal should remain a first-class domain concept rather than becoming `cron` metadata on a Saga. MVP only needs HTTP initiation, but the model should not preclude schedules/webhooks/topics.
+**Wrangnarök implication:** Trigger should remain a first-class domain concept rather than becoming `cron` metadata on a Saga. MVP only needs HTTP initiation, but the model should not preclude schedules/webhooks/topics.
 
 ### 8. Tables are JSON-document storage with policy semantics
 
@@ -92,7 +92,7 @@ Upstream Tables store JSON documents, support filtering/querying, and attach row
 
 An upstream Solution is a portable source definition containing apps, workflows, forms, agents, table/config declarations, claims, and declared file locations. One definition can be installed in many organizations. Each install has independent identity, scope, environment configuration, and runtime data. Shareable exports exclude secrets/table rows/runtime file bytes.
 
-**Wrangnarök implication:** this distinction is worth preserving eventually. A portable bundle should not contain Grove-specific Connection credentials or mutable environment data. Do not prematurely make Git repository == tenant installation.
+**Wrangnarök implication:** this distinction is worth preserving eventually. A portable bundle should not contain Organization-specific Connection credentials or mutable environment data. Do not prematurely make Git repository == tenant installation.
 
 ### 10. Managed ownership has consequences
 
@@ -104,7 +104,7 @@ Upstream Solution-owned entities are deploy-managed; live mutation is blocked. L
 
 Upstream can allow a Solution to fall back to eligible shared workflows/tables/files/modules, but this does not grant arbitrary cross-tenant access. Shared table fallback is read-only, normal policy remains active, and configs/integrations have separate resolution rules.
 
-**Wrangnarök implication:** do not build magical global fallback early. If shared Realms/resources arrive later, define lookup order and write boundaries explicitly.
+**Wrangnarök implication:** do not build magical global fallback early. If shared Integrations/resources arrive later, define lookup order and write boundaries explicitly.
 
 ### 12. Agents are consumers of explicitly exposed tools
 
@@ -118,8 +118,8 @@ These are stronger than implementation preferences and should guide design revie
 
 1. **Code is source of behavior; environment state is not embedded in code.**
 2. **Saga identity survives ordinary source edits.**
-3. **Groves are hard tenant boundaries.**
-4. **Realm definitions and Grove-specific Connections are separate.**
+3. **Organizations are hard tenant boundaries.**
+4. **Integration definitions and Organization-specific Connections are separate.**
 5. **Secrets never cross into browser/client code or ordinary execution output.**
 6. **Portable definitions exclude tenant credentials and mutable runtime data.**
 7. **Every externally invokable dependency must independently authorize the caller/context.**
@@ -130,9 +130,12 @@ These are stronger than implementation preferences and should guide design revie
 
 ## Next upstream sweeps
 
-Still inspect in depth:
+Priority order is intentional. Inspect first:
 
-- execution state machine, cancellation, timeout and retry behavior;
+- execution state machine, cancellation, timeout and retry behavior — required to settle ADR 001 Execution/Operation semantics, Phase 1 state model, and Phase 2 retries/cancellation before any Tables/Forms/AI work;
+
+Then, in roughly this order:
+
 - current integration SDK and OAuth implementation contracts;
 - files/artifacts;
 - app/web SDK and forms;
@@ -142,10 +145,29 @@ Still inspect in depth:
 - API surface and execution observability;
 - current upstream tests for invariants that documentation may omit.
 
-## Free-tier rule
+## Free-tier rule (measurable)
 
 Every proposed capability should answer:
 
 > Can a small but useful deployment exercise this capability indefinitely within Cloudflare Free allowances?
 
 If not, document the exact limit or missing primitive. Paid-tier escape hatches are useful findings, but they are not MVP defaults.
+
+Measurement is mandatory, not assumed (see ADR 004 `system.smoke`):
+
+1. Every `system.smoke` run MUST log a `usage` block with, at minimum:
+   - D1: rows written/read, read/write/query counts for the run;
+   - Workflow: instances started, steps executed, per-Execution duration;
+   - Worker: requests handled, CPU-ms per request where the runtime exposes it.
+2. The repo MUST maintain a Free-allowance vs actuals table (in docs, updated per smoke run or release), e.g.:
+
+   | Primitive | Free allowance | Smoke actual (per run) | Notes/source |
+   | --- | --- | --- | --- |
+   | D1 stored rows | [verify vs current Cloudflare pricing] | measured | First Acorn state + ExecutionHistory |
+   | D1 reads / writes | [verify vs current Cloudflare pricing] | measured | per `system.smoke` usage block |
+   | Workflows steps / instances | [verify vs current Cloudflare pricing] | measured | Execution + Operations |
+   | Workers requests / CPU-ms | [verify vs current Cloudflare pricing] | measured | Worker/API handling |
+
+   Do not hard-code allowance numbers from memory; link the pricing/docs page checked and the date checked. Use `[verify vs current Cloudflare pricing]` where uncertain.
+3. Track at least: D1 (stored data, rows, reads, writes), Workflows (steps, instances, duration/retention), Workers (requests/day, CPU-ms). Add R2/KV/ Queue/DO rows only when an ADR earns that primitive.
+4. If a capability cannot stay within Free allowances for a small useful deployment, its spec entry MUST name the binding limit and propose a deferred/paid alternative — it MUST NOT silently become an MVP default.
