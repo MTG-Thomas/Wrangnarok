@@ -45,6 +45,9 @@
   // unconfigured/deferred — promotion may be manual until dev is stable.
   "env": {
     "dev": {
+      // Dev-only ingress for smoke testing. Production stays without
+      // workers_dev/routes until promotion is explicitly designed.
+      "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "dev",
         "LAB_ENABLED": "false",
