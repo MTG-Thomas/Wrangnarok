@@ -10,7 +10,7 @@
   "vars": {
     "LAB_ENABLED": "false",
     "LAB_TOKEN": "",
-    "LAB_GROVE_ID": "",
+    "LAB_ORG_ID": "",
     "LAB_USER_ID": ""
   },
   "d1_databases": [{

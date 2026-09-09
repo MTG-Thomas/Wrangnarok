@@ -1,4 +1,4 @@
-# ADR 005: First Acorn submission and local execution slice
+# ADR 007: First Acorn submission and local execution slice
 
 **Status: Draft implementation proposal; runtime validation pending.**
 
@@ -6,17 +6,17 @@ Related: [#4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), [#2](https://g
 
 ## Primitive and identity boundaries
 
-Use only Worker + Workflows + D1. The echo Saga has an explicit UUID in the static code catalog, separate from its source name/revision and Workflow binding. D1 snapshots that metadata in each Journey, so deleting or renaming source does not erase history. A separate catalog table is unnecessary for the single built-in Saga.
+Use only Worker + Workflows + D1. The echo Saga has an explicit UUID in the static code catalog, separate from its source name/revision and Workflow binding. D1 snapshots that metadata in each Execution, so deleting or renaming source does not erase history. A separate catalog table is unnecessary for the single built-in Saga.
 
-D1 is the product's query, authorization and history surface. Workflows owns durable execution/checkpoints. The Journey ID is also the native instance ID. No process worker, portability runtime or competing scheduler is introduced.
+D1 is the product's query, authorization and history surface. Workflows owns durable execution/checkpoints. The Execution ID is also the native instance ID. No process worker, portability runtime or competing scheduler is introduced.
 
-The fixture principal is configured locally, not supplied by the request. Every public Journey read checks both Grove and requester. The Workflow loads the Grove from its immutable Journey row, not from a client-provided execution context. Realm Connection resolution is exact-Grove with no upstream global/provider bypass semantics.
+The fixture principal is configured locally, not supplied by the request. Every public Execution read checks both Organization and requester. The Workflow loads the Organization from its immutable Execution row, not from a client-provided execution context. Integration Connection resolution is exact-Organization with no upstream global/provider bypass semantics.
 
 ## Admission and ambiguous failure
 
-An Idempotency-Key is required: 16-128 ASCII alphanumeric or `._:-` characters. A SHA-256 hash of a versioned tuple of Grove, requester and key identifies one Journey. The same key with changed Saga/input conflicts. JSON input is normalized before comparison; HTTP bodies are capped at 4096 bytes and message text at 1024 UTF-8 bytes.
+An Idempotency-Key is required: 16-128 ASCII alphanumeric or `._:-` characters. A SHA-256 hash of a versioned tuple of Organization, requester and key identifies one Execution. The same key with changed Saga/input conflicts. JSON input is normalized before comparison; HTTP bodies are capped at 4096 bytes and message text at 1024 UTF-8 bytes.
 
-D1 reserves the immutable Journey before native dispatch. `Workflow.createBatch` with one instance provides retained-ID deduplication. A durable D1 dispatch marker is written only after that call acknowledges. A 202 is returned only after the marker is persisted. D1 and Workflows are not one atomic transaction.
+D1 reserves the immutable Execution before native dispatch. `Workflow.createBatch` with one instance provides retained-ID deduplication. A durable D1 dispatch marker is written only after that call acknowledges. A 202 is returned only after the marker is persisted. D1 and Workflows are not one atomic transaction.
 
 If creation or marker persistence fails, return 503 `DISPATCH_UNCONFIRMED`: work may have started, and the caller must retry the original key. No autonomous outbox is implemented. Reads never launch work. An unconfirmed reservation may be retried only within 15 minutes and under the same Saga revision; later ambiguity returns 409 without relaunching. Confirmed rows never dispatch again, even if native history has expired.
 
@@ -24,7 +24,7 @@ This safety argument assumes Cloudflare retains instance IDs throughout that rec
 
 ## Operations and history
 
-Two product Operations are persisted in order: `prepare-input-v1` and `echo-http-v1`. Separate native steps persist terminal success/failure; not every infrastructure checkpoint is a product Operation. Prepared input and the echo outcome are checkpointed JSON. Expected Realm failures return a structured outcome so their code survives replay without relying on Error subclass transport.
+Two product Operations are persisted in order: `prepare-input-v1` and `echo-http-v1`. Separate native steps persist terminal success/failure; not every infrastructure checkpoint is a product Operation. Prepared input and the echo outcome are checkpointed JSON. Expected Integration failures return a structured outcome so their code survives replay without relying on Error subclass transport.
 
 The fixture Action has zero configured retries. It is a read-like echo POST, not a mutating vendor integration. A stable operation ID is sent, but the implementation does not claim exactly-once external effects. Future retryable mutations require destination-side idempotency and a deliberate policy.
 
@@ -44,7 +44,7 @@ The default configuration disables the lab. An explicit local setup script creat
 
 Use the repo's Cloudflare Vitest plugin with real local bindings, not fake D1/Workflow implementations. Only the vendor HTTP boundary is mocked. See `CODEX_HANDOFF.md` for exact unrun validation and commands.
 
-The design avoids paid-only primitives, but Free-tier viability has not been demonstrated. Measure Worker CPU, Workflow steps/requests, D1 rows read/written and retained storage for a full Journey and retries on the actual runtime. Do not equate the absence of an account ID with proven cost or performance behavior.
+The design avoids paid-only primitives, but Free-tier viability has not been demonstrated. Measure Worker CPU, Workflow steps/requests, D1 rows read/written and retained storage for a full Execution and retries on the actual runtime. Do not equate the absence of an account ID with proven cost or performance behavior.
 
 Platform API references used while authoring (checked 2026-09-09):
 

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0
-import { boundedJson, ECHO_REALM_ID, Fault, parseInput } from "../domain";
+import { boundedJson, ECHO_INTEGRATION_ID, Fault, parseInput } from "../domain";
 import type { EchoInput } from "../domain";
-export const echoRealm = Object.freeze({ id: ECHO_REALM_ID, name: "echo" });
+export const echoIntegration = Object.freeze({ id: ECHO_INTEGRATION_ID, name: "echo" });
 export interface EchoConnection { endpoint: string }
 /** Fixture-only Action: POST echoes data without mutating any external resource. */
 export async function echo(connection: EchoConnection, input: EchoInput, operationId: string): Promise<EchoInput> {
   // The first slice supports only this local vendor fixture, not arbitrary user URLs.
   if (connection.endpoint !== "http://127.0.0.1:8788/echo") {
-    throw new Fault(500, "INVALID_CONNECTION", "The echo Realm requires its local fixture endpoint.");
+    throw new Fault(500, "INVALID_CONNECTION", "The echo Integration requires its local fixture endpoint.");
   }
   try {
     const response = await fetch(connection.endpoint, {
@@ -21,6 +21,6 @@ export async function echo(connection: EchoConnection, input: EchoInput, operati
     return output;
   } catch {
     // Never persist a vendor response body, URL, request headers, or raw exception.
-    throw new Fault(502, "ECHO_REALM_FAILED", "The local echo Realm did not return the expected response.");
+    throw new Fault(502, "ECHO_INTEGRATION_FAILED", "The local echo Integration did not return the expected response.");
   }
 }

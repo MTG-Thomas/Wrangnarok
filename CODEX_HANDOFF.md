@@ -2,7 +2,7 @@
 
 **Repository: MTG-Thomas/Wrangnarok. Branch: codex/first-acorn.**
 
-This is an incomplete, local-only implementation slice for [issue #4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), based on Wrangnarok commit `abbca6696ac83b490e4e53354468e1e22c01d9b7`. Read `AGENTS.md`, the existing ADRs, and the draft `docs/architecture/005-first-acorn-slice.md` first.
+This is an incomplete, local-only implementation slice for [issue #4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), based on Wrangnarok commit `abbca6696ac83b490e4e53354468e1e22c01d9b7`. Read `AGENTS.md`, the existing ADRs, and the draft `docs/architecture/007-first-acorn-slice.md` first.
 
 `gobifrost/bifrost` is the behavioral reference, not the destination or Git parent. The earlier labs placed in the Midtown Bifrost fork are superseded reference work, not this project's architecture. Do not import their Durable Objects, infrastructure interfaces, Python-compatibility requirement, or upstream scope-bypass port. No existing Wrangnarok documentation, license, or CI workflow is replaced by this branch.
 
