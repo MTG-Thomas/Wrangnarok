@@ -1,8 +1,8 @@
-# First Acorn implementation handoff
+# MVP slice implementation handoff
 
-**Repository: MTG-Thomas/Wrangnarok. Branch: codex/first-acorn.**
+**Repository: MTG-Thomas/Wrangnarok. Branch: codex/mvp-slice (formerly codex/first-acorn).**
 
-This is an incomplete, local-only implementation slice for [issue #4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), based on Wrangnarok commit `abbca6696ac83b490e4e53354468e1e22c01d9b7`. Read `AGENTS.md`, the existing ADRs, and the draft `docs/architecture/007-first-acorn-slice.md` first.
+This is an incomplete, local-only implementation slice for [issue #4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), based on Wrangnarok commit `abbca6696ac83b490e4e53354468e1e22c01d9b7`. Read `AGENTS.md`, the existing ADRs, and the draft `docs/architecture/007-mvp-slice.md` first.
 
 `gobifrost/bifrost` is the behavioral reference, not the destination or Git parent. The earlier labs placed in the Midtown Bifrost fork are superseded reference work, not this project's architecture. Do not import their Durable Objects, infrastructure interfaces, Python-compatibility requirement, or upstream scope-bypass port. No existing Wrangnarok documentation, license, or CI workflow is replaced by this branch.
 
@@ -63,7 +63,7 @@ Follow the returned `statusUrl`; GET `/api/journeys` returns only the first 20 s
 - SQLite migration/seed and constraint sanity checks only, not D1 runtime validation.
 - Whitespace checks on the new files.
 
-**Not run:** package installation/resolution, npm audit, generated binding types, full source/test typecheck, Vitest, workerd/D1/Workflow integration, Wrangler dry-run, CI, deployment, free-tier CPU/operation measurements, or the upstream Bifrost suites. Prior Bifrost-lab test counts do not apply here. The source snapshot is not a declaration that First Acorn or issue #4 is complete.
+**Not run:** package installation/resolution, npm audit, generated binding types, full source/test typecheck, Vitest, workerd/D1/Workflow integration, Wrangler dry-run, CI, deployment, free-tier CPU/operation measurements, or the upstream Bifrost suites. Prior Bifrost-lab test counts do not apply here. The source snapshot is not a declaration that the MVP slice or issue #4 is complete.
 
 ## Resource handoff stays separate
 

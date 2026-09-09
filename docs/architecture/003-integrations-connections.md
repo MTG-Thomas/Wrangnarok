@@ -103,7 +103,7 @@ Proposed direction is now ADR 005 (per-Organization envelope encryption, Propose
 - decrypted material exists only transiently inside server-side Worker/Workflow execution;
 - key rotation/versioning designed before declaring the format stable.
 
-This is **not yet approved for production use**. The First Acorn does not need tenant credentials; its demo Integration can use a mock endpoint with non-secret configuration.
+This is **not yet approved for production use**. The MVP slice does not need tenant credentials; its demo Integration can use a mock endpoint with non-secret configuration.
 
 ### OAuth
 
@@ -125,7 +125,7 @@ Token refresh must not be implemented independently in every Saga.
 - A Saga cannot accidentally carry credentials in source.
 - MVP tenant resolution is stricter than upstream Bifrost's global fallback behavior.
 - Secret storage becomes an explicit security design task rather than an accidental D1 schema detail.
-- The First Acorn can implement the Integration abstraction without blocking on OAuth/secret storage.
+- The MVP slice can implement the Integration abstraction without blocking on OAuth/secret storage.
 
 ## Upstream behavior intentionally not copied yet
 

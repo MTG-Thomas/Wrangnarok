@@ -3,7 +3,7 @@ export const echoSaga = Object.freeze({
   id: "720b9ebf-9b6a-4eac-bae9-6ed22c970401",
   name: "echo",
   revision: "echo-v1",
-  description: "First Acorn: prepare input and call the local HTTP echo Integration",
+  description: "MVP slice: prepare input and call the local HTTP echo Integration",
 });
 export const ECHO_INTEGRATION_ID = "720b9ebf-9b6a-4eac-bae9-6ed22c970402";
 export const ninjaSaga = Object.freeze({

@@ -17,7 +17,7 @@ A Saga has two identities:
 
 Do not use an export name, file path, Cloudflare Workflow class name, or Worker binding name as the sole durable identity.
 
-## First Acorn proposal
+## MVP slice proposal
 
 For the first implementation, keep registration deliberately static and Git-owned. A Saga definition declares an explicit stable ID and metadata in TypeScript. `run` executes as a Cloudflare Workflow `run(event, step)` body and is subject to Workflows determinism constraints: NO direct `Date.now()`, `Math.random()`, `crypto.randomUUID()`, `fetch()`, or Integration calls in the `run` body. All nondeterminism and I/O MUST go inside an Operation, which maps to a Cloudflare Workflow `step.do()` retry unit. `ctx.integrations.*` may ONLY be called inside a `step.do()` callback. `input`/`output` MUST be serializable JSON (no functions, `Map`/`Set`, class instances, streams).
 

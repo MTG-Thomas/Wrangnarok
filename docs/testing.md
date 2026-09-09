@@ -43,7 +43,7 @@ Executable SQL fed to workerd D1 `exec()` in tests must contain no header commen
 
 Use `wrangler dev` local Workflows support for end-to-end Execution tests. Exercise creation, execution and inspection of Workflow instances locally.
 
-First Acorn should prove:
+MVP slice should prove:
 
 ```text
 HTTP request
@@ -75,7 +75,7 @@ Do not make the core test suite require NinjaOne, Microsoft, Halo, or other vend
 
 ### 6. Live Cloudflare smoke tests
 
-After local First Acorn is green, deploy a minimal development instance to Cloudflare and repeat a small smoke path within Free-tier allowances. Live tests should remain sparse and must not become necessary for ordinary development.
+After local MVP slice is green, deploy a minimal development instance to Cloudflare and repeat a small smoke path within Free-tier allowances. Live tests should remain sparse and must not become necessary for ordinary development.
 
 ## Tooling baseline
 

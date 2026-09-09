@@ -2,7 +2,7 @@
 
 Wrangnarök grows by proving Bifrost-like product capabilities on Cloudflare primitives without prematurely recreating Bifrost's infrastructure.
 
-## Phase 0 — The First Acorn
+## Phase 0 — MVP slice
 
 Goal: prove the minimal durable execution loop on Cloudflare Free.
 
@@ -13,7 +13,7 @@ Goal: prove the minimal durable execution loop on Cloudflare Free.
 - one Execution
 - multiple durable Operations backed by Workflow steps
 - one simple HTTP Integration
-- execution status/results (JSON history + detail API; tiny read-only debug page if cheap — full static web UI stays Phase 4)
+- execution status/results (JSON history + detail API; tiny read-only debug page if cheap — full full-stack web UI stays Phase 4)
 - idempotency conflict (409) + 10-minute admission expiry + HTTP hardening per ADR 001
 - failure test
 - documented Free-tier consumption
@@ -71,7 +71,7 @@ Investigate/adapt upstream capabilities:
 - Artifacts/files over R2 (verify uploads, signed access, multipart, metadata, cleanup, authorization at operation level; container/Worker-local files are temporary)
 - richer Triggers/topics (durable state for reconnects; events are not the source of truth)
 - search/indexing when earned (organization scope, permissions, filtering, explicit reindex operation; async-index consistency documented)
-- static web UI
+- full-stack web UI (Vite + React tentpole, served as Workers Static Assets from the same Worker; see ADR 008)
 - role/policy model as justified
 
 ## Phase 5 — Portable bundles

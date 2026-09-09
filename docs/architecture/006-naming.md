@@ -31,7 +31,7 @@ Review criteria per term:
 | Grove | **Rename** | Organization | Hard auth boundary must read as one, in upstream's own word. `Organization` chosen over `Tenant` per review: matches Bifrost `organizations`, `org_id` identifiers, and existing platform language. `Grove` softens it. |
 | Signal | **Rename** | Trigger | `Trigger` already means "first-class starter, not cron metadata". `Signal` collides with Temporal in-flight signals. |
 | Yggdrasil | **Drop** | Catalog | ADR 002's static catalog is exactly a catalog. `Yggdrasil` risks becoming a junk-drawer synonym for "the app". |
-| Acorn | **Keep as milestone-only** | — | Not a domain abstraction (`lexicon.md:80-86`). Unchanged. |
+| Acorn | **Drop** | MVP slice | Removed from repo language. The milestone is Phase 0 MVP slice; do not use Acorn in prose, identifiers, or tests. |
 | Squirrel | **Keep as joke-only** | — | Never an execution primitive (`lexicon.md:88-92`). Unchanged. |
 
 Organization terminology note: `Organization` == tenant boundary. Prefer `org_id`

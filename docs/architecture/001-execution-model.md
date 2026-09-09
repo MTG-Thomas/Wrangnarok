@@ -34,7 +34,7 @@ An **Execution** is one durable execution of a Saga.
 
 An Execution is backed initially by a Cloudflare Workflow instance but has its own Wrangnarök record in D1 for discovery, authorization, history, and product-level state.
 
-An Execution record must include `org_id` from day one. First Acorn ships a single default Organization (`default` stub ID) propagated explicitly via `ctx`; multi-tenancy and authorization are deferred to Phase 3.
+An Execution record must include `org_id` from day one. MVP slice ships a single default Organization (`default` stub ID) propagated explicitly via `ctx`; multi-tenancy and authorization are deferred to Phase 3.
 
 Initial state model:
 
@@ -72,7 +72,7 @@ The full Execution record should eventually include at least:
 - created, scheduled, started and completed timestamps as applicable;
 - structured result metadata;
 - structured error metadata;
-- underlying Cloudflare Workflow instance identifier (`workflow_instance_id TEXT`; equals `executionId` in First Acorn, kept separate so a future binding can diverge);
+- underlying Cloudflare Workflow instance identifier (`workflow_instance_id TEXT`; equals `executionId` in MVP slice, kept separate so a future binding can diverge);
 - idempotency key (`idempotency_key TEXT NOT NULL UNIQUE`; see below);
 - `create_attempts INTEGER NOT NULL DEFAULT 1`;
 - ExecutionHistory/observability linkage.
@@ -83,11 +83,11 @@ An **Operation** is a durable unit of Saga execution owned by Wrangnarök semant
 
 Operations should be named for diagnostic stability. Their persisted/public representation should not require exposing Cloudflare-internal step representation.
 
-First Acorn Operation defaults (ported from Cloudflare-native lab spike):
+MVP slice Operation defaults (ported from Cloudflare-native lab spike):
 
 - stable step names per Saga version (e.g. `inventory-v1-0`, `inventory-v1-1`); never reorder/rename persisted v1 steps;
 - stable `operation_id` per unit of work (e.g. `${executionId}:<saga-version>:<index>`) passed to the Integration Action/Executor; retries reuse the same ID;
-- serial, bounded fanout (cap 8 targets/iterations for the Acorn);
+- serial, bounded fanout (cap 8 targets/iterations for the MVP slice);
 - step timeout 10 seconds, retries limit 2 with exponential backoff; permanent failures propagate, never reported as success;
 - **no exactly-once external-side-effect guarantee:** a step may redeliver after a lost checkpoint. Integration Actions MUST enforce `operation_id` idempotency at the destination or refuse automatic retries for unsafe operations.
 
@@ -95,7 +95,7 @@ First Acorn Operation defaults (ported from Cloudflare-native lab spike):
 
 Starting a Saga is asynchronous. The API acknowledges accepted work and returns the Execution identity without waiting for completion.
 
-A later API may support delayed/scheduled start, but First Acorn only requires immediate start.
+A later API may support delayed/scheduled start, but MVP slice only requires immediate start.
 
 Worker `POST /sagas/:sagaId/executions` MUST use this order because D1 + `Workflow.create()` are non-atomic (dual-write). D1 is the idempotency record; the Cloudflare Workflow instance is the executor.
 
@@ -120,7 +120,7 @@ CREATE TABLE executions (
 );
 ```
 
-HTTP hardening (First Acorn API):
+HTTP hardening (MVP slice API):
 
 - `Content-Type` must be `application/json` (else 415); body cap 4096 bytes streamed (else 413, enforced even without `Content-Length`); invalid JSON/nonsoap input => 422 `InputError`;
 - never reflect binding/provider errors, tokens, or execution payloads; ambiguous/provider failure => 503 + `Retry-After: 5` with "retry POST with the same Idempotency-Key";
@@ -152,7 +152,7 @@ History/list endpoints should return lightweight Execution summaries suitable fo
 
 ### Cancellation
 
-Cancellation is a product capability, not assumed behavior. First Acorn may omit user cancellation. When implemented, Wrangnarök must define which states are cancellable and map that deliberately onto Cloudflare Workflow instance controls.
+Cancellation is a product capability, not assumed behavior. MVP slice may omit user cancellation. When implemented, Wrangnarök must define which states are cancellable and map that deliberately onto Cloudflare Workflow instance controls.
 
 ### Retry and idempotency
 
@@ -160,7 +160,7 @@ Do not transparently retry arbitrary Integration mutations merely because infras
 
 Cloudflare Workflow step retry behavior is an implementation tool; Wrangnarök should expose only semantics it can explain safely.
 
-Public idempotency contract (resolved for First Acorn):
+Public idempotency contract (resolved for MVP slice):
 
 - Header `Idempotency-Key: <uuidv7>` is optional on execution creation.
 - Scope is global `UNIQUE(idempotency_key)` in D1. Per-`(org_id, saga_id)` scoping is deferred until a concrete multi-tenant use case needs it.
@@ -189,7 +189,7 @@ For each row:
 3. If still not-found / `create()` fails and `create_attempts >= 3` and row age < 10 minutes: `Pending -> Failed` with code `WORKFLOW_CREATE_FAILED`. This is the only reconciler path that terminally fails a young `Pending` row.
 4. Expiry (ported from lab spike): never silently resurrect a `Pending` row older than 10 minutes (`ADMISSION_RETRY_WINDOW`). Workflow history retention means a very old ambiguous launch must not be recreated much later. Return the original lookup path and require a fresh key: `Pending -> Failed` with code `ADMISSION_RETRY_WINDOW_EXPIRED`. A retained receipt (D1 row) prevents restart-after-history-loss from fabricating a terminal result — missing/expired Workflow history surfaces as unavailable/expired, never as invented success.
 
-### Workflow status mapping (resolved for First Acorn)
+### Workflow status mapping (resolved for MVP slice)
 
 | Cloudflare Workflow instance `status()` | Execution `status` |
 |---|---|
