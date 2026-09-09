@@ -18,7 +18,7 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
   useEffect(() => {
     if (props.initial) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         setData(await fetchExecutionHistory());
       } catch (err) {

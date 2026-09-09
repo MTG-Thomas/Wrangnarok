@@ -85,6 +85,7 @@ export interface Principal {
 export interface EchoInput {
   message: string;
 }
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
 export interface NinjaOrgsInput {
   /* empty: read-only census, no parameters */
 }
@@ -97,6 +98,7 @@ export interface NinjaOrgsResult {
   organizations: NinjaOrgSummary[];
 }
 export const NINJA_ORGS_MAX = 25;
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
 export interface SmokeInput {
   /* empty: loopback-free census, no parameters */
 }
