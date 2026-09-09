@@ -15,15 +15,29 @@ starting from Worker + Workflows + D1 only (AGENTS.md constraint 7).
 
 ## Why Worker secrets + Secrets Store alone are insufficient
 
+Secrets Store is real and worth using — just not for per-Organization
+credentials. Verified against current Cloudflare docs (open beta, Aug 2026):
+
+- One store per account, **100 secrets max**, each a ≤1024-byte string,
+  write-only after creation (only the bound service can `get()`).
+- Workers bindings are **per-secret and statically declared** (`binding` +
+  `store_id` + `secret_name` in wrangler config). Each new credential needs
+  a config entry plus a redeploy by a Secrets Store Deployer.
+- Local dev cannot touch production secrets (separate local secrets).
+
+That shape fails per-Organization credentials structurally, not just
+numerically:
+
 1. **Worker secrets are deployment-bound, not Organization-bound.** One value per
    deployment/environment. They cannot express N Organizations × M Connections,
    cannot be CRUD-managed per Organization via the application API, and change
    only via redeploy with broad deploy privileges.
-2. **Secrets Store is account-level and count-limited.** It is suitable for
-   a small set of deployment/account secrets (e.g. a master key), not for
-   an unbounded per-Organization Connection table. Lifecycle is account/store
-   scoped, not Organization scoped, and application-level Organization isolation still
-   has to be built on top.
+2. **Secrets Store cardinality and lifecycle are account-scoped.** Even if the
+   100-secret beta cap rose tomorrow, every Connection credential would still
+   need a static binding entry plus a redeploy to onboard one Organization,
+   with no Organization dimension to scope lookups. Application-level
+   Organization isolation still has to be built on top — at which point the
+   envelope scheme has been rebuilt with extra steps and a ceiling.
 3. **D1 encryption at rest is not application secret design.** D1 is
    encrypted at rest, but a plaintext `api_token TEXT` column would still
    expose credentials to any D1 reader, backup, log, or ExecutionHistory query.
@@ -33,7 +47,8 @@ starting from Worker + Workflows + D1 only (AGENTS.md constraint 7).
 Use application-level envelope encryption with a deployment master key:
 
 - One **master key (KEK)** per environment (`dev`, `production`), stored
-  only as a **Worker secret** (env binding). Never in Git, D1, ExecutionHistory,
+  in **Secrets Store** (local-only secret for `dev`; never remote/production
+  values in local config). Never in Git, D1, ExecutionHistory,
   logs, or client responses. `dev` KEK ≠ `production` KEK.
 - Per-Connection secrets encrypted inside the Worker with Web Crypto
   **AES-GCM-256 + random 96-bit nonce**. Envelope form: random per-Connection
@@ -52,8 +67,8 @@ Use application-level envelope encryption with a deployment master key:
 
 - `key_version` selects the KEK that wrapped the DEK. Encrypt always with
   latest; decrypt with the matching historical version.
-- Retain at most the previous KEK version(s) as decrypt-only Worker secrets
-  during rotation, then destroy per runbook.
+- Retain at most the previous KEK version(s) as decrypt-only Secrets Store
+  versions during rotation, then destroy per runbook.
 - Rotation = add new KEK version → re-wrap DEKs (or re-encrypt) via staged
   migration → verify dev smoke → destroy old version. Same forward-compatible
   discipline as ADR 004 D1 migrations.
@@ -98,3 +113,32 @@ Connection-with-secrets ships, required review:
 - Integration code stays portable; Connection secrets stay Organization-scoped.
 - Adds crypto + rotation complexity — earned only when real credentials arrive.
 - First Acorn stays unblocked without secret storage.
+
+## Alternatives considered (ecosystem survey, Sep 2026)
+
+| Pattern | Verdict |
+| --- | --- |
+| Few static secrets (Worker secrets / Secrets Store) | Correct for platform-level keys (including our KEK). Fails per-Organization credentials on cardinality (100/account), static per-secret bindings, and redeploy-per-tenant onboarding. |
+| Per-Organization D1 databases (Cloudflare's own SaaS guidance: DB/KV/R2 per customer) | **Documented upgrade path, not v1 (see below).** Matches Cloudflare's "complete isolation" story and stays on the earned D1 primitive. |
+| Tenant-scoped Durable Objects as vaults (one DO per org, secrets in DO SQLite storage) | Strongest isolation story, but a new primitive (must be earned), paid-metered, and still needs app-level routing correctness — a request routed to the wrong org's DO fails identically. Requires its own ADR if ever demanded. |
+| Workers for Platforms per-tenant bindings | Rejected twice over: paid-only dispatch namespaces (breaks the Free-tier constraint) and equally static bindings. |
+| External KMS (call out to AWS/GCP/Vault) | Rejected: vendor dependency, latency, and cost against the Cloudflare-native experiment constraint. Same trust-domain question, answered worse. |
+
+## Storage topology: single D1 now, per-Organization D1 later
+
+v1 is a **single D1** with `org_id` columns and envelope ciphertext: unbounded
+Organizations on Free, static bindings, one migration stream (ADR 004),
+isolation by deny-by-absence `WHERE` clauses proven with allowed/denied caller
+tests. Per-Organization D1 databases are the Phase 3+ upgrade, gated on all of:
+
+1. A Paid plan (Free caps at **10 databases per account** — per-org D1 as v1
+   would cap the product at 10 Organizations and violate the Free-tier
+   constraint outright).
+2. An Organization count or compliance demand where per-DB blast radius,
+   backup/restore, and per-DB usage metering justify migration fan-out.
+3. A runtime routing design that does not smuggle an API token into the edge
+   (static bindings cap at ~5,000/script and still need deploys; the
+   Cloudflare API from inside the Worker is a super-credential, worse than
+   the problem it solves).
+
+Until all three hold, per-org D1 is studied, not built.
