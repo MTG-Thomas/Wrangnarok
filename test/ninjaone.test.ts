@@ -20,7 +20,7 @@ function request(path: string, method = "GET", body: unknown = {}) {
 function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus = 200) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url === "https://us2.ninjarmm.com/oauth/token") {
+    if (url === "https://ninja-in-test.invalid/oauth/token") {
       const body = typeof init?.body === "string" ? init.body : "";
       expect(body).toContain("grant_type=client_credentials");
       expect(body).toContain("scope=monitoring");
@@ -29,7 +29,7 @@ function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus 
       expect(init?.redirect).toBe("manual");
       return new Response(JSON.stringify(token), { status: tokenStatus, headers: { "Content-Type": "application/json" } });
     }
-    if (url === "https://us2.ninjarmm.com/api/v2/organizations") {
+    if (url === "https://ninja-in-test.invalid/api/v2/organizations") {
       // Read headers without rebuilding a Request: init may carry a
       // cross-realm AbortSignal that the Request constructor rejects.
       const headers = input instanceof Request ? input.headers : new Headers(init?.headers as HeadersInit);
@@ -45,6 +45,11 @@ beforeEach(async () => {
   // Real local D1 SQL statements, not an in-memory repository double.
   await bindings.DB.exec(migration);
   await bindings.DB.exec(seed);
+  // The committed seed carries no real endpoints (override pattern); each
+  // suite owns its fixture Connection rows. Dummy host: never contacted
+  // (vendor HTTP is intercepted below) and never a real instance.
+  await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
+    .bind("00000000-0000-4000-8000-000000000102", principal.orgId, "0606e237-137b-4629-8346-85468e1c2df6", "https://ninja-in-test.invalid/api").run();
   // Intercept only outbound vendor HTTP. Native D1/Workflow bindings are never replaced.
   mockNinja({ access_token: TOKEN_SENTINEL, expires_in: 3600, token_type: "Bearer" },
     [{ id: 1, name: "Acme" }, { id: 2, name: "Globex" }]);
@@ -74,7 +79,7 @@ it("lists NinjaOne organizations end to end and reuses a submission", async () =
   const dumped = JSON.stringify(tables.map((result) => result.results));
   expect(dumped).not.toContain(SECRET_SENTINEL);
   expect(dumped).not.toContain(TOKEN_SENTINEL);
-  expect(dumped).toContain("us2.ninjarmm.com");
+  expect(dumped).toContain("ninja-in-test.invalid");
 });
 it("persists NINJA_UNAUTHORIZED without copying vendor bodies", async () => {
   mockNinja({ error: "invalid_client" }, [], 401, 200);
