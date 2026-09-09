@@ -21,7 +21,8 @@
     "db:seed:local": "node scripts/seed-local.mjs",
     "fixture": "node scripts/echo-server.mjs",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "lint": "eslint ."
   },
   "dependencies": {
     "react": "19.2.0",
@@ -30,11 +31,15 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.6",
+    "@eslint/js": "10.0.1",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "5.0.2",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
     "prettier": "3.9.6",
     "typescript": "5.8.3",
+    "typescript-eslint": "8.70.0",
     "vite": "7.3.6",
     "vitest": "4.1.11",
     "wrangler": "4.130.0"
