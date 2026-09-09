@@ -1,0 +1,7 @@
+-- SPDX-License-Identifier: AGPL-3.0
+-- Fixture records are deliberately separate; run scripts/seed-local.sql locally.
+CREATE TABLE groves (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE connections (id TEXT PRIMARY KEY, grove_id TEXT NOT NULL REFERENCES groves(id), realm_id TEXT NOT NULL, endpoint TEXT NOT NULL, UNIQUE(grove_id, realm_id));
+CREATE TABLE journeys (id TEXT PRIMARY KEY, saga_id TEXT NOT NULL, saga_name TEXT NOT NULL, saga_revision TEXT NOT NULL, grove_id TEXT NOT NULL REFERENCES groves(id), user_id TEXT NOT NULL, input_json TEXT NOT NULL CHECK(length(input_json) <= 4096), dispatched INTEGER NOT NULL DEFAULT 0 CHECK(dispatched IN (0, 1)), status TEXT NOT NULL DEFAULT 'Pending' CHECK(status IN ('Pending', 'Running', 'Succeeded', 'Failed', 'TimedOut', 'Cancelled')), created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT, result_json TEXT CHECK(result_json IS NULL OR length(result_json) <= 4096), error_json TEXT);
+CREATE INDEX journeys_history ON journeys(grove_id, user_id, created_at DESC, id DESC);
+CREATE TABLE operations (journey_id TEXT NOT NULL REFERENCES journeys(id), name TEXT NOT NULL, position INTEGER NOT NULL CHECK(position >= 0), status TEXT NOT NULL CHECK(status IN ('Running', 'Succeeded', 'Failed')), started_at TEXT NOT NULL, completed_at TEXT, result_json TEXT CHECK(result_json IS NULL OR length(result_json) <= 4096), error_json TEXT, PRIMARY KEY(journey_id, name));
