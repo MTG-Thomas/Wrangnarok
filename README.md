@@ -1,2 +1,98 @@
-# Wrangnarok
-An experimental rewrite of gobifrost/bifrost in CloudFlare primitives 
+# Wrangnarök
+
+> An experimental, Cloudflare-native reimagining of [Bifrost](https://github.com/gobifrost/bifrost).
+
+Wrangnarök asks a deliberately constrained question:
+
+**How much of Bifrost's code-first integration-orchestration model can be reproduced using only Cloudflare-native primitives, while remaining useful on Cloudflare's free tier?**
+
+This is a greenfield experiment, not a line-by-line port. Upstream Bifrost is treated primarily as a behavioral and product specification. Wrangnarök should preserve useful ideas while allowing Cloudflare's execution model to reshape the implementation.
+
+## Project constraints
+
+1. **Cloudflare-native first.** Prefer Workers, Workflows, D1, R2, Queues, Durable Objects, KV, and other Cloudflare primitives over external infrastructure.
+2. **Free-tier viability is a design constraint.** The first useful MVP should operate within Cloudflare Free allowances. If a requirement breaks that constraint, document exactly why before adopting paid-only infrastructure.
+3. **Code-first automation.** Sagas are TypeScript. Do not invent a workflow DSL until there is a demonstrated reason to have one.
+4. **No infrastructure cosplay.** Do not recreate PostgreSQL, Redis, RabbitMQ, or conventional persistent workers merely because upstream uses them. Map capabilities to Cloudflare primitives instead.
+5. **Cloudflare keeps its nouns.** Worker, Workflow, step, Queue, Durable Object, D1, R2, KV, and binding retain their Cloudflare meanings. Wrangnarök domain vocabulary must not obscure the underlying platform.
+6. **Behavior over implementation compatibility.** Compatibility with Bifrost concepts matters more than compatibility with Bifrost internals.
+7. **Add primitives when requirements demand them.** Start small and earn architectural complexity.
+
+## Working vocabulary
+
+| Wrangnarök | Meaning | Likely Cloudflare implementation |
+| --- | --- | --- |
+| **Saga** | Code-first automation definition | Cloudflare Workflow |
+| **Journey** | One execution of a Saga | Workflow instance |
+| **Operation** | A durable unit of Saga execution | Workflow step |
+| **Realm** | Integration/provider such as NinjaOne or Microsoft Graph | TypeScript module |
+| **Connection** | Configured/authenticated instance of a Realm | D1 metadata + secrets |
+| **Grove** | Organization/tenant boundary | D1-backed domain model |
+| **Signal** | Something that starts a Saga | HTTP, Cron, event, etc. |
+| **Trail** | Execution/audit history | D1 initially |
+| **Yggdrasil** | The catalog/graph tying Sagas, Realms, Signals, and Groves together | Application/domain layer |
+
+This vocabulary is intentionally conservative. Forms remain forms. Tables remain tables. Secrets remain secrets. Cloudflare Queues remain Queues. Mythology should clarify the domain, not turn the codebase into a crossword puzzle.
+
+## MVP: The First Acorn 🌰
+
+The first milestone is intentionally tiny:
+
+- TypeScript Worker deployable with Wrangler
+- D1-backed minimal application state
+- one code-first Saga
+- one Journey launched through the API
+- multiple durable Operations backed by Cloudflare Workflow steps
+- persisted Journey/Operation status and results
+- one simple HTTP-based Realm
+- basic execution-history API
+- demonstrated operation within Cloudflare Free limits
+
+The acorn is the milestone, not (yet) a domain abstraction.
+
+## Upstream relationship
+
+Bifrost currently provides the reference product model: multi-tenancy, reusable integrations, connection/OAuth management, secrets, code-first workflows, dynamic forms, tables/storage, triggers, monitoring, and Git/AI-assisted development.
+
+Wrangnarök will maintain a capability map describing whether each upstream concept is:
+
+- **Adopted** — behavior belongs in Wrangnarök
+- **Adapted** — behavior belongs, but Cloudflare changes the model
+- **Deferred** — useful but unnecessary for the current milestone
+- **Rejected** — implementation or behavior does not fit the experiment
+- **Unknown** — needs investigation
+
+See `docs/upstream-spec.md` as that inventory develops.
+
+## Initial architecture
+
+```text
+Client / API caller
+       |
+       v
+ Cloudflare Worker
+       |
+       +---- D1 ----------------> Groves / Connections / Trails
+       |
+       +---- Workflow ----------> Saga Journey
+                                  |
+                                  +-- Operation
+                                  +-- Operation
+                                  +-- Operation
+                                        |
+                                        v
+                                      Realm
+                                        |
+                                        v
+                                   External API
+```
+
+Additional Cloudflare primitives are deliberately absent until a concrete requirement calls for them.
+
+## Status
+
+**Pre-alpha / architecture spike.** Expect names, APIs, and assumptions to change quickly.
+
+## Attribution and licensing
+
+Wrangnarök is inspired by the open-source [Bifrost Integrations](https://github.com/gobifrost/bifrost) project. Upstream Bifrost is AGPL-3.0 licensed. Before copying or adapting upstream source code, schemas, or other copyrightable implementation material, Wrangnarök's licensing and derivative-work obligations must be made explicit. Early work should prefer clean-room behavioral reimplementation from documented concepts.
