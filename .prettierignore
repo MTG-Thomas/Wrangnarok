@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+dist/
+client/dist/
+coverage/
+worker-configuration.d.ts
+package-lock.json
+docs/
+.opencode/
+CODEX_HANDOFF.md
