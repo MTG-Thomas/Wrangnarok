@@ -37,6 +37,8 @@ Run migrations against a local D1 binding. Test persistence and queries against 
 
 Tests must be repeatable from an empty database and must not depend on production data.
 
+Executable SQL fed to workerd D1 `exec()` in tests must contain no header comments — it rejects leading comment-only input (the wrangler CLI tolerates them, tests do not). Document SQL files in code or markdown, not in the SQL.
+
 ### 4. Local Workflows
 
 Use `wrangler dev` local Workflows support for end-to-end Execution tests. Exercise creation, execution and inspection of Workflow instances locally.
