@@ -35,5 +35,47 @@
     "binding": "NINJA_WORKFLOW",
     "name": "wrangnarok-ninjaone-orgs-v1",
     "class_name": "NinjaOrgsWorkflow"
-  }]
+  }, {
+    "binding": "SMOKE_WORKFLOW",
+    "name": "wrangnarok-smoke-v1",
+    "class_name": "SmokeWorkflow"
+  }],
+  // ADR 004 environments: dev is the first deployment target and smoke-test
+  // environment with its own mutable resources. Production is intentionally
+  // unconfigured/deferred — promotion may be manual until dev is stable.
+  "env": {
+    "dev": {
+      "vars": {
+        "ENVIRONMENT": "dev",
+        "LAB_ENABLED": "false",
+        "LAB_TOKEN": "",
+        "LAB_ORG_ID": "",
+        "LAB_USER_ID": "",
+        "NINJA_CLIENT_ID": "",
+        "NINJA_CLIENT_SECRET": ""
+      },
+      "d1_databases": [{
+        "binding": "DB",
+        // Distinct dev database. Create it with the human handoff command
+        // `wrangler d1 create wrangnarok-dev`, then replace this placeholder
+        // with the returned UUID. Never commit a real ID discovered elsewhere.
+        "database_name": "wrangnarok-dev",
+        "database_id": "REPLACE-ME-wrangler-d1-create-wrangnarok-dev",
+        "migrations_dir": "migrations"
+      }],
+      "workflows": [{
+        "binding": "ECHO_WORKFLOW",
+        "name": "wrangnarok-echo-v1-dev",
+        "class_name": "EchoWorkflow"
+      }, {
+        "binding": "NINJA_WORKFLOW",
+        "name": "wrangnarok-ninjaone-orgs-v1-dev",
+        "class_name": "NinjaOrgsWorkflow"
+      }, {
+        "binding": "SMOKE_WORKFLOW",
+        "name": "wrangnarok-smoke-v1-dev",
+        "class_name": "SmokeWorkflow"
+      }]
+    }
+  }
 }

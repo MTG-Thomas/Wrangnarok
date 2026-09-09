@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
-import { boundedJson, echoSaga, Fault, ninjaSaga, parseKey, parseSubmission } from "./domain";
-import { submit, summary, visibleExecution } from "./executions";
+import { boundedJson, echoSaga, Fault, ninjaSaga, parseKey, parseSubmission, smokeSaga } from "./domain";
+import { submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import type { ExecutionRow } from "./executions";
-export { EchoWorkflow, NinjaOrgsWorkflow } from "./sagas";
+export { EchoWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...extra } });
@@ -21,7 +21,7 @@ export default {
     try {
       const caller = await authenticate(request, env);
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported by this slice.");
-      if (url.pathname === "/api/sagas" && request.method === "GET") return json({ sagas: [echoSaga, ninjaSaga] });
+      if (url.pathname === "/api/sagas" && request.method === "GET") return json({ sagas: [echoSaga, ninjaSaga, smokeSaga] });
       if (url.pathname === "/api/executions" && request.method === "POST") {
         const key = parseKey(request.headers.get("Idempotency-Key"));
         if (request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
@@ -44,7 +44,7 @@ export default {
           .bind(row.id).all<{ name: string; status: string; started_at: string; completed_at: string | null; result_json: string | null; error_json: string | null }>();
         let runtimeStatus: string | null = null;
         try {
-          const binding = row.saga_id === ninjaSaga.id ? env.NINJA_WORKFLOW : env.ECHO_WORKFLOW;
+          const binding = workflowForSaga(env, row.saga_id);
           runtimeStatus = (await (await binding.get(row.id)).status()).status;
         } catch { /* Unavailable or expired, not proof of failure. */ }
         return json({ ...summary(row), runtimeStatus, input: JSON.parse(row.input_json),

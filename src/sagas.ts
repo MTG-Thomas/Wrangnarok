@@ -3,10 +3,11 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import type { Bindings } from "./bindings";
-import { echoSaga, ECHO_INTEGRATION_ID, Fault, EXECUTION_ID, ninjaSaga, NINJA_INTEGRATION_ID, parseInput, parseNinjaOrgsInput } from "./domain";
-import type { EchoInput, ExecutionParams, NinjaOrgsResult, SafeError } from "./domain";
+import { echoSaga, ECHO_INTEGRATION_ID, Fault, EXECUTION_ID, ninjaSaga, NINJA_INTEGRATION_ID, parseInput, parseNinjaOrgsInput, parseSmokeInput, smokeSaga } from "./domain";
+import type { EchoInput, ExecutionParams, NinjaOrgsResult, SafeError, SmokeResult } from "./domain";
 import { beginOperation, failExecution, finishOperation } from "./executions";
 import type { ExecutionRow } from "./executions";
+import { buildUsage, logUsage, persistUsage } from "./usage";
 import { echo } from "./integrations/echo";
 import { listOrganizations } from "./integrations/ninjaone";
 
@@ -142,6 +143,112 @@ export class NinjaOrgsWorkflow extends WorkflowEntrypoint<Bindings, ExecutionPar
       return output;
     } catch {
       // Expected failures are serialized step results, not Error subclasses transported by Workflows.
+      const safe: SafeError = expectedFailure ?? {
+        code: "EXECUTION_FAILED", message: "The Execution could not complete. Inspect local runtime diagnostics.",
+      };
+      await step.do("persist-failure-v1", {
+        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+      }, () => failExecution(this.env.DB, id, safe));
+      throw new NonRetryableError(safe.code);
+    }
+  }
+}
+
+/** Native Workflow implementation of the stable system.smoke Saga. Loopback-free:
+ * D1-only Operations plus a pure transform — zero external vendor dependency,
+ * no Connection lookup, no secrets, no fetch. Same retry gate as the other
+ * Sagas: D1 checkpoint steps only may use retries up to the operator ceiling 2;
+ * expected failures throw NonRetryableError. Cancelling/Scheduled deferred. */
+export class SmokeWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> {
+  async run(event: WorkflowEvent<ExecutionParams>, step: WorkflowStep): Promise<SmokeResult> {
+    const id = event.payload.executionId;
+    if (this.env.LAB_ENABLED !== "true" || typeof id !== "string" ||
+        !EXECUTION_ID.test(id) || id !== event.instanceId) {
+      throw new NonRetryableError("Invalid local Execution invocation.");
+    }
+    const startedMs = Date.now();
+    let expectedFailure: SafeError | undefined;
+    try {
+      const prepared = await step.do("prepare-input-v1", {
+        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+      }, async () => {
+        const row = await this.env.DB.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
+        if (!row || row.saga_id !== smokeSaga.id || row.saga_revision !== smokeSaga.revision) {
+          throw new NonRetryableError("Unknown Saga revision.");
+        }
+        parseSmokeInput(JSON.parse(row.input_json));
+        await this.env.DB.prepare("UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'")
+          .bind(new Date().toISOString(), id).run();
+        await beginOperation(this.env.DB, id, "prepare-input-v1", 0);
+        await finishOperation(this.env.DB, id, "prepare-input-v1", {});
+        return { orgId: row.org_id };
+      });
+      const written = await step.do("smoke-write-v1", {
+        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+      }, async () => {
+        // D1 write verification: durable probe row, then read it back in-step.
+        await beginOperation(this.env.DB, id, "smoke-write-v1", 1);
+        await finishOperation(this.env.DB, id, "smoke-write-v1", { probe: `smoke_${id.slice(0, 8)}` });
+        const probe = await this.env.DB.prepare("SELECT result_json FROM operations WHERE execution_id=? AND name=?")
+          .bind(id, "smoke-write-v1").first<{ result_json: string | null }>();
+        if (!probe?.result_json || !probe.result_json.includes("smoke_")) {
+          return { ok: false as const, error: { code: "SMOKE_WRITE_UNVERIFIED", message: "The smoke D1 write could not be verified." } };
+        }
+        return { ok: true as const, result: { probe: probe.result_json } };
+      });
+      if (!written.ok) {
+        expectedFailure = written.error;
+        throw new NonRetryableError(written.error.code);
+      }
+      const verified = await step.do("smoke-verify-v1", {
+        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+      }, async () => {
+        // D1 read verification + pure transform: confirm the Execution row and
+        // all Operation rows, then shape the bounded summary. No I/O besides D1.
+        await beginOperation(this.env.DB, id, "smoke-verify-v1", 2);
+        const execution = await this.env.DB.prepare("SELECT id,status,org_id FROM executions WHERE id=?").bind(id)
+          .first<{ id: string; status: string; org_id: string }>();
+        const operations = await this.env.DB.prepare("SELECT name,status FROM operations WHERE execution_id=? ORDER BY position,name").bind(id)
+          .all<{ name: string; status: string }>();
+        if (!execution || execution.id !== id || execution.status !== "Running") {
+          return { ok: false as const, error: { code: "SMOKE_READ_UNVERIFIED", message: "The smoke D1 read could not be verified." } };
+        }
+        const names = operations.results.map((row) => row.name);
+        for (const required of ["prepare-input-v1", "smoke-write-v1", "smoke-verify-v1"]) {
+          if (!names.includes(required)) {
+            return { ok: false as const, error: { code: "SMOKE_READ_UNVERIFIED", message: "The smoke Operation history is incomplete." } };
+          }
+        }
+        const result: SmokeResult = {
+          d1WriteOk: true, d1ReadOk: true,
+          operationCount: names.length, operations: names,
+        };
+        await finishOperation(this.env.DB, id, "smoke-verify-v1", result);
+        return { ok: true as const, result: { shaped: result, orgId: execution.org_id } };
+      });
+      if (!verified.ok) {
+        expectedFailure = verified.error;
+        throw new NonRetryableError(verified.error.code);
+      }
+      const output: SmokeResult = verified.result.shaped;
+      await step.do("persist-success-v1", {
+        retries: { limit: 2, delay: "1 second" }, timeout: "10 seconds",
+      }, async () => {
+        await this.env.DB.prepare("UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'")
+          .bind(new Date().toISOString(), JSON.stringify(output), id).run();
+        const count = await this.env.DB.prepare("SELECT COUNT(*) AS n FROM operations WHERE execution_id=?").bind(id)
+          .first<{ n: number }>();
+        const usage = buildUsage({
+          saga: smokeSaga.name, sagaRevision: smokeSaga.revision, executionId: id,
+          orgId: verified.result.orgId || prepared.orgId, status: "Succeeded",
+          operationRows: count?.n ?? output.operationCount, reads: 4, writes: 8,
+          stepsExecuted: 4, durationMs: Date.now() - startedMs,
+        });
+        logUsage(usage);
+        await persistUsage(this.env.DB, id, usage);
+      });
+      return output;
+    } catch {
       const safe: SafeError = expectedFailure ?? {
         code: "EXECUTION_FAILED", message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
