@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Wrangnarok monochrome mark</title>
+  <desc id="desc">Angular mountain and W emblem beneath an ascending spark, framed by an open orbit.</desc>
+  <path d="M37 133A94 94 0 0 1 101 43M155 43a94 94 0 0 1 64 90" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"/>
+  <path d="M128 18l11 25 25 11-25 11-11 25-11-25-25-11 25-11zM28 201l58-69v43l42-55v49l42-49v55l58-69v95l-58-55v67l-42-48-42 48v-67z" fill="currentColor"/>
+</svg>

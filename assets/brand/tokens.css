@@ -1,0 +1,19 @@
+:root {
+  /* Cloudflare-adjacent warmth without copying Cloudflare's brand assets. */
+  --wrangnarok-obsidian: #0b0f14;
+  --wrangnarok-slate: #1f2937;
+  --wrangnarok-cloud: #f7f7f4;
+  --wrangnarok-mist: #e2e8f0;
+  --wrangnarok-sunrise: #f45d0b;
+  --wrangnarok-amber: #f59e0b;
+  --wrangnarok-dawn: #fde68a;
+  --wrangnarok-text: #111820;
+  --wrangnarok-text-muted: #52606d;
+
+  --wrangnarok-gradient-ember: linear-gradient(135deg, var(--wrangnarok-sunrise), var(--wrangnarok-amber));
+  --wrangnarok-gradient-night: linear-gradient(145deg, #0b0f14, #182431);
+
+  --wrangnarok-radius-sm: 0.5rem;
+  --wrangnarok-radius-md: 0.75rem;
+  --wrangnarok-radius-lg: 1rem;
+}
