@@ -1,0 +1,4 @@
+interface:
+  display_name: "MTG Secure Delivery Review"
+  short_description: "Review containers, pipelines, APIs, and delivery defaults"
+  default_prompt: "Use $mtg-secure-delivery-review to review this repository's secure delivery posture."
