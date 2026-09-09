@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Wrangnarök is currently specification-only. Keep CI alive now, then
+      # automatically become a real Node/Cloudflare validation pipeline as
+      # soon as the First Acorn scaffold adds package.json.
+      - name: Detect implementation scaffold
+        id: scaffold
+        shell: bash
+        run: |
+          if [[ -f package.json ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No package.json yet; documentation-only validation applies."
+          fi
+
+      - name: Setup Node
+        if: steps.scaffold.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.scaffold.outputs.present == 'true'
+        run: npm ci
+
+      - name: Lint
+        if: steps.scaffold.outputs.present == 'true'
+        run: npm run lint --if-present
+
+      - name: Typecheck
+        if: steps.scaffold.outputs.present == 'true'
+        run: npm run typecheck --if-present
+
+      - name: Test
+        if: steps.scaffold.outputs.present == 'true'
+        run: npm test
+
+      - name: Wrangler dry run
+        if: steps.scaffold.outputs.present == 'true'
+        run: npx wrangler deploy --dry-run
+
+      - name: Validate repository contract
+        shell: bash
+        run: |
+          test -s README.md
+          test -s LICENSE
+          test -s AGENTS.md
+          test -s docs/lexicon.md
+          test -s docs/upstream-spec.md
+          test -s docs/testing.md
+          test -s docs/architecture/001-execution-model.md
+          test -s docs/architecture/002-saga-identity.md
+          test -s docs/architecture/003-realms-connections.md
+          test -s docs/architecture/004-ci-cd.md
+
+          grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
+          grep -q "END OF TERMS AND CONDITIONS" LICENSE
