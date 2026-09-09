@@ -22,6 +22,10 @@ export const NINJA_SCOPE = "monitoring";
 export const NINJA_ORGS_PATH = "/v2/organizations";
 export const BODY_LIMIT = 4096;
 export const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
+// Canonical per ADR 001 (reconciled #15): deterministic 64-hex Execution ID
+// scoped to (org, user, key); required Idempotency-Key 16-128; Pending never
+// auto-swept; Scheduled distinct (deferred); operator step-retry ceiling 2.
+export const STEP_RETRY_CEILING = 2;
 export const EXECUTION_ID = /^[a-f0-9]{64}$/;
 export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";

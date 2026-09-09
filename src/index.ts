@@ -22,7 +22,8 @@ export default {
             request.headers.has("Content-Encoding")) throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
         const { saga, input } = parseSubmission(await boundedJson(request.body));
         const accepted = await submit(env, caller, key, saga, input);
-        return json(accepted, 202, { Location: accepted.statusUrl });
+        // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
+        return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
       }
       if (url.pathname === "/api/executions" && request.method === "GET") {
         // Deliberately small first page. Never claim this is complete history when more rows exist.
