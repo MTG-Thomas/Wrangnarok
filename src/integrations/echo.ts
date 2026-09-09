@@ -11,10 +11,11 @@ export async function echo(connection: EchoConnection, input: EchoInput, operati
   }
   try {
     const response = await fetch(connection.endpoint, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(5000),
+      method: "POST", redirect: "manual", signal: AbortSignal.timeout(5000),
       headers: { "Content-Type": "application/json", "Idempotency-Key": operationId },
       body: JSON.stringify(input),
     });
+    if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw new Error("echo_http_redirect"); }
     if (!response.ok) { await response.body?.cancel(); throw new Error("echo_http_failure"); }
     const output = parseInput(await boundedJson(response.body));
     if (output.message !== input.message) throw new Error("echo_output_mismatch");
