@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "wrangnarok-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "vars": {
+    "LAB_ENABLED": "false",
+    "LAB_TOKEN": "",
+    "LAB_ORG_ID": "",
+    "LAB_USER_ID": ""
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "wrangnarok-local",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "workflows": [{
+    "binding": "ECHO_WORKFLOW",
+    "name": "wrangnarok-echo-v1",
+    "class_name": "EchoWorkflow"
+  }]
+}

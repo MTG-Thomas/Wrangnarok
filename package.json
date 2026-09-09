@@ -1,0 +1,27 @@
+{
+  "name": "wrangnarok",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev --local --ip 127.0.0.1",
+    "types": "wrangler types",
+    "typecheck": "npm run types && tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
+    "test": "vitest run",
+    "build": "wrangler deploy --dry-run",
+    "setup:local": "node scripts/setup-local.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:seed:local": "wrangler d1 execute DB --local --file scripts/seed-local.sql",
+    "fixture": "node scripts/echo-server.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.1.6",
+    "typescript": "5.8.3",
+    "vitest": "4.1.0",
+    "wrangler": "4.130.0"
+  }
+}
