@@ -46,3 +46,7 @@ If a change introduces a new platform primitive, changes Saga/Execution/Operatio
 ## Upstream archaeology
 
 When studying Bifrost, record observable behavior and invariants in `docs/upstream-spec.md`. Do not assume a PostgreSQL/Redis/RabbitMQ/process architecture is itself a requirement. Prefer current upstream docs/tests/source over old plans when they disagree.
+
+## Collaboration
+
+One lane per worktree. Parallel agents (human or AI) must work on separate branches checked out in separate `git worktree` directories — never two lanes in one checkout. Name worktrees after the branch. Remove the worktree (`git worktree remove`) when its PR merges.

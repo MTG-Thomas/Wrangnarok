@@ -112,6 +112,20 @@ Upstream distinguishes normal workflows from tool workflows exposed to agents. T
 
 **Wrangnarök implication:** future AI/tool exposure should be opt-in metadata on suitable Sagas/Actions, not the default execution model.
 
+### 13. First real vendor: NinjaOne (Rung 1, verified live 2026-09-09)
+
+Auth is OAuth2 client-credentials M2M app, sysadmin-created via the API Services platform. Token host is regional `us2.ninjarmm.com/oauth/token`; central `app.ninjarmm.com` does not know us2 clients (returns API-envelope `Client-app-not-exist`). The `scope` parameter is mandatory; `monitoring` is granted while `management` is rejected for a read-only app. Token shape is `{access_token (87 chars observed), expires_in 3600, token_type Bearer}`; tokens are re-requested per execution with no caching yet.
+
+API base is `https://us2.ninjarmm.com/api` with `/v2/organizations`; both `/api/v2` and `/v2` paths route on us2 (verified via error-envelope discrimination, no creds).
+
+The response is a bare JSON array of organizations (297 observed, ~24KB); entries are `{id number, name string}`; results are shaped to count plus max 25 persisted (4KB D1 result bound) with a 256KB transport cap for this call.
+
+Error mapping used: 401 `NINJA_UNAUTHORIZED`, 429 `NINJA_RATE_LIMITED`, 5xx `NINJA_VENDOR_FAILED`, non-array `NINJA_BAD_RESPONSE`, 3xx rejected (workerd has no `redirect:error`).
+
+Runtime facts: workerd `fetch` rejects `redirect:error` (use `manual` plus explicit 3xx handling); cross-realm `Request` construction from Workflow-isolate init fails (read headers directly); D1 `exec()` rejects leading SQL comments.
+
+**Wrangnarök implication:** derive the token host from the Connection endpoint (region-portable, no per-region code). Pin OAuth scope as the least-privilege precedent for future OAuth work. Shape and count-cap vendor list responses before persisting; never assume small.
+
 ## Candidate product invariants
 
 These are stronger than implementation preferences and should guide design reviews:
