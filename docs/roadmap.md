@@ -44,6 +44,7 @@ Prove that the model handles useful API automation:
 - concurrency and idempotency rules
 - ExecutionHistory querying
 - schedules/webhook Triggers
+- egress/resource-limits note: document allowed outbound hosts, redirect/timeout/byte-bound policy per Integration, non-HTTP and private-registry/IP-allowlist limits, and per-Operation timeout/retry/concurrency caps (lift-and-shift lesson: working dependencies do not guarantee connectivity)
 
 Only introduce Queues or Durable Objects when a demonstrated orchestration requirement needs them.
 
@@ -65,10 +66,11 @@ Phase 0's `default` stub exists precisely to avoid retrofitting `org_id` later.
 
 Investigate/adapt upstream capabilities:
 
-- Tables over D1
+- Tables over D1 (with retention/partitioning policy for the 10 GB per-database limit; atomic batch-write authz; counts/pagination; visibility-transition and revocation handling)
 - Forms
-- Artifacts/files over R2
-- richer Triggers/topics
+- Artifacts/files over R2 (verify uploads, signed access, multipart, metadata, cleanup, authorization at operation level; container/Worker-local files are temporary)
+- richer Triggers/topics (durable state for reconnects; events are not the source of truth)
+- search/indexing when earned (organization scope, permissions, filtering, explicit reindex operation; async-index consistency documented)
 - static web UI
 - role/policy model as justified
 
@@ -81,6 +83,7 @@ Explore the strongest ideas from Bifrost Solutions without blindly cloning their
 - one definition installed in many Organizations
 - environment state excluded from source packages
 - declarative ownership/reconciliation
+- atomic version activation with rollback and cache invalidation (persist inputs/outputs outside execution; interrupted activation restarts, never half-activates)
 - versioning/export/install
 
 ## Phase 6 — AI/tool surface

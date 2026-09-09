@@ -74,7 +74,7 @@ Upstream organizations are tenant boundaries. Apps/forms/workflows/resources eac
 
 Upstream Integration entities define a service/config schema; organization mappings bind them to tenant-specific OAuth/config state. Packages declare requirements but do not carry environment credentials.
 
-**Wrangnarök implication:** distinguish **Integration** (code/service definition) from **Connection** (environment/Organization-specific configuration and credentials). Portable Saga code must never embed Connection state.
+**Wrangnarök implication:** distinguish **Integration** (code/service definition) from **Connection** (environment/Organization-specific configuration and credentials). Portable Saga code must never embed Connection state. Working dependencies do not guarantee connectivity: each Integration must document allowed outbound hosts, redirect/timeout/byte-bound policy, and non-HTTP / private-registry / IP-allowlist limits, with per-Operation timeout/retry/concurrency caps stated explicitly rather than inherited from host behavior.
 
 ### 7. Events are source + subscription, not merely cron annotations
 
@@ -86,13 +86,13 @@ Upstream event sources include schedule, webhook, and topic. A subscription targ
 
 Upstream Tables store JSON documents, support filtering/querying, and attach row-level policies. Schema/declaration is source/deploy state while rows are environment data. Fresh resources are effectively deny-by-absence for ordinary users until policy is defined.
 
-**Wrangnarök implication:** if user-facing Tables are implemented, they are not merely direct D1 access. They need a stable author API, explicit schema/declaration vs row-data separation, and authorization semantics. This is post-MVP.
+**Wrangnarök implication:** if user-facing Tables are implemented, they are not merely direct D1 access. They need a stable author API, explicit schema/declaration vs row-data separation, and authorization semantics. This is post-MVP. Phase 4 acceptance must additionally cover: atomic authorization of batch writes, explicitly managed indexes for arbitrary JSON queries (no PostgreSQL JSONB assumptions), counts/pagination over filtered history, per-subscriber visibility transitions and revocation handling, and a retention/partitioning policy for the D1 10 GB per-database limit with cross-database no-transaction semantics stated.
 
 ### 9. Portable product definition is distinct from an installation
 
 An upstream Solution is a portable source definition containing apps, workflows, forms, agents, table/config declarations, claims, and declared file locations. One definition can be installed in many organizations. Each install has independent identity, scope, environment configuration, and runtime data. Shareable exports exclude secrets/table rows/runtime file bytes.
 
-**Wrangnarök implication:** this distinction is worth preserving eventually. A portable bundle should not contain Organization-specific Connection credentials or mutable environment data. Do not prematurely make Git repository == tenant installation.
+**Wrangnarök implication:** this distinction is worth preserving eventually. A portable bundle should not contain Organization-specific Connection credentials or mutable environment data. Do not prematurely make Git repository == tenant installation. Activation of a new bundle version must be atomic (persist inputs/outputs outside execution, then flip version with rollback path), and published assets need explicit authorization, version activation/rollback, and cache invalidation — interrupted work restarts from the beginning, never from a half-activated state.
 
 ### 10. Managed ownership has consequences
 
@@ -145,8 +145,18 @@ Then, in roughly this order:
 - API surface and execution observability;
 - current upstream tests for invariants that documentation may omit.
 
-## Free-tier rule (measurable)
+## Cutover lessons from Cloudflare lift-and-shift report (2026-09)
 
+Upstream's hardest→easiest cutover ranking assumes preserving Python, FastAPI, and PostgreSQL via Containers. Wrangnarök rejects that path (TypeScript Sagas, Workers-native API, D1 day one) but keeps the failure-mode inventory:
+
+1. **D1 capacity/retention:** 10 GB per-database limit, explicit retention/partitioning policy, no cross-database transactions. Pointer: ADR 001 Open questions, Phase 4 Tables bullet.
+2. **Tables/policy acceptance:** atomic batch-write authz, managed indexes for JSON queries, counts/pagination, visibility transitions, revocation. Pointer: §8 implication above.
+3. **Job-contract hygiene:** no process/cgroup/filesystem assumptions; explicit progress/lost-run story plus concurrency, cancellation, timeout, and resource limits. Pointer: ADR 001 Open questions.
+4. **Atomic activation:** persist inputs/outputs outside execution; version flip with rollback and cache invalidation; interrupted activation restarts. Pointer: §9 implication, Phase 5 roadmap.
+5. **Networking/egress:** private APIs/registries, non-HTTP, IP allowlists validated per Integration. Pointer: §6 implication, Phase 2 roadmap.
+6. **Storage/search verification:** R2 uploads, signed access, multipart, metadata, cleanup, authz verified per operation; search keeps org scope/permissions/filtering with explicit reindex and async-index consistency. Pointer: Phase 4 roadmap.
+
+## Free-tier rule (measurable)
 Every proposed capability should answer:
 
 > Can a small but useful deployment exercise this capability indefinitely within Cloudflare Free allowances?

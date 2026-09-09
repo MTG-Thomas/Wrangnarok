@@ -225,6 +225,9 @@ This gives us meaningful local confidence without requiring a Cloudflare deploym
 - Input/result size limits and whether larger payloads graduate to R2.
 - Operation-level persisted history versus relying partly on Workflow introspection/observability.
 - Cancellation guarantees for currently running external HTTP calls.
+- Progress reporting and lost-run detection: Execution record carries status/result but no `progress` field yet; reconciler covers `Pending` admission only, not mid-run liveness. Decide whether progress is a first-class Execution field or derived from Operation history.
+- Job-contract hygiene (lift-and-shift lesson): shared Operation/Execution contract must not assume processes, cgroups, local filesystem persistence, or synchronous transports. Concurrency, cancellation, timeouts, and resource limits must be explicit fields, not host behavior.
+- Retention/partitioning policy: D1 10 GB per-database limit plus Workflow history retention bound how long Execution/Operation history can be kept in place. Decide retention windows, partitioning, and what "expired/missing history" surfaces as (never invented success) before Phase 4 Tables/History querying.
 
 Resolved by this ADR:
 
