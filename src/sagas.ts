@@ -10,7 +10,12 @@ import type { ExecutionRow } from "./executions";
 import { echo } from "./integrations/echo";
 import { listOrganizations } from "./integrations/ninjaone";
 
-/** Native Workflow implementation of the stable echo Saga. No portability runtime. */
+/** Native Workflow implementation of the stable echo Saga. No portability runtime.
+ * Retry gate (ADR 001 #15, upstream finding 14): Integration/vendor steps use
+ * retries 0 unless destination-side idempotency is proven; idempotent D1
+ * checkpoint steps only may use retries up to the operator ceiling 2; all
+ * business/expected failures throw NonRetryableError so the engine never
+ * retries a non-idempotent mutation. Cancelling/Scheduled deferred (see ADR). */
 export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> {
   async run(event: WorkflowEvent<ExecutionParams>, step: WorkflowStep): Promise<EchoInput> {
     const id = event.payload.executionId;
@@ -76,7 +81,8 @@ export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> 
   }
 }
 
-/** Native Workflow implementation of the stable ninjaone-orgs Saga. Read-only. */
+/** Native Workflow implementation of the stable ninjaone-orgs Saga. Read-only.
+ * Same retry gate as EchoWorkflow: vendor step retries 0; D1 checkpoints ≤2. */
 export class NinjaOrgsWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> {
   async run(event: WorkflowEvent<ExecutionParams>, step: WorkflowStep): Promise<NinjaOrgsResult> {
     const id = event.payload.executionId;

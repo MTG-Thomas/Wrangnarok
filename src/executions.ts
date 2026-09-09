@@ -15,6 +15,10 @@ export async function visibleExecution(db: D1Database, id: string, caller: Princ
   return row;
 }
 export async function submit(env: Bindings, caller: Principal, key: string, saga: SagaDef, input: unknown) {
+  // Canonical per ADR 001 (reconciled #15): deterministic SHA execution ID
+  // scoped to (org, user, key); required Idempotency-Key; createBatch
+  // retained-ID dedup + dispatched marker; 15-min same-revision retry gate;
+  // Pending never auto-swept; caller-driven retry on 503.
   const id = await executionId(caller, key);
   const inputJson = JSON.stringify(input);
   const inserted = await env.DB.prepare(
@@ -25,6 +29,8 @@ export async function submit(env: Bindings, caller: Principal, key: string, saga
     throw new Fault(409, "IDEMPOTENCY_CONFLICT", "This key already identifies different input.");
   }
   if (!row.dispatched) {
+    // Same-revision + 15-min refusal window (ADR 001 #15): never auto-fail
+    // Pending, never resurrect after the window, never invent success.
     if (row.saga_revision !== saga.revision || Date.now() - Date.parse(row.created_at) >= RECOVERY_WINDOW_MS) {
       throw new Fault(409, "RECOVERY_EXPIRED", "Inspect the existing Execution; it must not be automatically relaunched.");
     }
@@ -38,7 +44,7 @@ export async function submit(env: Bindings, caller: Principal, key: string, saga
       throw new Fault(503, "DISPATCH_UNCONFIRMED", "Work may have started. Retry the same request and Idempotency-Key.");
     }
   }
-  return { executionId: id, reused: inserted.meta.changes === 0, statusUrl: `/api/executions/${id}` };
+  return { executionId: id, replayed: inserted.meta.changes === 0, statusUrl: `/api/executions/${id}` };
 }
 export async function beginOperation(db: D1Database, id: string, name: string, position: number): Promise<void> {
   await db.prepare("INSERT INTO operations(execution_id,name,position,status,started_at) VALUES (?,?,?,'Running',?) ON CONFLICT(execution_id,name) DO UPDATE SET status='Running',completed_at=NULL,result_json=NULL,error_json=NULL")

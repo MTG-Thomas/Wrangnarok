@@ -1,36 +1,38 @@
 # ADR 007: MVP slice submission and local execution slice
 
-**Status: Draft implementation proposal; runtime validation pending.**
+**Status: Conforming to ADR 001 (reconciled per issue #15, 2026-09-09). Runtime validation: 13/13 workerd tests (see Verification).**
 
-Related: [#4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), [#2](https://github.com/MTG-Thomas/Wrangnarok/issues/2). Implements a narrow slice of ADRs 001-004; does not replace them or claim their open questions are settled.
+Related: [#4](https://github.com/MTG-Thomas/Wrangnarok/issues/4), [#2](https://github.com/MTG-Thomas/Wrangnarok/issues/2), [#15](https://github.com/MTG-Thomas/Wrangnarok/issues/15). Implements a narrow slice of ADRs 001-004; does not replace them or claim their open questions are settled. All divergence decisions defer to ADR 001 canonical rules.
 
 ## Primitive and identity boundaries
 
 Use only Worker + Workflows + D1. The echo Saga has an explicit UUID in the static code catalog, separate from its source name/revision and Workflow binding. D1 snapshots that metadata in each Execution, so deleting or renaming source does not erase history. A separate catalog table is unnecessary for the single built-in Saga.
 
-D1 is the product's query, authorization and history surface. Workflows owns durable execution/checkpoints. The Execution ID is also the native instance ID. No process worker, portability runtime or competing scheduler is introduced.
+D1 is the product's query, authorization and history surface. Workflows owns durable execution/checkpoints. The Execution ID (deterministic SHA-256 hex per ADR 001, not UUIDv7) is also the native instance ID. No process worker, portability runtime or competing scheduler is introduced.
 
 The fixture principal is configured locally, not supplied by the request. Every public Execution read checks both Organization and requester. The Workflow loads the Organization from its immutable Execution row, not from a client-provided execution context. Integration Connection resolution is exact-Organization with no upstream global/provider bypass semantics.
 
 ## Admission and ambiguous failure
 
-An Idempotency-Key is required: 16-128 ASCII alphanumeric or `._:-` characters. A SHA-256 hash of a versioned tuple of Organization, requester and key identifies one Execution. The same key with changed Saga/input conflicts. JSON input is normalized before comparison; HTTP bodies are capped at 4096 bytes and message text at 1024 UTF-8 bytes.
+Conforming to ADR 001 canonical rules (issue #15):
 
-D1 reserves the immutable Execution before native dispatch. `Workflow.createBatch` with one instance provides retained-ID deduplication. A durable D1 dispatch marker is written only after that call acknowledges. A 202 is returned only after the marker is persisted. D1 and Workflows are not one atomic transaction.
+An Idempotency-Key is required: 16-128 ASCII alphanumeric or `._:-` characters (`400 INVALID_IDEMPOTENCY_KEY` otherwise). A SHA-256 hash of a versioned tuple of Organization, requester and key identifies one Execution. The same key with changed Saga/input returns `409 IDEMPOTENCY_CONFLICT` with the original lookup path; stored input is immutable. JSON input is validated before any write; HTTP bodies are capped at 4096 bytes and message text at 1024 UTF-8 bytes.
 
-If creation or marker persistence fails, return 503 `DISPATCH_UNCONFIRMED`: work may have started, and the caller must retry the original key. No autonomous outbox is implemented. Reads never launch work. An unconfirmed reservation may be retried only within 15 minutes and under the same Saga revision; later ambiguity returns 409 without relaunching. Confirmed rows never dispatch again, even if native history has expired.
+D1 reserves the immutable Execution before native dispatch. `Workflow.createBatch` with one instance provides retained-ID deduplication. A durable D1 dispatch marker (`dispatched = 1`) is written only after that call acknowledges. First dispatch returns `202 { executionId, replayed: false, statusUrl }`; same-key same-input replay returns `200 { executionId, replayed: true, statusUrl }` without forking. D1 and Workflows are not one atomic transaction.
 
-This safety argument assumes Cloudflare retains instance IDs throughout that recovery window and nobody manually deletes/resets native instances or D1 records. Operators must not shorten retention below the window. Concurrent submission and ambiguous-failure behavior remain native-runtime test gates, not guarantees proved by unit doubles.
+If creation or marker persistence fails, return 503 `DISPATCH_UNCONFIRMED` + `Retry-After: 5`: work may have started, and the caller must retry the original key/input. No autonomous outbox, Cron, or reconciler is implemented (deferred per ADR 001). Reads never launch work. An unconfirmed reservation (`dispatched = 0`) may be retried only within 15 minutes and under the same Saga revision; later ambiguity returns `409 RECOVERY_EXPIRED` without relaunching and without auto-failing the row. `Pending` is durable and never swept; `Scheduled` is a distinct deferred state (immediate start only in this slice). Confirmed rows never dispatch again, even if native history has expired; missing/expired native history surfaces as unavailable (`runtimeStatus: null`), never as invented success.
+
+This safety argument assumes Cloudflare retains instance IDs throughout that recovery window and nobody manually deletes/resets native instances or D1 records. Operators must not shorten retention below the window. Concurrent submission and ambiguous-failure behavior remain native-runtime test gates (same-key replay, conflicting-key 409, expired-window no-resurrect), not guarantees proved by unit doubles.
 
 ## Operations and history
 
-Two product Operations are persisted in order: `prepare-input-v1` and `echo-http-v1`. Separate native steps persist terminal success/failure; not every infrastructure checkpoint is a product Operation. Prepared input and the echo outcome are checkpointed JSON. Expected Integration failures return a structured outcome so their code survives replay without relying on Error subclass transport.
+Two product Operations are persisted in order: `prepare-input-v1` and `echo-http-v1` (ninja slice: `prepare-input-v1` and `ninja-list-orgs-v1`). Separate native steps persist terminal success/failure; not every infrastructure checkpoint is a product Operation. Prepared input and the echo outcome are checkpointed JSON. Expected Integration failures return a structured outcome so their code survives replay without relying on Error subclass transport.
 
-The fixture Action has zero configured retries. It is a read-like echo POST, not a mutating vendor integration. A stable operation ID is sent, but the implementation does not claim exactly-once external effects. Future retryable mutations require destination-side idempotency and a deliberate policy.
+Retry gate (ADR 001, upstream finding 14): vendor/Integration steps use `retries: 0` (fixture echo and Ninja list are both 0); only idempotent D1 checkpoint steps (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`) may use retries up to the operator ceiling 2, and all business failures throw `NonRetryableError`. The fixture Action has zero configured retries. It is a read-like echo POST, not a mutating vendor integration. A stable operation ID is sent, but the implementation does not claim exactly-once external effects. Future retryable mutations require destination-side idempotency and a deliberate policy.
 
-List results omit input/results and return a maximum of 20 records plus `hasMore`. Cursor pagination is deferred. Detail exposes stored status, two Operation records and a separate `runtimeStatus` when native inspection succeeds. Native exception bodies are never public.
+List results omit input/results and return a maximum of 20 records plus `hasMore`. Cursor pagination is deferred. Detail exposes stored status, Operation records and a separate advisory `runtimeStatus` when native inspection succeeds. Native exception bodies are never public.
 
-Normal success and expected failure are persisted in D1. If D1 or the runtime fails during the terminal checkpoint, D1 can remain Pending/Running. A missing native status is not interpreted as success, failure or expiry. A reconciliation design is required before claiming operationally complete lifecycle handling. TimedOut/Cancelled are reserved domain states, not implemented controls.
+Normal success and expected failure are persisted in D1. If D1 or the runtime fails during the terminal checkpoint, D1 can remain Pending/Running. A missing native status is not interpreted as success, failure or expiry. Autonomous reconciliation stays deferred; caller-driven retry on `503` plus the refusal gate above is the complete MVP lifecycle. `TimedOut`/`Cancelled` are reserved domain states, not implemented controls; `Cancelling`/`Scheduled` are deferred distinct states per ADR 001 (no cancel endpoint, flag, or stale-token path in this slice).
 
 Admission/history records currently have no automatic cleanup. Growth is bounded by usage, not by a retention policy; this is another pre-production gate. Workflow source/step changes need versioning discipline before in-flight deployment upgrades are supported.
 
@@ -42,9 +44,13 @@ The default configuration disables the lab. An explicit local setup script creat
 
 ## Verification and Free-tier gate
 
-Use the repo's Cloudflare Vitest plugin with real local bindings, not fake D1/Workflow implementations. Only the vendor HTTP boundary is mocked. See `CODEX_HANDOFF.md` for exact unrun validation and commands.
+Use the repo's Cloudflare Vitest plugin with real local bindings, not fake D1/Workflow implementations. Only the vendor HTTP boundary is mocked.
 
-The design avoids paid-only primitives, but Free-tier viability has not been demonstrated. Measure Worker CPU, Workflow steps/requests, D1 rows read/written and retained storage for a full Execution and retries on the actual runtime. Do not equate the absence of an account ID with proven cost or performance behavior.
+Gates (all in real workerd; D1/Workflow bindings never replaced):
+
+- `npm run typecheck`, `npm test` (13/13: same-key replay `200 replayed:true` with single vendor call, conflicting-key `409 IDEMPOTENCY_CONFLICT`, expired-window `409 RECOVERY_EXPIRED` with no resurrection and no invented success, plus existing happy-path/failure/auth/tenant/ninja suites), `npm run build` (wrangler dry-run).
+
+The design avoids paid-only primitives (no Cron/outbox, no extra index), but Free-tier viability has not been demonstrated. Measure Worker CPU, Workflow steps/requests, D1 rows read/written and retained storage for a full Execution and retries on the actual runtime. Do not equate the absence of an account ID with proven cost or performance behavior.
 
 Platform API references used while authoring (checked 2026-09-09):
 

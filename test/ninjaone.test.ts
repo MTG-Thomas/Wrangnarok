@@ -64,12 +64,15 @@ it("lists NinjaOne organizations end to end and reuses a submission", async () =
   const accepted = await worker.fetch(request("/api/executions", "POST"), bindings);
   expect(accepted.status).toBe(202);
   expect(accepted.headers.get("Location")).toBe(`/api/executions/${id}`);
+  expect(await accepted.json()).toMatchObject({ executionId: id, replayed: false });
   await instance.waitForStatus("complete");
   const detail = await worker.fetch(request(`/api/executions/${id}`), bindings);
   expect(await detail.json()).toMatchObject({ executionId: id, status: "Succeeded",
     result: { organizationCount: 2, organizations: [{ id: 1, name: "Acme" }, { id: 2, name: "Globex" }] },
     operations: [{ name: "prepare-input-v1", status: "Succeeded" }, { name: "ninja-list-orgs-v1", status: "Succeeded" }] });
-  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  const replay = await worker.fetch(request("/api/executions", "POST"), bindings);
+  expect(replay.status).toBe(200);
+  expect(await replay.json()).toMatchObject({ executionId: id, replayed: true });
   // Secrets and tokens never persist: audit every D1 row for both sentinels.
   const tables = await bindings.DB.batch([
     bindings.DB.prepare("SELECT input_json,result_json,error_json FROM executions"),
