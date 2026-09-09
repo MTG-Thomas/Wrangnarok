@@ -1,0 +1,8 @@
+-- TEMPLATE ONLY. Copy to scripts/seed-local.override.sql (gitignored, never
+-- committed) and fill in real endpoints. `npm run db:seed:local` applies this
+-- file automatically when present, after scripts/seed-local.sql.
+--
+-- Example (NinjaOne regional API base; use your own instance host):
+-- INSERT INTO connections(id, org_id, integration_id, endpoint)
+-- VALUES ('00000000-0000-4000-8000-000000000102', '00000000-0000-4000-8000-000000000001', '0606e237-137b-4629-8346-85468e1c2df6', 'https://YOUR-INSTANCE.ninjarmm.com/api')
+-- ON CONFLICT(id) DO NOTHING;
