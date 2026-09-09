@@ -1,0 +1,89 @@
+import { env } from "cloudflare:workers";
+import { introspectWorkflowInstance, reset } from "cloudflare:test";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import worker from "../src/index";
+import type { Bindings } from "../src/bindings";
+import { executionId, ninjaSaga } from "../src/domain";
+import migration from "../migrations/0001_initial.sql?raw";
+import seed from "../scripts/seed-local.sql?raw";
+const bindings = env as unknown as Bindings;
+const principal = { orgId: "00000000-0000-4000-8000-000000000001", userId: "00000000-0000-4000-8000-000000000002" };
+const key = "ninjaone-test-001";
+const SECRET_SENTINEL = "test-client-secret-sentinel";
+const TOKEN_SENTINEL = "test-access-token-sentinel";
+function request(path: string, method = "GET", body: unknown = {}) {
+  return new Request(`http://local.test${path}`, { method,
+    headers: { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json", "Idempotency-Key": key },
+    ...(method === "POST" ? { body: JSON.stringify({ sagaId: ninjaSaga.id, input: body }) } : {}),
+  });
+}
+function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus = 200) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === "https://app.ninjarmm.com/oauth/token") {
+      return new Response(JSON.stringify(token), { status: tokenStatus, headers: { "Content-Type": "application/json" } });
+    }
+    if (url === "https://us2.ninjarmm.com/api/v2/organizations") {
+      // Read headers without rebuilding a Request: init may carry a
+      // cross-realm AbortSignal that the Request constructor rejects.
+      const headers = input instanceof Request ? input.headers : new Headers(init?.headers as HeadersInit);
+      expect(headers.get("Authorization")).toBe(`Bearer ${TOKEN_SENTINEL}`);
+      return new Response(typeof orgs === "string" ? orgs : JSON.stringify(orgs),
+        { status: orgsStatus, headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`Unexpected outbound request: ${url}`);
+  });
+}
+beforeEach(async () => {
+  // Real local D1 SQL statements, not an in-memory repository double.
+  await bindings.DB.exec(migration);
+  await bindings.DB.exec(seed);
+  // Intercept only outbound vendor HTTP. Native D1/Workflow bindings are never replaced.
+  mockNinja({ access_token: TOKEN_SENTINEL, expires_in: 3600, token_type: "Bearer" },
+    [{ id: 1, name: "Acme" }, { id: 2, name: "Globex" }]);
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await reset();
+});
+it("lists NinjaOne organizations end to end and reuses a submission", async () => {
+  const id = await executionId(principal, key);
+  await using instance = await introspectWorkflowInstance(bindings.NINJA_WORKFLOW, id);
+  const accepted = await worker.fetch(request("/api/executions", "POST"), bindings);
+  expect(accepted.status).toBe(202);
+  expect(accepted.headers.get("Location")).toBe(`/api/executions/${id}`);
+  await instance.waitForStatus("complete");
+  const detail = await worker.fetch(request(`/api/executions/${id}`), bindings);
+  expect(await detail.json()).toMatchObject({ executionId: id, status: "Succeeded",
+    result: { organizationCount: 2, organizations: [{ id: 1, name: "Acme" }, { id: 2, name: "Globex" }] },
+    operations: [{ name: "prepare-input-v1", status: "Succeeded" }, { name: "ninja-list-orgs-v1", status: "Succeeded" }] });
+  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  // Secrets and tokens never persist: audit every D1 row for both sentinels.
+  const tables = await bindings.DB.batch([
+    bindings.DB.prepare("SELECT input_json,result_json,error_json FROM executions"),
+    bindings.DB.prepare("SELECT result_json,error_json FROM operations"),
+    bindings.DB.prepare("SELECT endpoint FROM connections"),
+  ]);
+  const dumped = JSON.stringify(tables.map((result) => result.results));
+  expect(dumped).not.toContain(SECRET_SENTINEL);
+  expect(dumped).not.toContain(TOKEN_SENTINEL);
+  expect(dumped).toContain("us2.ninjarmm.com");
+});
+it("persists NINJA_UNAUTHORIZED without copying vendor bodies", async () => {
+  mockNinja({ error: "invalid_client" }, [], 401, 200);
+  const id = await executionId(principal, key);
+  await using instance = await introspectWorkflowInstance(bindings.NINJA_WORKFLOW, id);
+  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  await instance.waitForStatus("errored");
+  const response = await worker.fetch(request(`/api/executions/${id}`), bindings);
+  const text = await response.text();
+  expect(JSON.parse(text)).toMatchObject({ status: "Failed", error: { code: "NINJA_UNAUTHORIZED" } });
+  expect(text).not.toContain("invalid_client");
+});
+it("rejects non-empty input and unknown sagas", async () => {
+  expect((await worker.fetch(request("/api/executions", "POST", { message: "x" }), bindings)).status).toBe(400);
+  const unknown = new Request("http://local.test/api/executions", { method: "POST",
+    headers: { Authorization: `Bearer ${"a".repeat(64)}`, "Content-Type": "application/json", "Idempotency-Key": key },
+    body: JSON.stringify({ sagaId: "00000000-0000-0000-0000-000000000000", input: {} }) });
+  expect((await worker.fetch(unknown, bindings)).status).toBe(400);
+});

@@ -6,6 +6,18 @@ export const echoSaga = Object.freeze({
   description: "First Acorn: prepare input and call the local HTTP echo Integration",
 });
 export const ECHO_INTEGRATION_ID = "720b9ebf-9b6a-4eac-bae9-6ed22c970402";
+export const ninjaSaga = Object.freeze({
+  id: "2c79a880-f1ac-4183-b324-d05daffc321a",
+  name: "ninjaone-orgs",
+  revision: "ninjaone-orgs-v1",
+  description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
+});
+export const NINJA_INTEGRATION_ID = "0606e237-137b-4629-8346-85468e1c2df6";
+// Verified live 2026-09-09 (no creds): app.ninjarmm.com answers both token
+// paths with the API error envelope; us2 token paths 404 at infra level.
+// Default follows the working community client; re-verify with real creds.
+export const NINJA_TOKEN_URL = "https://app.ninjarmm.com/oauth/token";
+export const NINJA_ORGS_PATH = "/v2/organizations";
 export const BODY_LIMIT = 4096;
 export const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 export const EXECUTION_ID = /^[a-f0-9]{64}$/;
@@ -13,6 +25,10 @@ export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{1
 export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";
 export interface Principal { readonly userId: string; readonly orgId: string }
 export interface EchoInput { message: string }
+export interface NinjaOrgsInput { /* empty: read-only census, no parameters */ }
+export interface NinjaOrgSummary { id: number; name: string }
+export interface NinjaOrgsResult { organizationCount: number; organizations: NinjaOrgSummary[] }
+export const NINJA_ORGS_MAX = 25;
 export interface ExecutionParams { executionId: string }
 export interface SafeError { code: string; message: string }
 
@@ -33,12 +49,28 @@ export function parseInput(value: unknown): EchoInput {
   }
   return { message: value.message };
 }
-export function parseSubmission(value: unknown): EchoInput {
-  if (!object(value) || Object.keys(value).some((key) => !["sagaId", "input"].includes(key)) ||
-      value.sagaId !== echoSaga.id) {
-    throw new Fault(400, "INVALID_SUBMISSION", "Provide the built-in Saga ID and its input only.");
+export function parseNinjaOrgsInput(value: unknown): NinjaOrgsInput {
+  if (!object(value) || Object.keys(value).length !== 0) {
+    throw new Fault(400, "INVALID_INPUT", "The ninjaone-orgs Saga takes an empty input object.");
   }
-  return parseInput(value.input);
+  return {};
+}
+export interface SagaDef {
+  readonly id: string; readonly name: string; readonly revision: string;
+  readonly description: string; readonly parse: (value: unknown) => unknown;
+}
+const catalog: SagaDef[] = [
+  { ...echoSaga, parse: parseInput },
+  { ...ninjaSaga, parse: parseNinjaOrgsInput },
+];
+export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {
+  if (!object(value) || Object.keys(value).some((key) => !["sagaId", "input"].includes(key)) ||
+      typeof value.sagaId !== "string") {
+    throw new Fault(400, "INVALID_SUBMISSION", "Provide a built-in Saga ID and its input only.");
+  }
+  const saga = catalog.find((entry) => entry.id === value.sagaId);
+  if (!saga) throw new Fault(400, "UNKNOWN_SAGA", "Provide a built-in Saga ID and its input only.");
+  return { saga, input: saga.parse(value.input) };
 }
 export function parseKey(key: string | null): string {
   if (key === null || !/^[a-zA-Z0-9._:-]{16,128}$/.test(key)) {
