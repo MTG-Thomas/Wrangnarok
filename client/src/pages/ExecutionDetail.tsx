@@ -18,7 +18,7 @@ export function ExecutionDetailView(props: { initial?: Detail }): React.JSX.Elem
   useEffect(() => {
     if (props.initial) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         setData(await fetchExecutionDetail(id));
       } catch (err) {
