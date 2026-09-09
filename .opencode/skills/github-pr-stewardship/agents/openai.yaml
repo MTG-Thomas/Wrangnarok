@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub PR Stewardship"
+  short_description: "Open ready PRs; monitor, fix, and merge safely."
+  default_prompt: "Use $github-pr-stewardship to open or steward this PR within the requested repo boundary."
