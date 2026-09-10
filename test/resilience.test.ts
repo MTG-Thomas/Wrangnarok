@@ -6,7 +6,7 @@ import { introspectWorkflowInstance, reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
-import { echoSaga, executionId } from "../src/domain";
+import { echoSaga, executionId, smokeSaga } from "../src/domain";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
@@ -171,6 +171,60 @@ it("cancels a Pending execution immediately and never dispatches it", async () =
   // The durable receipt stays Cancelled: retrying the same key must not
   // resurrect a Workflow instance for it.
   const replay = await worker.fetch(submitRequest(key), bindings);
+  expect(replay.status).toBe(409);
+  expect(await replay.json()).toMatchObject({ error: { code: "EXECUTION_CANCELLED" } });
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("cancels a Pending system.smoke execution and never dispatches it", async () => {
+  // Issue #55: the cancel path resolved only the ninja/echo Workflow
+  // bindings and missed SMOKE_WORKFLOW, while submit dispatches all three
+  // Sagas through workflowForSaga. Cancel now resolves the same way, so a
+  // smoke Execution terminates on its own binding and lands Cancelled.
+  const key = "resilience-cancel-smoke-pending-001";
+  const id = await executionId(principal, key);
+  // Guard, not a fixture: system.smoke is loopback-free, so any outbound
+  // fetch is a failure.
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+    throw new Error("system.smoke must not fetch");
+  });
+  await bindings.DB.prepare(
+    "INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,dispatched,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+  )
+    .bind(
+      id,
+      smokeSaga.id,
+      smokeSaga.name,
+      smokeSaga.revision,
+      principal.orgId,
+      principal.userId,
+      JSON.stringify({}),
+      0,
+      "Pending",
+      new Date().toISOString(),
+    )
+    .run();
+  const { request } = cancelRequest(id);
+  const cancelled = await worker.fetch(request, bindings);
+  expect(cancelled.status).toBe(200);
+  expect(await cancelled.json()).toMatchObject({ executionId: id, status: "Cancelled", cancelled: true });
+  const detail = await worker.fetch(detailRequest(id), bindings);
+  expect(await detail.json()).toMatchObject({
+    executionId: id,
+    status: "Cancelled",
+    error: { code: "EXECUTION_CANCELLED" },
+  });
+  // Re-cancel of the now-terminal Execution is rejected, not resurrected.
+  expect((await worker.fetch(cancelRequest(id).request, bindings)).status).toBe(409);
+  // The durable receipt stays Cancelled: retrying the same key must not
+  // resurrect a Workflow instance for it.
+  const replay = await worker.fetch(
+    new Request("http://local.test/api/executions", {
+      method: "POST",
+      headers: { ...auth, "Idempotency-Key": key },
+      body: JSON.stringify({ sagaId: smokeSaga.id, input: {} }),
+    }),
+    bindings,
+  );
   expect(replay.status).toBe(409);
   expect(await replay.json()).toMatchObject({ error: { code: "EXECUTION_CANCELLED" } });
   expect(fetch).not.toHaveBeenCalled();
