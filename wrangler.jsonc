@@ -7,27 +7,89 @@
   "workers_dev": false,
   "preview_urls": false,
   "routes": [],
+  "assets": {
+    "directory": "./client/dist/",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
   "vars": {
     "LAB_ENABLED": "false",
     "LAB_TOKEN": "",
     "LAB_ORG_ID": "",
     "LAB_USER_ID": "",
     "NINJA_CLIENT_ID": "",
-    "NINJA_CLIENT_SECRET": ""
+    "NINJA_CLIENT_SECRET": "",
   },
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "wrangnarok-local",
-    "database_id": "00000000-0000-0000-0000-000000000000",
-    "migrations_dir": "migrations"
-  }],
-  "workflows": [{
-    "binding": "ECHO_WORKFLOW",
-    "name": "wrangnarok-echo-v1",
-    "class_name": "EchoWorkflow"
-  }, {
-    "binding": "NINJA_WORKFLOW",
-    "name": "wrangnarok-ninjaone-orgs-v1",
-    "class_name": "NinjaOrgsWorkflow"
-  }]
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wrangnarok-local",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "workflows": [
+    {
+      "binding": "ECHO_WORKFLOW",
+      "name": "wrangnarok-echo-v1",
+      "class_name": "EchoWorkflow",
+    },
+    {
+      "binding": "NINJA_WORKFLOW",
+      "name": "wrangnarok-ninjaone-orgs-v1",
+      "class_name": "NinjaOrgsWorkflow",
+    },
+    {
+      "binding": "SMOKE_WORKFLOW",
+      "name": "wrangnarok-smoke-v1",
+      "class_name": "SmokeWorkflow",
+    },
+  ],
+  // ADR 004 environments: dev is the first deployment target and smoke-test
+  // environment with its own mutable resources. Production is intentionally
+  // unconfigured/deferred — promotion may be manual until dev is stable.
+  "env": {
+    "dev": {
+      // Dev-only ingress for smoke testing. Production stays without
+      // workers_dev/routes until promotion is explicitly designed.
+      "workers_dev": true,
+      "vars": {
+        "ENVIRONMENT": "dev",
+        "LAB_ENABLED": "false",
+        "LAB_TOKEN": "",
+        "LAB_ORG_ID": "",
+        "LAB_USER_ID": "",
+        "NINJA_CLIENT_ID": "",
+        "NINJA_CLIENT_SECRET": "",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          // Distinct dev database, created 2026-09-09 via
+          // `wrangler d1 create wrangnarok-dev`. D1 IDs are not secrets.
+          "database_name": "wrangnarok-dev",
+          "database_id": "4bcf0eef-45a4-46c1-b80c-1d244ff3076c",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "workflows": [
+        {
+          "binding": "ECHO_WORKFLOW",
+          "name": "wrangnarok-echo-v1-dev",
+          "class_name": "EchoWorkflow",
+        },
+        {
+          "binding": "NINJA_WORKFLOW",
+          "name": "wrangnarok-ninjaone-orgs-v1-dev",
+          "class_name": "NinjaOrgsWorkflow",
+        },
+        {
+          "binding": "SMOKE_WORKFLOW",
+          "name": "wrangnarok-smoke-v1-dev",
+          "class_name": "SmokeWorkflow",
+        },
+      ],
+    },
+  },
 }

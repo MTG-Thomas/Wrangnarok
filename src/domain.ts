@@ -13,6 +13,21 @@ export const ninjaSaga = Object.freeze({
   description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
 });
 export const NINJA_INTEGRATION_ID = "0606e237-137b-4629-8346-85468e1c2df6";
+// system.smoke is loopback-free: D1-only Operations + transform steps, zero
+// external vendor dependency. Stable identity per ADR 002 (UUID + revision).
+export const smokeSaga = Object.freeze({
+  id: "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
+  name: "system.smoke",
+  revision: "system.smoke-v1",
+  description:
+    "Platform smoke: Worker request handling, D1 write/read verification, multi-Operation Workflow, terminal persistence, usage block — no vendor dependency",
+});
+// Disposable smoke Organization (ADR 004): smoke runs here, never against
+// production tenant/Connection data. Seeded in tests; provisioned in dev via
+// the runbook (docs/architecture/004-ci-cd.md).
+export const SMOKE_ORG_NAME = "org_system_smoke";
+export const SMOKE_ORG_ID = "11111111-1111-4111-8111-111111111111";
+export const SMOKE_USER_ID = "22222222-2222-4222-8222-222222222222";
 // Token lives on the regional host, not the central app host: derive it from
 // the Connection endpoint origin (verified live 2026-09-09: us2 answers
 // /oauth/token, app.ninjarmm.com does not know us2 clients). Read-only scope:
@@ -22,20 +37,91 @@ export const NINJA_SCOPE = "monitoring";
 export const NINJA_ORGS_PATH = "/v2/organizations";
 export const BODY_LIMIT = 4096;
 export const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
+// Canonical per ADR 001 (reconciled #15): deterministic 64-hex Execution ID
+// scoped to (org, user, key); required Idempotency-Key 16-128; Pending never
+// auto-swept; Scheduled distinct (deferred); operator step-retry ceiling 2.
+export const STEP_RETRY_CEILING = 2;
+// Explicit vendor deadline (issue #16): the echo vendor step enforces its own
+// deadline and surfaces ECHO_VENDOR_TIMEOUT. TimedOut is only ever written by
+// the explicit timeout-mark-v1 checkpoint, never inferred from introspection.
+export const VENDOR_TIMEOUT_MS = 1000;
 export const EXECUTION_ID = /^[a-f0-9]{64}$/;
 export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";
-export interface Principal { readonly userId: string; readonly orgId: string }
-export interface EchoInput { message: string }
-export interface NinjaOrgsInput { /* empty: read-only census, no parameters */ }
-export interface NinjaOrgSummary { id: number; name: string }
-export interface NinjaOrgsResult { organizationCount: number; organizations: NinjaOrgSummary[] }
+export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelling" | "Cancelled";
+// Retry policy table (upstream finding 14, issue #16): vendor/Integration
+// steps never auto-retry (0) unless destination-side idempotency is proven and
+// an explicit policy exists; only idempotent D1 checkpoint steps may retry, up
+// to the operator ceiling. Unknown step names fail closed to 0. Unit-tested as
+// pure TypeScript; Sagas must resolve every step.do retry limit through here.
+const CHECKPOINT_STEPS: ReadonlySet<string> = new Set([
+  "prepare-input-v1",
+  "persist-success-v1",
+  "persist-failure-v1",
+  "timeout-mark-v1",
+]);
+export function stepRetryLimit(stepName: string): number {
+  return CHECKPOINT_STEPS.has(stepName) ? STEP_RETRY_CEILING : 0;
+}
+// Canonical transition table (ADR 001, issue #16). Cancelling is transient:
+// Pending/Running -> Cancelling -> Cancelled. Pending cancels immediately;
+// Running cancels via terminate + marker. Terminal states have no outgoing
+// transitions. Unit-tested as pure TypeScript.
+const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]> = {
+  Pending: ["Running", "Failed", "Cancelling"],
+  Running: ["Succeeded", "Failed", "TimedOut", "Cancelling"],
+  Cancelling: ["Cancelled"],
+  Succeeded: [],
+  Failed: [],
+  TimedOut: [],
+  Cancelled: [],
+};
+export function canTransition(from: ExecutionStatus, to: ExecutionStatus): boolean {
+  return EXECUTION_TRANSITIONS[from].includes(to);
+}
+export interface Principal {
+  readonly userId: string;
+  readonly orgId: string;
+}
+export interface EchoInput {
+  message: string;
+}
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
+export interface NinjaOrgsInput {
+  /* empty: read-only census, no parameters */
+}
+export interface NinjaOrgSummary {
+  id: number;
+  name: string;
+}
+export interface NinjaOrgsResult {
+  organizationCount: number;
+  organizations: NinjaOrgSummary[];
+}
 export const NINJA_ORGS_MAX = 25;
-export interface ExecutionParams { executionId: string }
-export interface SafeError { code: string; message: string }
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
+export interface SmokeInput {
+  /* empty: loopback-free census, no parameters */
+}
+export interface SmokeResult {
+  d1WriteOk: boolean;
+  d1ReadOk: boolean;
+  operationCount: number;
+  operations: string[];
+}
+export interface ExecutionParams {
+  executionId: string;
+}
+export interface SafeError {
+  code: string;
+  message: string;
+}
 
 export class Fault extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
     super(message);
     this.name = "Fault";
   }
@@ -44,9 +130,13 @@ export function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 export function parseInput(value: unknown): EchoInput {
-  if (!object(value) || Object.keys(value).some((key) => key !== "message") ||
-      typeof value.message !== "string" || value.message.length === 0 ||
-      new TextEncoder().encode(value.message).length > 1024) {
+  if (
+    !object(value) ||
+    Object.keys(value).some((key) => key !== "message") ||
+    typeof value.message !== "string" ||
+    value.message.length === 0 ||
+    new TextEncoder().encode(value.message).length > 1024
+  ) {
     throw new Fault(400, "INVALID_INPUT", "Expected one message of 1 to 1024 UTF-8 bytes.");
   }
   return { message: value.message };
@@ -57,17 +147,30 @@ export function parseNinjaOrgsInput(value: unknown): NinjaOrgsInput {
   }
   return {};
 }
+export function parseSmokeInput(value: unknown): SmokeInput {
+  if (!object(value) || Object.keys(value).length !== 0) {
+    throw new Fault(400, "INVALID_INPUT", "The system.smoke Saga takes an empty input object.");
+  }
+  return {};
+}
 export interface SagaDef {
-  readonly id: string; readonly name: string; readonly revision: string;
-  readonly description: string; readonly parse: (value: unknown) => unknown;
+  readonly id: string;
+  readonly name: string;
+  readonly revision: string;
+  readonly description: string;
+  readonly parse: (value: unknown) => unknown;
 }
 const catalog: SagaDef[] = [
   { ...echoSaga, parse: parseInput },
   { ...ninjaSaga, parse: parseNinjaOrgsInput },
+  { ...smokeSaga, parse: parseSmokeInput },
 ];
 export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {
-  if (!object(value) || Object.keys(value).some((key) => !["sagaId", "input"].includes(key)) ||
-      typeof value.sagaId !== "string") {
+  if (
+    !object(value) ||
+    Object.keys(value).some((key) => !["sagaId", "input"].includes(key)) ||
+    typeof value.sagaId !== "string"
+  ) {
     throw new Fault(400, "INVALID_SUBMISSION", "Provide a built-in Saga ID and its input only.");
   }
   const saga = catalog.find((entry) => entry.id === value.sagaId);
@@ -107,10 +210,18 @@ export async function boundedJson(body: ReadableStream<Uint8Array> | null, limit
       }
       chunks.push(chunk.value);
     }
-  } finally { reader.releaseLock(); }
+  } finally {
+    reader.releaseLock();
+  }
   const bytes = new Uint8Array(length);
   let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)); }
-  catch { throw new Fault(400, "INVALID_JSON", "The body must be valid UTF-8 JSON."); }
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
+  } catch {
+    throw new Fault(400, "INVALID_JSON", "The body must be valid UTF-8 JSON.");
+  }
 }

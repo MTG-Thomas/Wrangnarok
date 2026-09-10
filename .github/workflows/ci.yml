@@ -24,46 +24,66 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Wrangnarök is currently specification-only. Keep CI alive now, then
-      # automatically become a real Node/Cloudflare validation pipeline as
-      # soon as the MVP slice scaffold adds package.json.
-      - name: Detect implementation scaffold
-        id: scaffold
-        shell: bash
-        run: |
-          if [[ -f package.json ]]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "No package.json yet; documentation-only validation applies."
-          fi
-
       - name: Setup Node
-        if: steps.scaffold.outputs.present == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       - name: Install dependencies
-        if: steps.scaffold.outputs.present == 'true'
         run: npm ci
 
+      - name: Guardrails (secrets, banned patterns)
+        shell: bash
+        run: |
+          # Local-only secret files must never be tracked in git.
+          tracked_secrets="$(git ls-files | grep -E '(^\.dev\.vars$|seed-local\.override\.sql$)')" || true
+          if [[ -n "$tracked_secrets" ]]; then
+            echo "Tracked secret files must not be committed:"
+            echo "$tracked_secrets"
+            exit 1
+          fi
+          # Stale Cloudflare test harness must not return (see docs/testing.md).
+          if grep -rn '@cloudflare/vitest-pool-workers' src test client/src scripts --include='*.ts' --include='*.tsx' --include='*.mjs' --include='*.js'; then
+            exit 1
+          fi
+          # workerd has no redirect:'error' (see docs/upstream-spec.md);
+          # vendor fetch must use redirect:'manual' plus explicit 3xx handling.
+          if grep -rEn "redirect:\s*['\"]error['\"]" src test client/src scripts; then
+            exit 1
+          fi
+
+      - name: Format check
+        run: npm run format:check
+
       - name: Lint
-        if: steps.scaffold.outputs.present == 'true'
-        run: npm run lint --if-present
+        run: npm run lint
 
       - name: Typecheck
-        if: steps.scaffold.outputs.present == 'true'
-        run: npm run typecheck --if-present
+        run: npm run typecheck
 
       - name: Test
-        if: steps.scaffold.outputs.present == 'true'
         run: npm test
 
+      # system.smoke exercises the same path locally that post-deploy smoke
+      # exercises in dev: Worker request handling, D1, Workflow Operations,
+      # terminal persistence, and the usage block. Credential-free workerd.
+      - name: Smoke saga (local, credential-free)
+        run: npx vitest run test/smoke.test.ts
+
+      - name: Build UI
+        run: npm run build:ui
+
       - name: Wrangler dry run
-        if: steps.scaffold.outputs.present == 'true'
         run: npx wrangler deploy --dry-run
+
+      - name: Wrangler dry run (dev environment)
+        run: npx wrangler deploy --dry-run --env dev
+
+      # Applies migrations through the Wrangler CLI against local D1, catching
+      # CLI-vs-workerd drift that in-test DB.exec alone would miss.
+      - name: D1 migrations (local)
+        run: npm run db:migrate:local
 
       - name: Validate repository contract
         shell: bash
@@ -80,6 +100,8 @@ jobs:
           test -s docs/architecture/004-ci-cd.md
           test -s docs/architecture/005-secret-storage.md
           test -s docs/architecture/006-naming.md
+          test -s docs/architecture/007-mvp-slice.md
+          test -s docs/architecture/008-full-stack-app.md
 
           grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
           grep -q "END OF TERMS AND CONDITIONS" LICENSE
