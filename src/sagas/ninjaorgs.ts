@@ -41,6 +41,7 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
       throw new NonRetryableError("Invalid local Execution invocation.");
     }
     let expectedFailure: SafeError | undefined;
+    let timedOut = false;
     try {
       const prepared = await step.do("prepare-input-v1", () =>
         prepareExecution(ctx.db, id, ninjaSaga.id, ninjaSaga.revision, parseNinjaOrgsInput),
@@ -85,6 +86,13 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
       });
       if (!outcome.ok) {
         expectedFailure = outcome.error;
+        timedOut = outcome.error.code === "NINJA_VENDOR_TIMEOUT";
+        if (timedOut) {
+          // Explicit timeout step, same posture as the echo and digest legs:
+          // a slow NinjaOne vendor surfaces TimedOut, never an inferred failure.
+          const failure: SafeError = outcome.error;
+          await step.do("timeout-mark-v1", () => failExecution(ctx.db, id, failure, "TimedOut"));
+        }
         throw new NonRetryableError(expectedFailure.code);
       }
       const output = outcome.result;
@@ -103,7 +111,9 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
         code: "EXECUTION_FAILED",
         message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
-      await step.do("persist-failure-v1", () => failExecution(ctx.db, id, safe));
+      if (!timedOut) {
+        await step.do("persist-failure-v1", () => failExecution(ctx.db, id, safe));
+      }
       throw new NonRetryableError(safe.code);
     }
   },
