@@ -26,7 +26,10 @@ function base64UrlDecode(input: string): Uint8Array<ArrayBuffer> {
 }
 
 function readAccessConfig(env: AccessEnv): AccessConfig | null {
-  const teamDomain = (env.ACCESS_TEAM_DOMAIN ?? "").trim().replace(/\/+$/, "");
+  const rawDomain = (env.ACCESS_TEAM_DOMAIN ?? "").trim();
+  // Regex-free trailing-slash strip (CodeQL polynomial-regexp on env input).
+  let teamDomain = rawDomain;
+  while (teamDomain.endsWith("/")) teamDomain = teamDomain.slice(0, -1);
   const aud = (env.ACCESS_AUD ?? "").trim();
   const orgId = (env.ACCESS_ORG_ID ?? "").trim().toLowerCase();
   if (!teamDomain || !aud || !orgId) return null;
