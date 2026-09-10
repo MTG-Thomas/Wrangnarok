@@ -10,6 +10,7 @@ import type { Bindings } from "../src/bindings";
 import { digestSaga, executionId } from "../src/domain";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
+import migration3 from "../migrations/0003_usage_blocks.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 const bindings = env as unknown as Bindings;
 const principal = { orgId: "00000000-0000-4000-8000-000000000001", userId: "00000000-0000-4000-8000-000000000002" };
@@ -76,6 +77,7 @@ beforeEach(async () => {
   // Real local D1 SQL statements, not an in-memory repository double.
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
+  await bindings.DB.exec(migration3);
   await bindings.DB.exec(seed);
   // Each suite owns its fixture Connection rows. Dummy host: never contacted
   // (vendor HTTP is intercepted below) and never a real instance.
@@ -107,7 +109,8 @@ it("runs the NinjaOne census through the echo Integration end to end", async () 
   expect(await accepted.json()).toMatchObject({ executionId: id, replayed: false });
   await instance.waitForStatus("complete");
   const detail = await worker.fetch(request(`/api/executions/${id}`), bindings);
-  expect(await detail.json()).toMatchObject({
+  const detailText = await detail.text();
+  expect(JSON.parse(detailText)).toMatchObject({
     executionId: id,
     status: "Succeeded",
     result: { organizationCount: 2, echoed: { message: EXPECTED_DIGEST } },
@@ -117,17 +120,22 @@ it("runs the NinjaOne census through the echo Integration end to end", async () 
       { name: "echo-digest-v1", status: "Succeeded" },
     ],
   });
+  // The served detail surface carries no secret material either.
+  expect(detailText).not.toContain(SECRET_SENTINEL);
+  expect(detailText).not.toContain(TOKEN_SENTINEL);
   // Exactly one outbound call per vendor hop: both vendor steps resolve
   // retries 0 through stepRetryLimit, so success costs token + orgs + echo.
   expect(calls).toHaveLength(3);
   // The 1-second native step.sleep sits between the echo step and the success
   // checkpoint, so reaching Succeeded proves wake+continue on this Saga too.
   expect(Date.now() - started).toBeGreaterThanOrEqual(900);
-  // Secrets and tokens never persist: audit every D1 row for both sentinels.
+  // Secrets and tokens never persist: audit every D1 row for both sentinels,
+  // including the persisted usage block.
   const tables = await bindings.DB.batch([
     bindings.DB.prepare("SELECT input_json,result_json,error_json FROM executions"),
     bindings.DB.prepare("SELECT result_json,error_json FROM operations"),
     bindings.DB.prepare("SELECT endpoint FROM connections"),
+    bindings.DB.prepare("SELECT usage_json FROM usage_blocks"),
   ]);
   const dumped = JSON.stringify(tables.map((result) => result.results));
   expect(dumped).not.toContain(SECRET_SENTINEL);
@@ -144,6 +152,8 @@ it("fails loud on NinjaOne auth without ever calling echo", async () => {
   const text = await response.text();
   expect(JSON.parse(text)).toMatchObject({ status: "Failed", error: { code: "NINJA_UNAUTHORIZED" } });
   expect(text).not.toContain("invalid_client");
+  expect(text).not.toContain(SECRET_SENTINEL);
+  expect(text).not.toContain(TOKEN_SENTINEL);
   expect(calls).toHaveLength(1);
   expect(calls.some((url) => url.endsWith("/echo"))).toBe(false);
 });
