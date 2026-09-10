@@ -74,6 +74,54 @@ is insufficient before any Queue or Durable Object is earned — per
 AGENTS.md constraint 7, the primitive needs the requirement, not the
 other way around.
 
+### Overlap-skip: a tick never forks a second run for a live window
+
+Schedule promotion derives the submit key deterministically from
+(schedule ID, window), so the existing idempotency protocol does the
+overlap work with no new mechanism:
+
+- Tick for window W arrives while W's Execution is non-terminal
+  (`Pending`, `Running`, `Cancelling`): the same-key submit replays
+  (`200 replayed:true`) or is refused; no second Workflow instance is
+  created. The tick is a no-op that returns the live Execution identity.
+- Tick for W arrives after W's Execution reached a terminal state: normal
+  same-key semantics apply (replay the receipt; a cancelled receipt stays
+  `409 EXECUTION_CANCELLED` and needs a fresh key).
+- Two ticks racing for the same window converge like concurrent identical
+  submits today: single winner via the PRIMARY KEY plus retained-ID dedup.
+
+Rationale: vendor mutations behind Operations are not safe to run twice
+for one window, and the engine-loss-only retry rule (ADR 001) already
+refuses automatic re-execution — overlap-skip is the schedule-shaped
+instance of the same rule. Owner-cancel-wins still holds: a tick never
+resurrects a cancelled window.
+
+### Rate-limit behavior: structured, loud, operator-driven
+
+Vendor throttling is an expected downstream error, not an engine loss, so
+it is never auto-retried:
+
+- NinjaOne `429` on the organizations call surfaces `NINJA_RATE_LIMITED`
+  as a structured step result; the Saga fails loud (`Failed`) with no
+  retry. The operator re-submits with a fresh key after the vendor window.
+  (The token call has no distinct 429 code today: a throttled token
+  request surfaces `NINJA_AUTH_FAILED`. Closing that gap is a follow-up,
+  not this slice.)
+- The echo fixture has no rate limiting (local fixture, single caller).
+- Automatic `Retry-After` honoring (sleep-until-resume inside the Saga) is
+  explicitly deferred: waits driven by vendor headers are persisted retry
+  policy, and per upstream finding 3 policy does not belong in Saga
+  source. If a vendor's limits make an Integration unusable without
+  backoff, that is the demonstrated requirement that earns the design —
+  recorded here, not built here.
+- Inbound webhook throttling (abuse protection on Trigger routes) is
+  likewise deferred: no Cloudflare rate-limiting product is adopted until
+  a webhook lane demonstrates the need (AGENTS.md constraint 7).
+
+Test posture per `docs/testing.md` stays: every Integration mock covers
+the rate-limit case (429 → structured code, exactly one outbound call —
+the digest echo-503 test is the template).
+
 ## Consequences of this investigation
 
 - No new primitive, migration, binding, or route in this slice.
