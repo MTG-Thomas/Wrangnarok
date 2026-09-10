@@ -19,6 +19,9 @@ queue_rules:
       - check-success=Validate
     batch_size: 1
     merge_method: merge
+    # NOTE: head-branch cleanup is NOT a queue key (validator rejects it
+    # here). It lives in repo Settings → General → Automatically delete head
+    # branches, flipped separately. Do not re-add it to this file.
 pull_request_rules:
   # NOTE: `@mergifyio queue` comments are native Mergify commands, not a
   # condition key — no rule needed for the manual trigger.
