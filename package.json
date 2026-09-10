@@ -23,7 +23,9 @@
     "fixture": "node scripts/echo-server.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "mailbox": "node scripts/mailbox-cli.mjs",
+    "mailbox:selftest": "node scripts/mailbox-cli.mjs selftest"
   },
   "dependencies": {
     "react": "^19.2.8",
