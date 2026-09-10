@@ -16,5 +16,13 @@ export default defineConfig({
       },
     }),
   ],
-  test: { include: ["test/**/*.test.{ts,tsx}"] },
+  test: {
+    include: ["test/**/*.test.{ts,tsx}"],
+    coverage: {
+      provider: "istanbul",
+      reporter: ["text", "lcov", "json"],
+      include: ["src/**/*.ts"],
+      exclude: ["test/**", "client/**", "**/*.d.ts", ".opencode/**", "scripts/**"],
+    },
+  },
 });

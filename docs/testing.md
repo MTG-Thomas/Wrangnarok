@@ -89,6 +89,13 @@ Use current versions at implementation time, but the intended stack is:
 
 Avoid older `@cloudflare/vitest-pool-workers` examples when newer plugin documentation applies.
 
+## Coverage
+
+Coverage must use the Istanbul provider (`@vitest/coverage-istanbul`, `npm run test:coverage`).
+Native V8 coverage is not supported under workerd: it needs `node:inspector`, which the Workers
+runtime does not implement (Cloudflare documents this as a known Vitest-integration limitation).
+`coverage/lcov.info` is uploaded to Codecov from CI.
+
 ## CI direction
 
 Initial CI should require:
