@@ -1,6 +1,6 @@
 # ADR 011: Solutions — portable bundles, install reconciliation, activation
 
-- **Status:** Proposed (gates production promotion per issue #35; dev deploy unaffected)
+- **Status:** Accepted (2026-09-10; gates production promotion per issue #35; dev deploy unaffected)
 - **Date:** 2026-09-10
 - **Extends:** upstream findings 9–11, ADR 002 (stable identity), ADR 003 (Integration vs Connection), ADR 005 (secret storage)
 - **Upstream compatibility:** verified against `gobifrost/bifrost` Solutions machinery (`api/src/services/solutions/`, ORM + contracts, Sep 2026 mirror). Ideology preserved throughout; divergences below are explicit and Cloudflare-driven.
