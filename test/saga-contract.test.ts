@@ -185,7 +185,10 @@ describe("Saga authoring contract (issue #57)", () => {
     const byName = new Map(SAGA_DEFINITIONS.map((def) => [def.name, def]));
     expect(byName.get("echo")?.requiredIntegrations).toEqual([ECHO_INTEGRATION_ID]);
     expect(byName.get("ninjaone-orgs")?.requiredIntegrations).toEqual([NINJA_INTEGRATION_ID]);
-    expect(byName.get("ninjaone-echo-digest")?.requiredIntegrations).toEqual([NINJA_INTEGRATION_ID, ECHO_INTEGRATION_ID]);
+    expect(byName.get("ninjaone-echo-digest")?.requiredIntegrations).toEqual([
+      NINJA_INTEGRATION_ID,
+      ECHO_INTEGRATION_ID,
+    ]);
     expect(byName.get("system.smoke")?.requiredIntegrations).toEqual([]);
     for (const def of SAGA_DEFINITIONS) {
       expect(Array.isArray(def.requiredIntegrations)).toBe(true);
