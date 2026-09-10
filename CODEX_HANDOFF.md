@@ -1,6 +1,6 @@
 # MVP slice implementation handoff
 
-> Status note 2026-09-09: the validation gates below have since passed (PRs #6, #9, #11 — real lockfile, 12/12 workerd tests, live NinjaOne execution Succeeded against us2). A NinjaOne Integration, `NINJA_WORKFLOW` binding, and seed-override pattern postdate this snapshot. Vocabulary below is corrected to ADR 006 terms where pointers would otherwise 404; the session narrative is otherwise preserved as written.
+> Status note 2026-09-09: the validation gates below have since passed (PRs #6, #9, #11 — real lockfile, 12/12 workerd tests, live NinjaOne execution Succeeded against us2). A NinjaOne Integration, `NINJA_WORKFLOW` binding, and seed-override pattern postdate this snapshot. Vocabulary below is corrected to ADR 006 terms where pointers would otherwise 404; the session narrative is otherwise preserved as written. The `## Blocking validation before a PR (historical snapshot — superseded, see note above)` section below is part of that preserved snapshot and is superseded by this note — do not treat it as current state.
 
 **Repository: MTG-Thomas/Wrangnarok. Branch: codex/mvp-slice (formerly codex/first-acorn).**
 
@@ -19,7 +19,7 @@ This is an incomplete, local-only implementation slice for [issue #4](https://gi
 - Local echo HTTP fixture and random-token setup script. No customer credentials.
 - Authored Vitest/workerd tests using Cloudflare's plugin and real local bindings; only vendor HTTP is intercepted.
 
-## Blocking validation before a PR
+## Blocking validation before a PR (historical snapshot — superseded, see note above)
 
 Dependency installation failed in the authoring shell with `EAI_AGAIN registry.npmjs.org`. No lockfile was fabricated, and existing `npm ci` CI was not weakened. No Cloudflare account or resources were used.
 

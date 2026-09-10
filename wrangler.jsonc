@@ -13,13 +13,12 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"],
   },
+  // NOTE: no credential placeholders here. Empty top-level vars are inherited by
+  // every env and would shadow real secrets uploaded via `wrangler secret put`.
+  // LAB_TOKEN/LAB_ORG_ID/LAB_USER_ID come from `.dev.vars` locally and from
+  // `wrangler secret put --env dev` in dev. NINJA_* are per-Connection secrets.
   "vars": {
     "LAB_ENABLED": "false",
-    "LAB_TOKEN": "",
-    "LAB_ORG_ID": "",
-    "LAB_USER_ID": "",
-    "NINJA_CLIENT_ID": "",
-    "NINJA_CLIENT_SECRET": "",
   },
   "d1_databases": [
     {

@@ -14,7 +14,7 @@ Before changing architecture or domain contracts, read:
 
 1. Preserve useful Bifrost product semantics, not its infrastructure by default.
 2. The first useful MVP must remain viable on Cloudflare Free.
-3. TypeScript is the implementation and Saga-authoring language.
+3. TypeScript is the implementation and Saga-authoring language. Node `scripts/*.mjs` local helpers (setup, seed, fixtures, CLIs) are the narrow exception: no prod runtime, no Saga logic.
 4. Sagas are code-first. Do not invent a YAML/JSON workflow DSL without a demonstrated requirement.
 5. Cloudflare primitives retain their native names: Worker, Workflow, step, Queue, Durable Object, D1, R2, KV, binding, etc.
 6. The canonical domain vocabulary is `docs/lexicon.md`; do not casually add mythological aliases. In case of conflict, `docs/lexicon.md` prevails over README, roadmap, or ADR summaries.
