@@ -56,12 +56,9 @@
       "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "dev",
-        "LAB_ENABLED": "false",
-        "LAB_TOKEN": "",
-        "LAB_ORG_ID": "",
-        "LAB_USER_ID": "",
-        "NINJA_CLIENT_ID": "",
-        "NINJA_CLIENT_SECRET": "",
+        // NOTE: LAB_TOKEN/LAB_ORG_ID/LAB_USER_ID (and NINJA_* when needed)
+        // come from `wrangler secret put --env dev` ONLY. Do not add empty
+        // placeholders here: empty vars shadow uploaded secrets at runtime.
       },
       "d1_databases": [
         {
