@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 1,
+  "bundle": { "id": "b10a7c2e-3f4d-4a5b-8c6d-7e8f9a0b1c2d", "name": "echo-starter", "version": "1.0.0" },
+  "sagas": [{ "id": "720b9ebf-9b6a-4eac-bae9-6ed22c970401", "revision": "echo-v1" }],
+  "integrations": [
+    {
+      "id": "720b9ebf-9b6a-4eac-bae9-6ed22c970402",
+      "connections": [
+        {
+          "org": "default",
+          "config": { "endpoint": "http://127.0.0.1:8788/echo" },
+          "secretsRequired": []
+        }
+      ]
+    }
+  ],
+  "config": [{ "key": "supportEmail", "value": "ops@example.com" }]
+}
