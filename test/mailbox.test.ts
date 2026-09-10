@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   MailboxFault,
   MailboxMessage,
+  RECENT_WINDOW_MS,
   buildMessage,
   findReply,
   formatLine,
   formatPushBlock,
+  isRecentlyActive,
   markStatus,
   parseLine,
   peekPushable,
@@ -100,5 +102,16 @@ describe("mailbox presentation", () => {
     expect(formatPushBlock([note({ id: "b", priority: "high" })])).toMatch(/MAILBOX_HIGH_PRIORITY/);
     expect(unreadSummary([note(), note({ id: "b", priority: "high" })])).toMatch(/2 unread \(1 high-priority\)/);
     expect(unreadSummary([])).toBe("Mailbox: empty.");
+  });
+});
+
+describe("mailbox file-peer recency", () => {
+  it("treats recent touches as active with a closed window", () => {
+    const now = 1_000_000;
+    expect(isRecentlyActive(now, now)).toBe(true);
+    expect(isRecentlyActive(now - RECENT_WINDOW_MS, now)).toBe(true);
+    expect(isRecentlyActive(now - RECENT_WINDOW_MS - 1, now)).toBe(false);
+    expect(isRecentlyActive(now + 1, now)).toBe(false);
+    expect(isRecentlyActive(Number.NaN, now)).toBe(false);
   });
 });

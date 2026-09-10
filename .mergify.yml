@@ -4,11 +4,20 @@
 # or the `automerge` label on a green PR with no requested changes.
 # No CI rewrite needed: Mergify validates against temp branches using the
 # existing push/pull_request triggers.
+#
+# Strict branch protection ("require branches to be up to date") rules out
+# batched speculative checks, so this queue is serial (batch_size 1,
+# max_parallel_checks 1) with identical queue/merge conditions. Do not raise
+# batching without also relaxing protection, or Mergify will refuse to queue.
+merge_queue:
+  max_parallel_checks: 1
 queue_rules:
   - name: default
+    queue_conditions:
+      - check-success=Validate
     merge_conditions:
       - check-success=Validate
-    batch_size: 3
+    batch_size: 1
     merge_method: merge
 pull_request_rules:
   # NOTE: `@mergifyio queue` comments are native Mergify commands, not a
