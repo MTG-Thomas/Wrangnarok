@@ -1,6 +1,6 @@
 # ADR 002: Stable Saga identity and discovery
 
-**Status:** Draft
+**Status:** Accepted (per issue #57, Phase 1a)
 
 ## Context
 
@@ -17,50 +17,46 @@ A Saga has two identities:
 
 Do not use an export name, file path, Cloudflare Workflow class name, or Worker binding name as the sole durable identity.
 
-## MVP slice proposal
+## Accepted registration model (issue #57)
 
-For the first implementation, keep registration deliberately static and Git-owned. A Saga definition declares an explicit stable ID and metadata in TypeScript. `run` executes as a Cloudflare Workflow `run(event, step)` body and is subject to Workflows determinism constraints: NO direct `Date.now()`, `Math.random()`, `crypto.randomUUID()`, `fetch()`, or Integration calls in the `run` body. All nondeterminism and I/O MUST go inside an Operation, which maps to a Cloudflare Workflow `step.do()` retry unit. `ctx.integrations.*` may ONLY be called inside a `step.do()` callback. `input`/`output` MUST be serializable JSON (no functions, `Map`/`Set`, class instances, streams).
+Registration is deliberately static and Git-owned:
+
+- A Saga is a TypeScript definition built with `defineSaga` in `src/sagas.ts`: an explicit stable UUID id plus discovery metadata (name, revision, description, optional category/tags, IO schemas) plus `parse` and `run`.
+- At Worker startup the definitions are collected by `buildCatalog` (`src/saga.ts`) into the Catalog. **Duplicate stable IDs or names are fatal boot errors**: the module import throws and the Worker never serves.
+- `GET /api/sagas` serves that Catalog (metadata only).
+- **D1 mirrors metadata only, never authoritative for behavior.** Execution rows carry `saga_id`/`saga_name`/`saga_revision` as foreign-key/diagnostic copies so history stays readable after renames and deletions; Saga behavior always comes from source.
+- No database migration owns Saga identity. (Phase 1a performs no schema changes.)
+
+## Authoring contract
+
+`run` mirrors the native Workflow `run(event, step)` shape as `run(ctx, step)`: `ctx` is the validated event context (deterministic execution identity plus Integration/D1/secret handles), `step` is the durable Operation API (`do` for retry-unit work, `sleep` for explicit waits). The thin adapter in `src/sagas.ts` maps native `WorkflowEntrypoint` classes onto definitions; no Saga behavior lives in the adapters.
+
+Determinism constraints (enforced by `test/saga-contract.test.ts`, not by types alone): NO direct `Date.now()`, `Math.random()`, `crypto.randomUUID()`, `fetch()`, or Integration calls in the `run` body. All nondeterminism and I/O MUST go inside an Operation, which maps to a Cloudflare Workflow `step.do()` retry unit. `ctx.integrations.*`, `ctx.db`, and `ctx.secrets` may ONLY be touched inside a `step.do()` callback. `input`/`output` MUST be serializable JSON (no functions, `Map`/`Set`, class instances, streams) per `assertJsonSerializable`.
 
 ```ts
-import { defineSaga, defineOperation } from "../../src/saga";
-import type { SagaContext } from "../../src/saga";
-import type { HttpIntegration } from "../../src/integrations/http";
+import { defineSaga } from "../src/saga";
+import type { SagaEventContext, SagaStep } from "../src/saga";
+import type { EchoInput, EchoOutput } from "../src/domain";
 
-type EchoInput = { message: string };
-type EchoOutput = { message: string; fetchedAt: string };
-
-// Integration fetch isolated in an Operation = one Workflow step.do() unit.
-const fetchStatus = defineOperation({
-  name: "fetch-status",
-  run: async (
-    ctx: SagaContext,
-    integrations: { http: HttpIntegration },
-  ): Promise<{ fetchedAt: string }> => {
-    const res = await integrations.http.getJson<{ now: string }>("/status");
-    return { fetchedAt: res.now };
-  },
-});
-
-export const echoSaga = defineSaga<EchoInput, EchoOutput>({
+export const echoSaga = defineSaga<EchoOutput>({
   id: "00000000-0000-0000-0000-000000000001",
   name: "echo",
+  revision: "echo-v1",
   description: "First durable Wrangnarök Saga",
-  run: async (ctx, input: EchoInput): Promise<EchoOutput> => {
-    // ILLEGAL here: Date.now(), Math.random(), fetch(), ctx.integrations.http.*.
-    const echoed = await ctx.step.do("echo", async () => input.message);
-    const status = await ctx.step.do("fetch-status", () =>
-      fetchStatus.run(ctx, ctx.integrations),
-    );
-    return { message: echoed, fetchedAt: status.fetchedAt };
+  tags: ["utility"],
+  parse: parseInput,
+  run: async (ctx: SagaEventContext, step: SagaStep): Promise<EchoOutput> => {
+    // ILLEGAL here: Date.now(), Math.random(), fetch(), ctx.integrations.*,
+    // ctx.db, ctx.secrets. All of that lives inside step.do(...) below.
+    const echoed = await step.do("echo", async () => ctx.integrations.echo.echo(connFrom(ctx), input, opId));
+    return { message: echoed.message };
   },
 });
 ```
 
-Exact API is illustrative, not final, but the constraints are not: non-`step` I/O in `run` fails review, and `ctx.integrations.*` outside `step.do()` fails review.
+Exact handle shapes may evolve, but the constraints are not: non-`step` I/O in `run` fails review and the contract test, and `ctx.integrations.*` outside `step.do()` fails review and the contract test.
 
-At Worker startup/build time, Sagas are collected into a catalog (Catalog). Duplicate stable IDs or names are fatal configuration errors.
-
-D1 may persist catalog metadata needed for Execution foreign keys/discovery, but source remains authoritative for behavior.
+Retry limits and step timeouts are resolved by the adapter through the `stepRetryLimit` table (`src/domain.ts`), never by Saga source. The `sleep` duration on an explicit wait step remains orchestration written in source; everything retry/timeout/schedule-shaped is persisted policy, never a definition property (upstream finding 3).
 
 ## Rename/move behavior
 
@@ -68,7 +64,19 @@ D1 may persist catalog metadata needed for Execution foreign keys/discovery, but
 - changing display/name metadata does not change Saga ID;
 - changing the explicit Saga ID is treated as creating a different Saga;
 - deleting a Saga must not erase historical Executions;
-- future deployment tooling should detect accidental identity churn.
+- deployment tooling detects accidental identity churn (see below).
+
+## Churn/rename detection
+
+`sagas.manifest.json` (repo root) is the checked-in snapshot of `{id, name, revision}` for every registered Saga. `test/saga-contract.test.ts` compares the startup Catalog against that manifest and fails loudly on any unexpected add/remove/rename/revision drift, with instructions for the deliberate path.
+
+Deliberate identity change procedure (creating a different Saga on purpose):
+
+1. Justify it in the PR (dependents — Triggers, history, API callers — must be remapped, never silently forked).
+2. Update `sagas.manifest.json` in the same PR.
+3. Keep the old Execution history readable: the D1 mirror rows are never rewritten.
+
+Any manifest/catalog diff without that procedure fails CI. This is intentionally boring: an explicit UUID plus a diffable manifest, no hashing of paths/names/code (all accidentally mutable), no generated registry until ergonomics demand one.
 
 ## Why explicit IDs initially
 
@@ -76,20 +84,22 @@ Alternatives such as hashing source paths, names, or implementation code make id
 
 ## Discovery metadata
 
-Initial catalog metadata should remain small:
+Catalog metadata stays small:
 
 - stable ID;
 - unique name/slug;
+- revision marker for diagnostics;
 - description;
-- optional category/tags later;
-- input/output schema metadata if derivable safely;
+- optional category/tags;
+- input/output schema metadata hand-derived from the TypeScript types (no codegen dependency while the surface is three Sagas; revisit if schema drift ever bites);
 - source/build version metadata for diagnostics.
 
-Operational policy such as retries, schedules, access rules, and endpoints should not automatically become source-definition properties merely because upstream has equivalents. Decide those contracts separately.
+Operational policy such as retries, schedules, access rules, and endpoints must not become source-definition properties merely because upstream has equivalents. `buildCatalog` rejects those keys at startup; they are decided as persisted policy in their own contracts.
 
 ## Consequences
 
 - Sagas remain code-first while gaining stable references.
 - Cloudflare Workflow binding/class names are implementation details.
 - History remains readable after Saga deletion/rename.
+- Startup validation (duplicate IDs/names fatal) plus the manifest churn gate make accidental identity changes loud instead of silent.
 - We accept a little explicit UUID ceremony in exchange for avoiding identity migration problems early.

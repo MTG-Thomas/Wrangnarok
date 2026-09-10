@@ -13,6 +13,7 @@
     "types": "wrangler types",
     "typecheck": "npm run types && tsc --noEmit && tsc --noEmit -p client && tsc --noEmit -p test/tsconfig.json",
     "test": "vitest run",
+    "check:sagas": "vitest run test/saga-contract.test.ts",
     "build": "npm run build:ui && wrangler deploy --dry-run",
     "build:dev": "npm run build:ui && wrangler deploy --dry-run --env dev",
     "build:ui": "vite build --config client/vite.config.ts",

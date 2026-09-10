@@ -31,9 +31,9 @@ Cloudflare Workflows provides durable instances and steps, but Wrangnarök shoul
 
 A **Saga** is a stable, discoverable TypeScript automation definition.
 
-A Saga has durable identity independent of ordinary source edits. Initial discovery/registration mechanics remain TBD, but callers and Triggers must not depend solely on a mutable export name or source path.
+A Saga has durable identity independent of ordinary source edits. Registration is settled in ADR 002 (Accepted): a static Git-owned Catalog built at Worker startup (duplicate stable IDs/names are fatal boot errors), mirrored by D1 metadata but never driven by it. Callers and Triggers must not depend solely on a mutable export name or source path.
 
-Saga `run` bodies execute under Cloudflare Workflows determinism constraints (see ADR 002 example). All I/O, nondeterminism, and Integration calls MUST live inside Operations (`ctx.step.do(...)`); direct `fetch()` / `Date.now()` / `Math.random()` / top-level `ctx.integrations.*` in `run` fails review. Saga inputs/outputs MUST be serializable JSON.
+Saga `run` bodies execute under Cloudflare Workflows determinism constraints (see ADR 002 example). All I/O, nondeterminism, and Integration calls MUST live inside Operations (`step.do(...)`); direct `fetch()` / `Date.now()` / `Math.random()` / top-level `ctx.integrations.*` in `run` fails review. Saga inputs/outputs MUST be serializable JSON.
 
 ### Execution
 
