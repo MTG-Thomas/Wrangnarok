@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
-import { boundedJson, canTransition, Fault, parseKey, parseSubmission } from "./domain";
+import { boundedJson, canTransition, Fault, parseHistoryQuery, parseKey, parseSubmission } from "./domain";
 import { SAGA_CATALOG } from "./sagas";
-import { cancelExecution, submit, summary, visibleExecution, workflowForSaga } from "./executions";
-import type { ExecutionRow } from "./executions";
-export { EchoWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
+import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
+export { EchoWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
   return Response.json(body, {
@@ -24,7 +23,11 @@ export default {
     }
     try {
       const caller = await authenticate(request, env);
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported by this slice.");
+      // Query strings are deny-by-default: only the history list route takes
+      // them, and only its allowlisted keys (anything else is UNSUPPORTED_QUERY).
+      const historyList = url.pathname === "/api/executions" && request.method === "GET";
+      if (url.search && !historyList)
+        throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       if (url.pathname === "/api/sagas" && request.method === "GET")
         // Static Git-owned Catalog (ADR 002): discovery metadata only.
         // D1 Execution rows mirror saga_id/name/revision but never drive behavior.
@@ -42,13 +45,10 @@ export default {
         return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
       }
       if (url.pathname === "/api/executions" && request.method === "GET") {
-        // Deliberately small first page. Never claim this is complete history when more rows exist.
-        const rows = await env.DB.prepare(
-          "SELECT id,saga_id,saga_name,saga_revision,org_id,user_id,dispatched,status,created_at,started_at,completed_at FROM executions WHERE org_id=? AND user_id=? ORDER BY created_at DESC,id DESC LIMIT 21",
-        )
-          .bind(caller.orgId, caller.userId)
-          .all<Omit<ExecutionRow, "input_json" | "result_json" | "error_json">>();
-        return json({ executions: rows.results.slice(0, 20).map(summary), hasMore: rows.results.length > 20 });
+        // ExecutionHistory querying (Phase 2): status/sagaId filters plus
+        // cursor pagination over org-scoped summaries. The parser rejects
+        // unknown keys; the listing never claims completeness (hasMore).
+        return json(await listHistory(env.DB, caller, parseHistoryQuery(url.searchParams)));
       }
       const cancel = /^\/api\/executions\/([a-f0-9]{64})\/cancel$/.exec(url.pathname);
       if (cancel?.[1] && request.method === "POST") {

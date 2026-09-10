@@ -30,6 +30,7 @@ const payload: ExecutionHistoryResponse = {
     },
   ],
   hasMore: true,
+  nextCursor: "cursor-2",
 };
 
 afterEach(() => {

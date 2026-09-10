@@ -13,6 +13,14 @@ export const ninjaSaga = Object.freeze({
   description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
 });
 export const NINJA_INTEGRATION_ID = "0606e237-137b-4629-8346-85468e1c2df6";
+// Phase 2 multi-Integration Saga: NinjaOne census digested through the echo
+// Integration. Stable identity per ADR 002 (UUID + revision).
+export const digestSaga = Object.freeze({
+  id: "5f3bf136-ba9e-4529-8842-6786270ee80d",
+  name: "ninjaone-echo-digest",
+  revision: "ninjaone-echo-digest-v1",
+  description: "Phase 2: NinjaOne organization census digested through the echo Integration",
+});
 // system.smoke is loopback-free: D1-only Operations + transform steps, zero
 // external vendor dependency. Stable identity per ADR 002 (UUID + revision).
 export const smokeSaga = Object.freeze({
@@ -45,6 +53,10 @@ export const STEP_RETRY_CEILING = 2;
 // deadline and surfaces ECHO_VENDOR_TIMEOUT. TimedOut is only ever written by
 // the explicit timeout-mark-v1 checkpoint, never inferred from introspection.
 export const VENDOR_TIMEOUT_MS = 1000;
+// NinjaOne vendor deadline (Phase 2, issue #76): same posture as echo — the
+// Integration enforces its own deadline and surfaces NINJA_VENDOR_TIMEOUT
+// for both aborted and merely-late vendors. Sagas route it to timeout-mark-v1.
+export const NINJA_TIMEOUT_MS = 5000;
 export const EXECUTION_ID = /^[a-f0-9]{64}$/;
 export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelling" | "Cancelled";
@@ -62,10 +74,12 @@ const CHECKPOINT_STEPS: ReadonlySet<string> = new Set([
 export function stepRetryLimit(stepName: string): number {
   return CHECKPOINT_STEPS.has(stepName) ? STEP_RETRY_CEILING : 0;
 }
-// Canonical transition table (ADR 001, issue #16). Cancelling is transient:
-// Pending/Running -> Cancelling -> Cancelled. Pending cancels immediately;
-// Running cancels via terminate + marker. Terminal states have no outgoing
-// transitions. Unit-tested as pure TypeScript.
+// Canonical transition table (ADR 001). Cancelling is transient:
+// Pending/Running -> Cancelling -> Cancelled. Once the owner-requested
+// Cancelling marker is written, cancel wins: a terminal checkpoint that
+// lands after it is the stale one and no-ops, so an acknowledged
+// cancellation is never flipped to Failed afterward. Terminal states have
+// no outgoing transitions. Unit-tested as pure TypeScript.
 const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]> = {
   Pending: ["Running", "Failed", "Cancelling"],
   Running: ["Succeeded", "Failed", "TimedOut", "Cancelling"],
@@ -77,6 +91,21 @@ const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]>
 };
 export function canTransition(from: ExecutionStatus, to: ExecutionStatus): boolean {
   return EXECUTION_TRANSITIONS[from].includes(to);
+}
+// Operation state model (ADR 010 section 2, Phase 1b follow-up). Operations
+// stay within ('Running','Succeeded','Failed'); the timeout code lives in
+// error_json, never as an Operation status. A step (re)begin moves a fresh
+// row to Running or resets a retried Running row; terminal rows are never
+// resurrected — begin/finish writes are fenced on status='Running' in SQL,
+// and this table is the pure-TypeScript gate for the same rule.
+export type OperationStatus = "Running" | "Succeeded" | "Failed";
+const OPERATION_TRANSITIONS: Record<OperationStatus, readonly OperationStatus[]> = {
+  Running: ["Succeeded", "Failed"],
+  Succeeded: [],
+  Failed: [],
+};
+export function canTransitionOperation(from: OperationStatus, to: OperationStatus): boolean {
+  return OPERATION_TRANSITIONS[from].includes(to);
 }
 export interface Principal {
   readonly userId: string;
@@ -98,6 +127,14 @@ export interface NinjaOrgsResult {
   organizations: NinjaOrgSummary[];
 }
 export const NINJA_ORGS_MAX = 25;
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
+export interface DigestInput {
+  /* empty: census is read live, digest shaped in-Saga */
+}
+export interface DigestResult {
+  organizationCount: number;
+  echoed: EchoInput;
+}
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
 export interface SmokeInput {
   /* empty: loopback-free census, no parameters */
@@ -153,6 +190,28 @@ export function parseSmokeInput(value: unknown): SmokeInput {
   }
   return {};
 }
+export function parseDigestInput(value: unknown): DigestInput {
+  if (!object(value) || Object.keys(value).length !== 0) {
+    throw new Fault(400, "INVALID_INPUT", "The ninjaone-echo-digest Saga takes an empty input object.");
+  }
+  return {};
+}
+// Digest census names shown in the echoed summary. The persisted echo output
+// stays under the echo input bound (1024 UTF-8 bytes) via truncation below,
+// so the digest never inherits an unbounded vendor list.
+export const DIGEST_MAX_NAMES = 5;
+/** Pure transform: shape a NinjaOne organization list into an echoable digest message. */
+export function shapeDigest(orgs: NinjaOrgsResult): EchoInput {
+  const names = orgs.organizations.slice(0, DIGEST_MAX_NAMES).map((org) => org.name);
+  let message = `NinjaOne organizations (${orgs.organizationCount} total): ${names.join(", ") || "none"}`;
+  const bytes = new TextEncoder().encode(message);
+  if (bytes.length > 1024) {
+    let end = 1024;
+    while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+    message = new TextDecoder().decode(bytes.slice(0, end));
+  }
+  return parseInput({ message });
+}
 export interface SagaDef {
   readonly id: string;
   readonly name: string;
@@ -163,6 +222,7 @@ export interface SagaDef {
 const catalog: SagaDef[] = [
   { ...echoSaga, parse: parseInput },
   { ...ninjaSaga, parse: parseNinjaOrgsInput },
+  { ...digestSaga, parse: parseDigestInput },
   { ...smokeSaga, parse: parseSmokeInput },
 ];
 export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {
@@ -224,4 +284,99 @@ export async function boundedJson(body: ReadableStream<Uint8Array> | null, limit
   } catch {
     throw new Fault(400, "INVALID_JSON", "The body must be valid UTF-8 JSON.");
   }
+}
+
+// --- ExecutionHistory querying (Phase 2, issue #76) ------------------------
+// GET /api/executions is the only route that accepts a query string, and only
+// these keys: status (canonical ExecutionStatus), sagaId (stable Saga UUID),
+// limit (1-50, default 20), cursor (opaque page marker). Anything else is
+// UNSUPPORTED_QUERY — the hardening posture stays deny-by-default.
+export const HISTORY_LIMIT_DEFAULT = 20;
+export const HISTORY_LIMIT_MAX = 50;
+const HISTORY_STATUSES: readonly string[] = [
+  "Pending",
+  "Running",
+  "Succeeded",
+  "Failed",
+  "TimedOut",
+  "Cancelling",
+  "Cancelled",
+];
+export interface HistoryCursor {
+  readonly createdAt: string;
+  readonly id: string;
+}
+export interface HistoryQuery {
+  readonly status?: ExecutionStatus;
+  readonly sagaId?: string;
+  readonly limit: number;
+  readonly cursor?: HistoryCursor;
+}
+/** Opaque page marker: base64url of {createdAt, id}. Clients treat it as an
+ * inscrutable string; the listing query resumes strictly below the tuple in
+ * (created_at DESC, id DESC) order. */
+export function encodeHistoryCursor(cursor: HistoryCursor): string {
+  return btoa(JSON.stringify({ createdAt: cursor.createdAt, id: cursor.id }))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+export function decodeHistoryCursor(value: string): HistoryCursor {
+  let cursor: unknown;
+  try {
+    const padded = value.replaceAll("-", "+").replaceAll("_", "/");
+    cursor = JSON.parse(atob(padded));
+  } catch {
+    throw new Fault(400, "INVALID_CURSOR", "The history cursor is not a valid page marker.");
+  }
+  if (
+    !object(cursor) ||
+    typeof cursor.createdAt !== "string" ||
+    cursor.createdAt.length === 0 ||
+    typeof cursor.id !== "string" ||
+    !EXECUTION_ID.test(cursor.id)
+  ) {
+    throw new Fault(400, "INVALID_CURSOR", "The history cursor is not a valid page marker.");
+  }
+  return { createdAt: cursor.createdAt, id: cursor.id };
+}
+/** Pure parser for the history list query string. Throws Faults with
+ * machine-readable codes; unit-tested without any runtime binding. */
+export function parseHistoryQuery(params: URLSearchParams): HistoryQuery {
+  for (const key of params.keys()) {
+    if (!["status", "sagaId", "limit", "cursor"].includes(key)) {
+      throw new Fault(400, "UNSUPPORTED_QUERY", "Only status, sagaId, limit, and cursor are supported here.");
+    }
+  }
+  let status: ExecutionStatus | undefined;
+  const rawStatus = params.get("status");
+  if (rawStatus !== null) {
+    if (!HISTORY_STATUSES.includes(rawStatus)) {
+      throw new Fault(400, "INVALID_STATUS", "Status must be a canonical Execution status.");
+    }
+    status = rawStatus as ExecutionStatus;
+  }
+  let sagaId: string | undefined;
+  const rawSaga = params.get("sagaId");
+  if (rawSaga !== null) {
+    if (!UUID.test(rawSaga)) {
+      throw new Fault(400, "INVALID_SAGA_ID", "sagaId must be a stable Saga UUID.");
+    }
+    sagaId = rawSaga;
+  }
+  let limit = HISTORY_LIMIT_DEFAULT;
+  const rawLimit = params.get("limit");
+  if (rawLimit !== null) {
+    if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > HISTORY_LIMIT_MAX) {
+      throw new Fault(400, "INVALID_LIMIT", `Limit must be an integer from 1 to ${HISTORY_LIMIT_MAX}.`);
+    }
+    limit = Number(rawLimit);
+  }
+  const rawCursor = params.get("cursor");
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(sagaId === undefined ? {} : { sagaId }),
+    limit,
+    ...(rawCursor === null ? {} : { cursor: decodeHistoryCursor(rawCursor) }),
+  };
 }

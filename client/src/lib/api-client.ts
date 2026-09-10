@@ -39,7 +39,9 @@ async function get(path: string): Promise<unknown> {
 function isHistoryResponse(value: unknown): value is ExecutionHistoryResponse {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
-  return Array.isArray(v["executions"]) && typeof v["hasMore"] === "boolean";
+  if (!Array.isArray(v["executions"]) || typeof v["hasMore"] !== "boolean") return false;
+  // nextCursor is new (Phase 2 querying); older payloads without it still read.
+  return !("nextCursor" in v) || typeof v["nextCursor"] === "string" || v["nextCursor"] === null;
 }
 
 function isSagasResponse(value: unknown): value is SagasResponse {
@@ -64,7 +66,7 @@ function isDetailResponse(value: unknown): value is ExecutionDetail {
   return typeof v["executionId"] === "string" && Array.isArray(v["operations"]) && "runtimeStatus" in v;
 }
 
-/** GET /api/executions — ExecutionHistory list (20 + hasMore). */
+/** GET /api/executions — ExecutionHistory list (summaries + hasMore + nextCursor). */
 export async function fetchExecutionHistory(): Promise<ExecutionHistoryResponse> {
   const data = await get("/api/executions");
   if (!isHistoryResponse(data)) throw new Error("Unexpected history response shape.");

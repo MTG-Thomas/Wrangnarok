@@ -1,6 +1,7 @@
 # ADR 010: Phase 1b design for #58 — ctx, states, Connections, source boundary
 
-**Status:** Proposed design for #58, NOT accepted. Implements no code; constrains the later implementation lane. Defers to ADR 001 where silent.
+**Status:** Implemented per issue #75 (lane-A, PR #80). Section 1–4 decisions
+below are now code; the open questions record the picks the lane made.
 
 ## 1. Organization ctx propagation
 
@@ -15,13 +16,13 @@ Deny-by-absence: every read is `WHERE id = ? AND org_id = ? AND user_id = ?`; mi
 ## 2. Execution/Operation state model
 
 Decision: the #15 refusal gate **stays** (`409 RECOVERY_EXPIRED`, 15-min same-revision); `Scheduled` stays deferred and **out** of the CHECK. Rationale: gate bounds re-dispatch ambiguity without inventing success; `Scheduled` needs keyless identity + promotion path with no Phase 1b requirement.
-Adopt: explicit `Cancelling` (already in CHECK via `0002`) plus stale-token rejection: every terminal checkpoint is conditional (`WHERE status IN (...) AND attemptToken = ?`); stale/late callbacks (post-cancel, post-terminal, post-revision-change) are rejected no-ops, never overwrites. `Pending` is never swept: no timer, Cron, or reconciler writes `Pending -> Failed`; `Pending -> Failed` only via explicit `failExecution` checkpoint.
-Transition table (only legal moves; enforce in `canTransition` + conditional SQL):
+Adopt: explicit `Cancelling` (already in CHECK via `0002`) plus stale-token rejection: every terminal checkpoint is conditional (`WHERE status IN ('Pending','Running')` on executions, `AND status='Running'` on operations); stale/late callbacks (post-cancel, post-terminal, post-revision-change) are rejected no-ops, never overwrites. `Pending` is never swept: no timer, Cron, or reconciler writes `Pending -> Failed`; `Pending -> Failed` only via explicit `failExecution` checkpoint. Owner-cancel wins per ADR 001: once the `Cancelling` marker is written, a racing terminal checkpoint is the stale one and no-ops — the cancel endpoint acknowledges cancellation synchronously, so an acknowledged cancel is never flipped to `Failed` afterward.
+Transition table (only legal moves; enforce in `canTransition` + conditional SQL — identical to the ADR 001 table):
 
 ```text
 Pending    -> Running | Failed | Cancelling
 Running    -> Succeeded | Failed | TimedOut | Cancelling
-Cancelling -> Cancelled | Failed (lost-terminal race: terminal checkpoint wins, cancel no-ops)
+Cancelling -> Cancelled
 Succeeded | Failed | TimedOut | Cancelled -> (none; cancel returns 409 EXECUTION_NOT_CANCELLABLE)
 ```
 
@@ -34,7 +35,17 @@ CHECK(status IN ('Pending','Running','Succeeded','Failed','TimedOut','Cancelling
 -- UPDATE executions SET status=?,... WHERE id=? AND status IN ('Pending','Running') AND attempt_token=?;
 ```
 
-Operations stay `('Running','Succeeded','Failed')`; timeout code lives in `error_json`.
+Operations stay `('Running','Succeeded','Failed')` in both the CHECK and the
+`canTransitionOperation` code table; timeout code lives in `error_json`.
+Operation writes are fenced (`begin`/`finish` match `Running` rows only), so
+a late vendor callback or a re-begin can never overwrite terminal Operation
+history. Each vendor step narrows the OrgCtx to its own step
+(`withOperation`) so `operationId` names the step doing the work; the stable
+outbound `Idempotency-Key` derives from it. The four `prepare-input-v1`
+bodies are one shared `prepareExecution` helper. `requiredIntegrations` is
+served in `CatalogEntry` discovery; `sagas.manifest.json` is untouched
+(steward-owned) and D1 Execution rows need no migration (no query filters on
+requirements).
 
 ## 3. Integration vs Connection follow-ups
 
@@ -51,8 +62,19 @@ Boundary tests (workerd, real D1/Workflow bindings; vendor HTTP mocked): (a) sou
 
 ## Open questions (options, not decisions)
 
-- `attemptToken` representation: (i) `executionId:dispatched` reuse vs (ii) fresh per-dispatch nonce column — lane picks with #15 owner.
-- 424 code name/shape vs upstream HTTP mapping — lane aligns with API error envelope owner.
-- Where declared `required` lives (SagaDef field vs per-Operation arg) — lane picks; doc requires declaration somewhere checkable.
+Implementation picks (issue #75):
+
+- `attemptToken` representation: (i) `executionId:dispatched` reuse — no new
+  column, no migration. Single dispatch per deterministic ID means one epoch;
+  status-fenced conditional writes are the stale-token rejection.
+- 424 code name/shape: `INTEGRATION_REQUIREMENT_UNSATISFIED` as a structured
+  step result surfacing through `error_json` (Failed, no retry).
+- Where declared `required` lives: mandatory `requiredIntegrations` field on
+  `SagaDefinition` (source declaration, validated at startup, frozen).
+- Retry-ceiling values stay in the `stepRetryLimit()` code table plus
+  `VENDOR_TIMEOUT_MS` platform mapping — never Saga source properties.
+
+Still open (explicitly Phase 3+, not this lane):
+
 - `Scheduled` promotion design (keyless identity, due index, Cron) — explicitly Phase 3+, not this lane.
 - Whether retry-ceiling values graduate from code table to persisted operator policy — needs #15 owner + Free-tier cost note.

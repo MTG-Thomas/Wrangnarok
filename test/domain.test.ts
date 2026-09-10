@@ -2,11 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   boundedJson,
   canTransition,
+  canTransitionOperation,
+  decodeHistoryCursor,
+  digestSaga,
   echoSaga,
+  encodeHistoryCursor,
   executionId,
+  HISTORY_LIMIT_DEFAULT,
   ninjaSaga,
+  parseDigestInput,
+  parseHistoryQuery,
   parseInput,
   parseSubmission,
+  shapeDigest,
   STEP_RETRY_CEILING,
   stepRetryLimit,
 } from "../src/domain";
@@ -23,6 +31,12 @@ describe("MVP slice contracts", () => {
       saga: expect.objectContaining({ id: ninjaSaga.id }),
       input: {},
     });
+    expect(digestSaga.id).toBe("5f3bf136-ba9e-4529-8842-6786270ee80d");
+    expect(parseSubmission({ sagaId: digestSaga.id, input: {} })).toEqual({
+      saga: expect.objectContaining({ id: digestSaga.id }),
+      input: {},
+    });
+    expect(() => parseDigestInput({ message: "x" })).toThrow();
   });
   it("rejects submitted Organization overrides and unexpected input", () => {
     expect(() => parseSubmission({ sagaId: echoSaga.id, orgId: "other", input: { message: "x" } })).toThrow();
@@ -45,6 +59,7 @@ describe("MVP slice contracts", () => {
     // checkpoints may retry, up to the ceiling. Unknown names fail closed.
     expect(stepRetryLimit("echo-http-v1")).toBe(0);
     expect(stepRetryLimit("ninja-list-orgs-v1")).toBe(0);
+    expect(stepRetryLimit("echo-digest-v1")).toBe(0);
     // SmokeWorkflow D1 probe steps are not idempotent checkpoints: fail closed to 0 (issue #54).
     expect(stepRetryLimit("smoke-write-v1")).toBe(0);
     expect(stepRetryLimit("smoke-verify-v1")).toBe(0);
@@ -63,6 +78,9 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Running", "TimedOut")).toBe(true);
     expect(canTransition("Running", "Cancelling")).toBe(true);
     expect(canTransition("Cancelling", "Cancelled")).toBe(true);
+    // ADR 001: once Cancelling is written, cancel wins — a racing terminal
+    // checkpoint is stale and no-ops, so no Failed edge out of Cancelling.
+    expect(canTransition("Cancelling", "Failed")).toBe(false);
     for (const terminal of ["Succeeded", "Failed", "TimedOut", "Cancelled"] as const) {
       for (const next of [
         "Pending",
@@ -79,5 +97,72 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Pending", "Succeeded")).toBe(false);
     expect(canTransition("Pending", "Cancelled")).toBe(false);
     expect(canTransition("Cancelling", "Succeeded")).toBe(false);
+    expect(canTransition("Cancelling", "Cancelling")).toBe(false);
+    expect(canTransition("Cancelling", "TimedOut")).toBe(false);
+    expect(canTransition("Cancelling", "Running")).toBe(false);
+  });
+  it("restricts operation transitions to Running plus terminal states", () => {
+    expect(canTransitionOperation("Running", "Succeeded")).toBe(true);
+    expect(canTransitionOperation("Running", "Failed")).toBe(true);
+    expect(canTransitionOperation("Running", "Running")).toBe(false);
+    for (const terminal of ["Succeeded", "Failed"] as const) {
+      for (const next of ["Running", "Succeeded", "Failed"] as const) {
+        expect(canTransitionOperation(terminal, next)).toBe(false);
+      }
+    }
+  });
+  it("shapes a bounded echoable digest from a NinjaOne census", () => {
+    expect(
+      shapeDigest({
+        organizationCount: 2,
+        organizations: [
+          { id: 1, name: "Acme" },
+          { id: 2, name: "Globex" },
+        ],
+      }),
+    ).toEqual({ message: "NinjaOne organizations (2 total): Acme, Globex" });
+    expect(shapeDigest({ organizationCount: 0, organizations: [] })).toEqual({
+      message: "NinjaOne organizations (0 total): none",
+    });
+    // Unbounded vendor lists never leak into the echo input bound: names cap
+    // at 5 and the message truncates to 1024 UTF-8 bytes on a boundary.
+    const many = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, name: `Org ${index + 1}` }));
+    const digested = shapeDigest({ organizationCount: 100, organizations: many });
+    expect(new TextEncoder().encode(digested.message).length).toBeLessThanOrEqual(1024);
+    expect(digested.message).toContain("(100 total)");
+    const wide = shapeDigest({ organizationCount: 1, organizations: [{ id: 1, name: "🎃".repeat(500) }] });
+    expect(new TextEncoder().encode(wide.message).length).toBeLessThanOrEqual(1024);
+    expect(() => parseInput(wide)).not.toThrow();
+  });
+  it("parses history queries with an allowlisted key set", () => {
+    expect(parseHistoryQuery(new URLSearchParams())).toEqual({ limit: HISTORY_LIMIT_DEFAULT });
+    expect(parseHistoryQuery(new URLSearchParams("status=Failed"))).toEqual({ status: "Failed", limit: 20 });
+    expect(parseHistoryQuery(new URLSearchParams(`sagaId=${echoSaga.id}&limit=5`))).toEqual({
+      sagaId: echoSaga.id,
+      limit: 5,
+    });
+    const queryError = (query: string): string => {
+      try {
+        parseHistoryQuery(new URLSearchParams(query));
+      } catch (error) {
+        return (error as { code?: string }).code ?? "NO_CODE";
+      }
+      throw new Error(`expected parseHistoryQuery(${query}) to throw`);
+    };
+    expect(queryError("status=Bogus")).toBe("INVALID_STATUS");
+    expect(queryError("sagaId=nope")).toBe("INVALID_SAGA_ID");
+    for (const bad of ["0", "51", "abc", "2.5"]) {
+      expect(queryError(`limit=${bad}`)).toBe("INVALID_LIMIT");
+    }
+    expect(queryError("cursor=!!!")).toBe("INVALID_CURSOR");
+    expect(queryError("order=asc")).toBe("UNSUPPORTED_QUERY");
+  });
+  it("round-trips opaque history cursors without readable row content", () => {
+    const id = "a".repeat(64);
+    const cursor = encodeHistoryCursor({ createdAt: "2026-09-05T00:00:00.000Z", id });
+    expect(cursor).not.toContain("2026-09-05");
+    expect(decodeHistoryCursor(cursor)).toEqual({ createdAt: "2026-09-05T00:00:00.000Z", id });
+    expect(() => decodeHistoryCursor("not-a-cursor!!")).toThrow();
+    expect(() => decodeHistoryCursor(encodeHistoryCursor({ createdAt: "", id }))).toThrow();
   });
 });

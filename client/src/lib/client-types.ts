@@ -33,6 +33,8 @@ export interface ExecutionSummary {
 export interface ExecutionHistoryResponse {
   executions: ExecutionSummary[];
   hasMore: boolean;
+  /** Opaque page marker for the next GET /api/executions call; null when done. */
+  nextCursor: string | null;
 }
 
 /** Catalog entry for GET /api/sagas (read-only Saga discovery metadata). */
@@ -44,6 +46,9 @@ export interface SagaSummary {
   /** Optional discovery metadata (ADR 002): never operational policy. */
   tags?: string[];
   category?: string;
+  /** Stable Integration IDs this Saga requires in its Organization context
+   * (ADR 010 section 3): discovery only, no endpoints or credentials. */
+  requiredIntegrations: string[];
   inputSchema?: unknown;
   outputSchema?: unknown;
 }

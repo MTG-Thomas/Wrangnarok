@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0
-import { Fault, executionId, ninjaSaga, RECOVERY_WINDOW_MS, smokeSaga } from "./domain";
-import type { ExecutionStatus, Principal, SafeError, SagaDef } from "./domain";
+import { NonRetryableError } from "cloudflare:workflows";
+import {
+  digestSaga,
+  encodeHistoryCursor,
+  Fault,
+  executionId,
+  ninjaSaga,
+  RECOVERY_WINDOW_MS,
+  smokeSaga,
+} from "./domain";
+import type { ExecutionStatus, HistoryQuery, Principal, SafeError, SagaDef } from "./domain";
+import type { Connection } from "./integrations";
+import { buildOrgCtx } from "./saga";
+import type { OrgCtx } from "./saga";
 import type { Bindings } from "./bindings";
 export interface ExecutionRow {
   id: string;
@@ -29,6 +41,7 @@ export async function visibleExecution(db: D1Database, id: string, caller: Princ
 /** One native Workflow binding per Saga. Never inferred from the request. */
 export function workflowForSaga(env: Bindings, sagaId: string): Workflow<{ executionId: string }> {
   if (sagaId === ninjaSaga.id) return env.NINJA_WORKFLOW;
+  if (sagaId === digestSaga.id) return env.DIGEST_WORKFLOW;
   if (sagaId === smokeSaga.id) return env.SMOKE_WORKFLOW;
   return env.ECHO_WORKFLOW;
 }
@@ -79,17 +92,102 @@ export async function submit(env: Bindings, caller: Principal, key: string, saga
   }
   return { executionId: id, replayed: inserted.meta.changes === 0, statusUrl: `/api/executions/${id}` };
 }
+/** Connection resolution outcome (ADR 010 section 3, Phase 1b; entity split
+ * per ADR 003). Lookup is always exactly one row for this Organization —
+ * never a global cascade, never cross-org. A hit returns the typed
+ * Connection (IDs plus non-secret config); declared-but-missing fails loud
+ * with 424 so a miswired install can never silently skip work; undeclared
+ * (optional) access resolves to None and the Saga decides its own
+ * fallback/skip. */
+export type ConnectionResolution =
+  | { readonly found: true; readonly connection: Connection }
+  | { readonly found: false; readonly declared: true; readonly error: SafeError }
+  | { readonly found: false; readonly declared: false };
+
+export async function resolveConnection(
+  db: D1Database,
+  org: OrgCtx,
+  integrationId: string,
+  required: readonly string[],
+): Promise<ConnectionResolution> {
+  const row = await db
+    .prepare("SELECT id,org_id,integration_id,endpoint FROM connections WHERE org_id=? AND integration_id=?")
+    .bind(org.orgId, integrationId)
+    .first<{ id: string; org_id: string; integration_id: string; endpoint: string }>();
+  if (row) {
+    const connection: Connection = {
+      id: row.id,
+      integrationId: row.integration_id,
+      orgId: row.org_id,
+      endpoint: row.endpoint,
+    };
+    return { found: true, connection };
+  }
+  if (required.includes(integrationId)) {
+    return {
+      found: false,
+      declared: true,
+      error: {
+        code: "INTEGRATION_REQUIREMENT_UNSATISFIED",
+        message: "This Saga requires an Integration Connection that is not configured for this Organization.",
+      },
+    };
+  }
+  return { found: false, declared: false };
+}
+/** Shared prepare-input-v1 Operation (hygiene: one copy, not one per Saga).
+ * Validates the invocation against the immutable D1 Execution row, marks
+ * Pending -> Running, records the prepare Operation, and builds the OrgCtx
+ * from the row — never from client input or Workflow params. startedMs is
+ * captured here, inside the Operation, so it is replay-memoized and never a
+ * top-of-run Date.now(). Must run inside step.do("prepare-input-v1"). */
+export interface PreparedExecution<T> {
+  readonly input: T;
+  readonly orgCtx: OrgCtx;
+  readonly startedMs: number;
+}
+export async function prepareExecution<T>(
+  db: D1Database,
+  id: string,
+  sagaId: string,
+  sagaRevision: string,
+  parse: (value: unknown) => T,
+): Promise<PreparedExecution<T>> {
+  const row = await db.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
+  if (!row || row.saga_id !== sagaId || row.saga_revision !== sagaRevision) {
+    throw new NonRetryableError("Unknown Saga revision.");
+  }
+  if (row.status === "Cancelling" || row.status === "Cancelled") {
+    throw new NonRetryableError("Execution was cancelled.");
+  }
+  const input = parse(JSON.parse(row.input_json));
+  await db
+    .prepare("UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'")
+    .bind(new Date().toISOString(), id)
+    .run();
+  await beginOperation(db, id, "prepare-input-v1", 0);
+  await finishOperation(db, id, "prepare-input-v1", input);
+  return { input, orgCtx: buildOrgCtx(row, "prepare-input-v1"), startedMs: Date.now() };
+}
 export async function beginOperation(db: D1Database, id: string, name: string, position: number): Promise<void> {
+  // (Re)begin only from Running: a fresh row starts Running, a retried step
+  // resets its Running row, and a terminal row is never resurrected (the
+  // WHERE fences the DO UPDATE arm; the INSERT arm only fires for new rows).
   await db
     .prepare(
-      "INSERT INTO operations(execution_id,name,position,status,started_at) VALUES (?,?,?,'Running',?) ON CONFLICT(execution_id,name) DO UPDATE SET status='Running',completed_at=NULL,result_json=NULL,error_json=NULL",
+      "INSERT INTO operations(execution_id,name,position,status,started_at) VALUES (?,?,?,'Running',?) ON CONFLICT(execution_id,name) DO UPDATE SET status='Running',completed_at=NULL,result_json=NULL,error_json=NULL WHERE status='Running'",
     )
     .bind(id, name, position, new Date().toISOString())
     .run();
 }
 export async function finishOperation(db: D1Database, id: string, name: string, result: unknown): Promise<void> {
+  // Fenced on Running: a late vendor callback that lands after Failed (or a
+  // cancel marker) matches no row and no-ops instead of overwriting terminal
+  // history with invented success.
   await db
-    .prepare("UPDATE operations SET status='Succeeded',completed_at=?,result_json=? WHERE execution_id=? AND name=?")
+    .prepare(
+      "UPDATE operations SET status='Succeeded',completed_at=?,result_json=? WHERE execution_id=? AND name=? AND status='Running'",
+    )
     .bind(new Date().toISOString(), JSON.stringify(result), id, name)
     .run();
 }
@@ -99,11 +197,15 @@ export async function failExecution(
   error: SafeError,
   status: "Failed" | "TimedOut" = "Failed",
 ): Promise<void> {
-  // Terminal checkpoints only: conditional on still being Pending/Running so
-  // a late checkpoint can never overwrite Cancelled (or another terminal).
-  // TimedOut is written exclusively by the explicit timeout-mark-v1 step, and
-  // Failed exclusively by persist-failure-v1. Operation rows stay within
-  // ('Running','Succeeded','Failed'); the timeout code lives in error_json.
+  // Terminal checkpoints only: conditional on still being Pending/Running
+  // so a late checkpoint can never overwrite Cancelled, Cancelling, or
+  // another terminal. Failed is written by persist-failure-v1, TimedOut
+  // exclusively by the explicit timeout-mark-v1 step. Operation rows stay
+  // within ('Running','Succeeded','Failed'); the timeout code lives in
+  // error_json. Owner-cancel wins (ADR 001): once the Cancelling marker is
+  // written, a racing terminal checkpoint is stale and no-ops; the cancel
+  // marker below no-ops on non-Cancelling rows, so an acknowledged
+  // cancellation is never rewritten.
   const now = new Date().toISOString();
   const json = JSON.stringify(error);
   await db.batch([
@@ -121,8 +223,9 @@ export async function failExecution(
 }
 export async function cancelExecution(db: D1Database, id: string): Promise<void> {
   // Second half of Running/Pending -> Cancelling -> Cancelled. Conditional on
-  // still being Cancelling so a concurrent terminal checkpoint wins instead
-  // of being overwritten here.
+  // still being Cancelling so an already-terminal row is never rewritten
+  // here. Owner-cancel wins (ADR 001): terminal checkpoints are fenced to
+  // Pending/Running, so a checkpoint racing the cancel marker no-ops.
   const now = new Date().toISOString();
   const json = JSON.stringify({ code: "EXECUTION_CANCELLED", message: "The Execution was cancelled by its owner." });
   await db.batch([
@@ -151,5 +254,48 @@ export function summary(row: Omit<ExecutionRow, "input_json" | "result_json" | "
     createdAt: row.created_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+  };
+}
+
+export interface HistoryPage {
+  readonly executions: ReturnType<typeof summary>[];
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
+}
+const HISTORY_COLUMNS =
+  "id,saga_id,saga_name,saga_revision,org_id,user_id,dispatched,status,created_at,started_at,completed_at";
+/** ExecutionHistory listing (Phase 2, issue #76): org/requester-scoped
+ * summaries in (created_at DESC, id DESC) order, with optional status/saga
+ * filters and cursor pagination. Summaries only — input/result never ride
+ * the list. Never claim completeness when more rows exist: hasMore plus a
+ * nextCursor carry the rest. */
+export async function listHistory(db: D1Database, caller: Principal, query: HistoryQuery): Promise<HistoryPage> {
+  const clauses = ["org_id=?", "user_id=?"];
+  const binds: (string | number)[] = [caller.orgId, caller.userId];
+  if (query.status !== undefined) {
+    clauses.push("status=?");
+    binds.push(query.status);
+  }
+  if (query.sagaId !== undefined) {
+    clauses.push("saga_id=?");
+    binds.push(query.sagaId);
+  }
+  if (query.cursor !== undefined) {
+    clauses.push("((created_at < ?) OR (created_at = ? AND id < ?))");
+    binds.push(query.cursor.createdAt, query.cursor.createdAt, query.cursor.id);
+  }
+  const rows = await db
+    .prepare(
+      `SELECT ${HISTORY_COLUMNS} FROM executions WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC,id DESC LIMIT ?`,
+    )
+    .bind(...binds, query.limit + 1)
+    .all<Omit<ExecutionRow, "input_json" | "result_json" | "error_json">>();
+  const page = rows.results.slice(0, query.limit);
+  const hasMore = rows.results.length > query.limit;
+  const last = page[page.length - 1];
+  return {
+    executions: page.map(summary),
+    hasMore,
+    nextCursor: hasMore && last !== undefined ? encodeHistoryCursor({ createdAt: last.created_at, id: last.id }) : null,
   };
 }

@@ -84,6 +84,7 @@ export function SagasList(props: { initial?: SagasResponse }): React.JSX.Element
                   <th scope="col">Saga</th>
                   <th scope="col">ID</th>
                   <th scope="col">Revision</th>
+                  <th scope="col">Requires</th>
                   <th scope="col">Description</th>
                 </tr>
               </thead>
@@ -100,6 +101,17 @@ export function SagasList(props: { initial?: SagasResponse }): React.JSX.Element
                     </td>
                     <td>
                       <span className="muted">{saga.revision}</span>
+                    </td>
+                    <td>
+                      {saga.requiredIntegrations.length === 0 ? (
+                        <span className="muted">none</span>
+                      ) : (
+                        saga.requiredIntegrations.map((integrationId) => (
+                          <code key={integrationId} className="mono mono--truncate" title={integrationId}>
+                            {integrationId.slice(0, 8)}…{" "}
+                          </code>
+                        ))
+                      )}
                     </td>
                     <td>{saga.description}</td>
                   </tr>

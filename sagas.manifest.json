@@ -13,6 +13,11 @@
       "revision": "ninjaone-orgs-v1"
     },
     {
+      "id": "5f3bf136-ba9e-4529-8842-6786270ee80d",
+      "name": "ninjaone-echo-digest",
+      "revision": "ninjaone-echo-digest-v1"
+    },
+    {
       "id": "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
       "name": "system.smoke",
       "revision": "system.smoke-v1"

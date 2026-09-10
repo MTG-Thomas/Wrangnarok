@@ -21,7 +21,7 @@ import type { WorkflowSleepDuration, WorkflowStep } from "cloudflare:workers";
 import { stepRetryLimit, UUID } from "./domain";
 import type { EchoInput, NinjaOrgsResult } from "./domain";
 import type { EchoConnection } from "./integrations/echo";
-import type { NinjaConnection, NinjaCredentials } from "./integrations/ninjaone";
+import type { NinjaConnection, NinjaSecrets } from "./integrations/ninjaone";
 
 /** Durable Operation API surfaced to Saga authors. Deliberately smaller than
  * the native WorkflowStep: do() for retry-unit work, sleep() for explicit
@@ -39,7 +39,7 @@ export interface EchoIntegrationHandle {
   echo(connection: EchoConnection, input: EchoInput, operationId: string): Promise<EchoInput>;
 }
 export interface NinjaOneIntegrationHandle {
-  listOrganizations(connection: NinjaConnection, credentials: NinjaCredentials): Promise<NinjaOrgsResult>;
+  listOrganizations(connection: NinjaConnection, secrets: NinjaSecrets): Promise<NinjaOrgsResult>;
 }
 export interface SagaIntegrations {
   readonly echo: EchoIntegrationHandle;
@@ -54,11 +54,62 @@ export interface SagaSecrets {
   readonly clientSecret?: string;
 }
 
+/** Organization context for one Execution (ADR 010 section 1, Phase 1b).
+ * Built inside prepare-input-v1 from the immutable D1 Execution row — never
+ * from client-supplied context, and never from Workflow params (which carry
+ * only { executionId }). attemptToken is the dispatch epoch
+ * `${executionId}:${dispatched}`; with one dispatch per deterministic ID
+ * there is exactly one epoch, so the status-fenced conditional writes in
+ * failExecution/cancelExecution are the stale-token rejection mechanism
+ * (late, post-terminal, and post-cancel callbacks match no row and no-op).
+ * A fresh per-dispatch nonce column is deferred until a demonstrated
+ * ambiguous-dispatch case needs it. */
+export interface OrgCtx {
+  readonly orgId: string;
+  readonly userId: string;
+  readonly executionId: string;
+  readonly sagaId: string;
+  readonly sagaRevision: string;
+  readonly operationId?: string;
+  readonly attemptToken: string;
+}
+
+/** Minimal D1 Execution row shape needed to build an OrgCtx. */
+export interface OrgCtxRow {
+  readonly id: string;
+  readonly org_id: string;
+  readonly user_id: string;
+  readonly saga_id: string;
+  readonly saga_revision: string;
+  readonly dispatched: number;
+}
+
+export function buildOrgCtx(row: OrgCtxRow, operationId?: string): OrgCtx {
+  return Object.freeze({
+    orgId: row.org_id,
+    userId: row.user_id,
+    executionId: row.id,
+    sagaId: row.saga_id,
+    sagaRevision: row.saga_revision,
+    ...(operationId === undefined ? {} : { operationId }),
+    attemptToken: `${row.id}:${row.dispatched}`,
+  });
+}
+
+/** Narrow an OrgCtx to one durable step. Vendor steps resolve Connections
+ * and derive stable outbound operation IDs through their own step ctx, so
+ * the operationId always names the step doing the work — never the prepare
+ * step that built the base ctx. Pure copy; the epoch and identity survive. */
+export function withOperation(org: OrgCtx, operationId: string): OrgCtx {
+  return Object.freeze({ ...org, operationId });
+}
+
 /** Validated event context for one Saga execution. executionId is the
  * deterministic D1/Workflow identity, checked against the native instance ID
- * by the adapter. The Organization is NEVER carried here: the Saga loads its
- * immutable Execution row (org_id included) inside prepare-input-v1, and org
- * context propagation stays deferred to Phase 1b (issue #58). */
+ * by the adapter. Organization context is NOT carried here: each Saga builds
+ * its OrgCtx from the immutable D1 Execution row inside prepare-input-v1
+ * (Phase 1b, ADR 010) and threads it through Connection resolution and
+ * terminal checkpoints — never from caller-supplied org. */
 export interface SagaEventContext {
   readonly executionId: string;
   readonly integrations: SagaIntegrations;
@@ -79,9 +130,10 @@ export interface IoSchema {
 export type SagaRun<TOutput> = (ctx: SagaEventContext, step: SagaStep) => Promise<TOutput>;
 
 /** Static Saga definition. Identity/discovery metadata only: id, name,
- * revision, description, optional category/tags and IO schemas, plus parse and
- * run. Any operational-policy key (timeouts, retries, schedules, endpoints,
- * access rules) is rejected by validateSagaDefinition. */
+ * revision, description, optional category/tags and IO schemas, the declared
+ * Integration requirement list, plus parse and run. Any operational-policy
+ * key (timeouts, retries, schedules, endpoints, access rules) is rejected by
+ * validateSagaDefinition. */
 export interface SagaDefinition<TOutput = unknown> {
   readonly id: string;
   readonly name: string;
@@ -89,6 +141,13 @@ export interface SagaDefinition<TOutput = unknown> {
   readonly description: string;
   readonly category?: string;
   readonly tags?: readonly string[];
+  /** Stable Integration IDs this Saga requires in its Organization context
+   * (ADR 010 section 3, Phase 1b). A declared-but-missing Connection fails
+   * loud with 424 INTEGRATION_REQUIREMENT_UNSATISFIED; undeclared (optional)
+   * access resolves to None and never throws. The declaration is mandatory —
+   * every Saga states it explicitly, even when empty. Source declaration
+   * only — never endpoints, credentials, or policy. */
+  readonly requiredIntegrations: readonly string[];
   readonly inputSchema?: IoSchema;
   readonly outputSchema?: IoSchema;
   readonly parse: (value: unknown) => unknown;
@@ -96,7 +155,9 @@ export interface SagaDefinition<TOutput = unknown> {
 }
 
 /** Discovery metadata served by GET /api/sagas and mirrored into D1
- * Execution rows. Metadata only: D1 never drives Saga behavior. */
+ * Execution rows. Metadata only: D1 never drives Saga behavior. The declared
+ * Integration requirement list is discovery (which Connections a Saga needs
+ * in its Organization), not policy: no endpoints, credentials, or counts. */
 export interface CatalogEntry {
   readonly id: string;
   readonly name: string;
@@ -104,6 +165,7 @@ export interface CatalogEntry {
   readonly description: string;
   readonly category?: string;
   readonly tags?: readonly string[];
+  readonly requiredIntegrations: readonly string[];
   readonly inputSchema?: IoSchema;
   readonly outputSchema?: IoSchema;
 }
@@ -157,6 +219,19 @@ export function validateSagaDefinition(def: SagaDefinition): void {
   if (typeof def.parse !== "function" || typeof def.run !== "function") {
     throw new Error(`Invalid Saga definition "${def.name}": parse and run are required.`);
   }
+  if (def.requiredIntegrations === undefined) {
+    throw new Error(
+      `Invalid Saga definition "${def.name}": requiredIntegrations must be declared explicitly (empty when none).`,
+    );
+  }
+  if (
+    !Array.isArray(def.requiredIntegrations) ||
+    def.requiredIntegrations.some((id) => typeof id !== "string" || !UUID.test(id))
+  ) {
+    throw new Error(
+      `Invalid Saga definition "${def.name}": requiredIntegrations must be an explicit list of stable Integration UUIDs (empty when none).`,
+    );
+  }
   const record = def as unknown as Record<string, unknown>;
   for (const key of OPERATIONAL_POLICY_KEYS) {
     if (key in record) {
@@ -171,7 +246,11 @@ export function validateSagaDefinition(def: SagaDefinition): void {
  * cross-Saga duplicate detection happens in buildCatalog. */
 export function defineSaga<TOutput>(def: SagaDefinition<TOutput>): SagaDefinition<TOutput> {
   validateSagaDefinition(def);
-  return Object.freeze({ ...def, tags: def.tags === undefined ? undefined : Object.freeze([...def.tags]) });
+  return Object.freeze({
+    ...def,
+    tags: def.tags === undefined ? undefined : Object.freeze([...def.tags]),
+    requiredIntegrations: Object.freeze([...def.requiredIntegrations]),
+  });
 }
 
 /** Static Git-owned registration (ADR 002): collect Saga definitions into the
@@ -206,6 +285,7 @@ export function buildCatalog(defs: readonly SagaDefinition[]): readonly CatalogE
         description: def.description,
         ...(def.category === undefined ? {} : { category: def.category }),
         ...(def.tags === undefined ? {} : { tags: def.tags }),
+        requiredIntegrations: def.requiredIntegrations,
         ...(def.inputSchema === undefined ? {} : { inputSchema: def.inputSchema }),
         ...(def.outputSchema === undefined ? {} : { outputSchema: def.outputSchema }),
       }),

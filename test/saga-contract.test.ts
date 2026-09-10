@@ -15,8 +15,12 @@ import type { SagaEventContext, SagaStep } from "../src/saga";
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "../src/sagas";
 import {
   BODY_LIMIT,
+  ECHO_INTEGRATION_ID,
+  digestSaga,
   echoSaga,
+  NINJA_INTEGRATION_ID,
   ninjaSaga,
+  parseDigestInput,
   parseInput,
   parseNinjaOrgsInput,
   parseSmokeInput,
@@ -32,7 +36,7 @@ const CHURN_MESSAGE =
 
 describe("Saga authoring contract (issue #57)", () => {
   it("keeps all I/O and nondeterminism inside step.do() for every registered Saga", () => {
-    expect(SAGA_DEFINITIONS).toHaveLength(3);
+    expect(SAGA_DEFINITIONS).toHaveLength(4);
     for (const def of SAGA_DEFINITIONS) {
       expect(() => assertDeterministicRun(def.name, def.run)).not.toThrow();
     }
@@ -101,6 +105,10 @@ describe("Saga authoring contract (issue #57)", () => {
         input: {},
         output: { organizationCount: 1, organizations: [{ id: 7, name: "Acme" }] },
       },
+      "ninjaone-echo-digest": {
+        input: {},
+        output: { organizationCount: 1, echoed: { message: "NinjaOne organizations (1 total): Acme" } },
+      },
       "system.smoke": {
         input: {},
         output: {
@@ -140,6 +148,7 @@ describe("Saga authoring contract (issue #57)", () => {
       name: "probe",
       revision: "probe-v1",
       description: "Contract probe Saga.",
+      requiredIntegrations: [],
       parse: (value: unknown) => value,
       run: async (_ctx: SagaEventContext, step: SagaStep): Promise<number> => step.do("probe-v1", async () => 1),
     });
@@ -157,22 +166,66 @@ describe("Saga authoring contract (issue #57)", () => {
       name: "probe",
       revision: "probe-v1",
       description: "Contract probe Saga.",
+      requiredIntegrations: [],
       parse: (value: unknown) => value,
       run: async (_ctx: SagaEventContext, step: SagaStep): Promise<number> => step.do("probe-v1", async () => 1),
     };
     expect(() => defineSaga({ ...base, id: "not-a-uuid" })).toThrow(/stable UUID/);
     expect(() => defineSaga({ ...base, description: "" })).toThrow(/description/);
+    expect(() => defineSaga({ ...base, requiredIntegrations: undefined as never })).toThrow(/requiredIntegrations/);
+    expect(() => defineSaga({ ...base, requiredIntegrations: ["not-a-uuid"] })).toThrow(/requiredIntegrations/);
     for (const policy of [{ retries: 2 }, { timeout: "10 seconds" }, { schedule: "* * * * *" }]) {
       expect(() => buildCatalog([defineSaga({ ...base, ...policy })])).toThrow(/operational policy/);
     }
   });
 
+  it("declares required Integrations explicitly on every registered Saga", () => {
+    // ADR 010 section 3: declared-but-missing fails loud (424), undeclared
+    // access resolves to None. The declaration is mandatory source metadata.
+    const byName = new Map(SAGA_DEFINITIONS.map((def) => [def.name, def]));
+    expect(byName.get("echo")?.requiredIntegrations).toEqual([ECHO_INTEGRATION_ID]);
+    expect(byName.get("ninjaone-orgs")?.requiredIntegrations).toEqual([NINJA_INTEGRATION_ID]);
+    expect(byName.get("ninjaone-echo-digest")?.requiredIntegrations).toEqual([
+      NINJA_INTEGRATION_ID,
+      ECHO_INTEGRATION_ID,
+    ]);
+    expect(byName.get("system.smoke")?.requiredIntegrations).toEqual([]);
+    for (const def of SAGA_DEFINITIONS) {
+      expect(Array.isArray(def.requiredIntegrations)).toBe(true);
+    }
+    // Knob boundary (ADR 010 section 4): timeouts, retries, schedules, and
+    // other runtime policy must never live in Saga source — only the
+    // stepRetryLimit code table and platform adapter may carry them.
+    for (const def of SAGA_DEFINITIONS) {
+      for (const key of [
+        "timeout",
+        "timeouts",
+        "retry",
+        "retries",
+        "schedule",
+        "schedules",
+        "cron",
+        "endpoint",
+        "endpoints",
+        "access",
+        "rateLimit",
+        "cache",
+        "ttl",
+        "concurrency",
+        "backoff",
+      ]) {
+        expect(def, `Saga "${def.name}" carries persisted-policy key "${key}"`).not.toHaveProperty(key);
+      }
+    }
+  });
+
   it("keeps definitions, domain constants, catalog, and manifest in agreement", () => {
     const byName = new Map(SAGA_DEFINITIONS.map((def) => [def.name, def]));
-    expect([...byName.keys()].sort()).toEqual(["echo", "ninjaone-orgs", "system.smoke"]);
+    expect([...byName.keys()].sort()).toEqual(["echo", "ninjaone-echo-digest", "ninjaone-orgs", "system.smoke"]);
     const expected = [
       { stable: echoSaga, parse: parseInput },
       { stable: ninjaSaga, parse: parseNinjaOrgsInput },
+      { stable: digestSaga, parse: parseDigestInput },
       { stable: smokeSaga, parse: parseSmokeInput },
     ];
     for (const { stable, parse } of expected) {
@@ -183,12 +236,14 @@ describe("Saga authoring contract (issue #57)", () => {
       expect(def?.description).toBe(stable.description);
       expect(def?.parse).toBe(parse);
     }
-    // Catalog metadata minimum: stable UUID id, name, description, plus the
-    // optional discovery metadata. No operational policy ever appears here.
+    // Catalog metadata minimum: stable UUID id, name, description, declared
+    // requirements, plus the optional discovery metadata. No operational
+    // policy ever appears here.
     for (const entry of SAGA_CATALOG) {
       expect(entry.id).toMatch(/^[a-f0-9-]{36}$/i);
       expect(entry.description.length).toBeGreaterThan(0);
       expect(entry.tags?.length).toBeGreaterThan(0);
+      expect(entry.requiredIntegrations).toEqual(byName.get(entry.name)?.requiredIntegrations);
       expect(entry.inputSchema?.type).toBe("object");
       expect(entry.outputSchema?.type).toBe("object");
       expect(entry).not.toHaveProperty("retries");
