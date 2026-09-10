@@ -174,6 +174,22 @@ Forms bind by name: each field name is a workflow parameter name, max 50 fields 
 
 **Wrangnarök implication (feeds Phase 4):** Dynamic forms stay Deferred, verdict confirmed — the surface (providers, startup handles, fingerprints, embed fencing) is orthogonal to the MVP. When forms arrive: field-names-bind-to-Saga-inputs, server-validates-against-persisted-declaration, submit-gate-as-authoritative, and embed fingerprinting are the invariants to keep. The method-shaped SDK retry discipline (`GET` retries, `POST` never) is worth copying into our client now. AI-assisted-development (Adopt as philosophy) and Git-based management (Adopt) verdicts stand confirmed with no new runtime contract.
 
+### 18. Agents and MCP: opt-in tools, gateway-vs-native, deny-by-default (upstream sweep, Sep 2026)
+
+All pins at vendor/upstream commit `0598020e` (2026-09-04).
+
+Tool identity mirrors our own saga contract: `@tool` is `@workflow(is_tool=True)` with identity-only decorator parameters (name, description, category, tags); parameters are inferred from the function signature while runtime config lives in the database (`api/src/sdk/decorators.py:15-27,128-142,165-213`). The registry lists only active `type='tool'` workflows, prefers `tool_description` over `description`, and normalizes names with a category prefix (or `wf_`) so workflow tools cannot shadow system tools (`api/src/services/tool_registry.py:23-53,91-117`).
+
+Resolution is explicit and deterministic: an agent carries its own tool list (opt-in, never ambient); system tools win conflicts; workflow tools resolve sorted by ID; name conflicts hide the loser with a warning (`api/src/services/execution/agent_helpers.py:107-189`). The caller's identity controls whether per-user-OAuth MCP tools enter the visible set.
+
+The MCP surface is FastMCP over Streamable HTTP only — no SSE, no stdio (`api/src/routers/mcp.py:5`; `api/src/mcp_server/server.py:1-16`) — with a dual endpoint over one registry: `/mcp` serves 7 stable gateway tools while `/mcp/{agent_id}` serves the native per-agent surface (`routers/mcp.py:10-11`; `mcp_server/middleware.py:1-43`). Workflow-backed tools enumerate the same ToolRegistry with stale-entry removal (`mcp_server/server.py:764-906`).
+
+Credentials split four ways: global templates without secrets, per-org connections carrying `encrypted_client_secret` plus an `oauth_token_id` reference, a tool catalog with verbatim input schemas, and per-user credentials with consent and granted scopes (`api/src/models/orm/external_mcp.py`). Token resolution funnels through one five-path table (user, service-chat, needs-reauth, service-autonomous, misconfigured) with a 5-minute freshness margin and single refresh-plus-persist (`api/src/mcp_client/auth_resolution.py:1-28,53-128,229-328`); dispatch retries once on 401/403 markers and caps envelopes at 250 KB (`dispatch.py:17-22,157-303`).
+
+Authorization fails closed throughout: list filters return nothing unauthenticated and only gateway names unscoped; call filters deny hidden and out-of-agent tools; org scoping lives in the database with deny-by-default agent grants; the per-workflow gate reuses the rule that listable equals executable (`mcp_server/middleware.py:45-233`; `tool_access.py:62-110,183-210,353-472`). External tool names are namespaced (`mcp__<connectionUUID>__<tool>`, UUID-validated on parse) with `_workflow` suffixing on native collisions (`api/src/services/execution/agent_helpers.py:31-43`; `mcp_server/server.py:807-843`).
+
+**Wrangnarök implication (feeds Phase 6):** Agents/tool workflows stay Deferred, verdict confirmed. When they arrive, the invariants to keep are: opt-in tool metadata on suitable Sagas with normal Sagas remaining distinct; a gateway-vs-native split; normalized namespaced tool names with description priority; caller-scoped resolution; server-side permissions authoritative even when an agent can discover a tool; hidden-tool denial. No MCP server, agent runtime, or tool-execution path until Phase 6 earns them.
+
 ## Candidate product invariants
 
 These are stronger than implementation preferences and should guide design reviews:
@@ -201,7 +217,7 @@ Then, in roughly this order:
 - current integration SDK and OAuth implementation contracts (swept, §15);
 - files/artifacts (swept, §16);
 - app/web SDK and forms (swept, §17);
-- agent/MCP surface;
+- agent/MCP surface (swept, §18);
 - Solution manifests and packaging/version semantics;
 - claims/policies and authentication model;
 - API surface and execution observability;
