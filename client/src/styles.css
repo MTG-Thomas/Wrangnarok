@@ -1,22 +1,434 @@
-.shell {
-  font-family: system-ui, sans-serif;
-  margin: 0 auto;
-  max-width: 56rem;
-  padding: 1rem;
+@import "../../assets/brand/tokens.css";
+
+/* Presentation-only brand-token polish for the History shell (issue #44).
+   Vanilla CSS. Large surfaces stay neutral; Sunrise/Amber mark action only. */
+
+body {
+  background: var(--wrangnarok-cloud, #f7f7f4);
+  color: var(--wrangnarok-text, #111820);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  line-height: 1.5;
+  margin: 0;
 }
-.nav ul {
+
+#root {
+  display: block;
+}
+
+.shell {
+  margin: 0 auto;
+  max-width: 60rem;
+  padding: 1.5rem 1rem 3rem;
+}
+
+/* ---- Header / brand lockup ---- */
+
+.site-header {
+  background: var(--wrangnarok-gradient-night, linear-gradient(145deg, #0b0f14, #182431));
+  border-radius: var(--wrangnarok-radius-lg, 1rem);
+  color: var(--wrangnarok-cloud, #f7f7f4);
+  padding: 1.25rem 1.5rem;
+}
+
+.brand {
+  align-items: center;
+  color: inherit;
+  display: inline-flex;
+  gap: 0.625rem;
+  text-decoration: none;
+}
+
+.brand-mark {
+  flex: none;
+  height: 2rem;
+  width: 2rem;
+}
+
+.brand-word {
+  font-size: 1.375rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.brand-tagline {
+  color: var(--wrangnarok-mist, #e2e8f0);
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  margin: 0.25rem 0 0;
+  text-transform: uppercase;
+}
+
+/* ---- Nav ---- */
+
+.nav {
+  margin-top: 1rem;
+}
+
+.nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-link {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--wrangnarok-cloud, #f7f7f4);
+  display: inline-block;
+  font-weight: 600;
+  padding: 0.375rem 0.875rem;
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  border-color: var(--wrangnarok-amber, #f59e0b);
+}
+
+.nav-link.active {
+  background: var(--wrangnarok-gradient-ember, linear-gradient(135deg, #f45d0b, #f59e0b));
+  color: #fff;
+}
+
+.nav-item--disabled {
+  align-items: center;
+  border: 1px dashed rgba(226, 232, 240, 0.45);
+  border-radius: 999px;
+  color: rgba(226, 232, 240, 0.72);
+  display: inline-flex;
+  font-size: 0.875rem;
+  gap: 0.5rem;
+  opacity: 0.75;
+  padding: 0.375rem 0.875rem;
+}
+
+.nav-item--disabled .soon {
+  font-style: italic;
+}
+
+.nav-item--disabled a {
+  color: var(--wrangnarok-dawn, #fde68a);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* ---- Page card ---- */
+
+.page {
+  background: #fff;
+  border: 1px solid var(--wrangnarok-mist, #e2e8f0);
+  border-radius: var(--wrangnarok-radius-lg, 1rem);
+  margin-top: 1rem;
+  padding: 1.5rem;
+}
+
+.page h1 {
+  font-size: 1.5rem;
+  letter-spacing: 0.01em;
+  margin: 0 0 1rem;
+}
+
+.page h2 {
+  font-size: 1.125rem;
+  margin: 1.5rem 0 0.75rem;
+}
+
+.page p {
+  margin: 0 0 0.75rem;
+}
+
+/* ---- Token form ---- */
+
+.token-form {
+  align-items: end;
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.token-form label {
+  color: var(--wrangnarok-text-muted, #52606d);
+  display: block;
+  flex-basis: 100%;
+  font-size: 0.875rem;
+}
+
+.token-form input {
+  border: 1px solid var(--wrangnarok-mist, #e2e8f0);
+  border-radius: var(--wrangnarok-radius-sm, 0.5rem);
+  font: inherit;
+  max-width: 22rem;
+  padding: 0.5rem 0.75rem;
+  width: 100%;
+}
+
+.token-form button {
+  background: var(--wrangnarok-sunrise, #f45d0b);
+  border: none;
+  border-radius: var(--wrangnarok-radius-sm, 0.5rem);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.5rem 1.25rem;
+}
+
+.token-form button:hover {
+  background: var(--wrangnarok-slate, #1f2937);
+}
+
+/* ---- Status badges (color + text + glyph, never color alone) ---- */
+
+.badge {
+  align-items: center;
+  border: 1px solid;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 700;
+  gap: 0.375rem;
+  letter-spacing: 0.02em;
+  padding: 0.125rem 0.625rem;
+  white-space: nowrap;
+}
+
+.badge-glyph {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.badge--succeeded {
+  background: #e6f4ea;
+  border-color: #a3d9b1;
+  color: #137333;
+}
+
+.badge--failed {
+  background: #fdecea;
+  border-color: #f5c6c2;
+  color: #b3261e;
+}
+
+.badge--running {
+  background: #e8f0fe;
+  border-color: #aecbfa;
+  color: #174ea6;
+}
+
+.badge--running .badge-glyph {
+  animation: badge-pulse 1.2s ease-in-out infinite;
+}
+
+.badge--pending {
+  background: #eef1f4;
+  border-color: #c9d2dc;
+  color: #3c4753;
+}
+
+.badge--cancelled {
+  background: #e8e8e6;
+  border-color: #c7c7c2;
+  color: #44453f;
+}
+
+.badge--timedout {
+  background: #fef3e2;
+  border-color: #f5cf8a;
+  color: #935705;
+}
+
+.badge--unknown {
+  background: #f3f0ff;
+  border-color: #d0c6f5;
+  color: #4f3fb3;
+}
+
+@keyframes badge-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* ---- History table ---- */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.history-table {
+  border-collapse: collapse;
+  min-width: 36rem;
+  width: 100%;
+}
+
+.history-table th,
+.history-table td {
+  padding: 0.625rem 0.75rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.history-table thead th {
+  border-bottom: 2px solid var(--wrangnarok-mist, #e2e8f0);
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.history-table tbody tr {
+  border-bottom: 1px solid var(--wrangnarok-mist, #e2e8f0);
+}
+
+.history-table tbody tr:hover {
+  background: var(--wrangnarok-cloud, #f7f7f4);
+}
+
+.history-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.saga-link {
+  color: var(--wrangnarok-text, #111820);
+  font-weight: 600;
+}
+
+.saga-link:hover {
+  color: var(--wrangnarok-sunrise, #f45d0b);
+}
+
+.mono {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.8125rem;
+}
+
+.mono--truncate {
+  display: inline-block;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.mono--wrap {
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-size: 0.875rem;
+}
+
+/* ---- Detail view ---- */
+
+.back-link {
+  color: var(--wrangnarok-sunrise, #f45d0b);
+  display: inline-block;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 0.5rem 1.5rem;
+  grid-template-columns: minmax(7rem, 10rem) 1fr;
+  margin: 0 0 0.5rem;
+}
+
+.detail-grid dt {
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.detail-grid dd {
+  margin: 0;
+}
+
+.ops-list {
+  display: grid;
+  gap: 0.5rem;
   list-style: none;
+  margin: 0;
   padding: 0;
 }
-.nav .brand {
-  font-weight: 800;
+
+.op-row {
+  align-items: center;
+  border: 1px solid var(--wrangnarok-mist, #e2e8f0);
+  border-radius: var(--wrangnarok-radius-md, 0.75rem);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  justify-content: space-between;
+  padding: 0.625rem 0.875rem;
 }
-.nav .disabled {
-  color: #666;
+
+.op-name {
+  font-weight: 600;
 }
-.nav .disabled a {
-  margin-left: 0.25rem;
+
+/* ---- Feedback states ---- */
+
+.status-line {
+  color: var(--wrangnarok-text-muted, #52606d);
+}
+
+.alert {
+  background: #fdecea;
+  border: 1px solid #f5c6c2;
+  border-radius: var(--wrangnarok-radius-sm, 0.5rem);
+  color: #b3261e;
+  padding: 0.625rem 0.875rem;
+}
+
+.empty-state {
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-style: italic;
+}
+
+.more-line {
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-size: 0.875rem;
+  margin-top: 0.75rem;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--wrangnarok-sunrise, #f45d0b);
+  outline-offset: 2px;
+}
+
+@media (max-width: 40rem) {
+  .page {
+    padding: 1rem;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .token-form button {
+    width: 100%;
+  }
 }
