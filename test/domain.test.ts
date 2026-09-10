@@ -3,11 +3,15 @@ import {
   boundedJson,
   canTransition,
   canTransitionOperation,
+  decodeHistoryCursor,
   digestSaga,
   echoSaga,
+  encodeHistoryCursor,
   executionId,
+  HISTORY_LIMIT_DEFAULT,
   ninjaSaga,
   parseDigestInput,
+  parseHistoryQuery,
   parseInput,
   parseSubmission,
   shapeDigest,
@@ -129,5 +133,36 @@ describe("MVP slice contracts", () => {
     const wide = shapeDigest({ organizationCount: 1, organizations: [{ id: 1, name: "🎃".repeat(500) }] });
     expect(new TextEncoder().encode(wide.message).length).toBeLessThanOrEqual(1024);
     expect(() => parseInput(wide)).not.toThrow();
+  });
+  it("parses history queries with an allowlisted key set", () => {
+    expect(parseHistoryQuery(new URLSearchParams())).toEqual({ limit: HISTORY_LIMIT_DEFAULT });
+    expect(parseHistoryQuery(new URLSearchParams("status=Failed"))).toEqual({ status: "Failed", limit: 20 });
+    expect(parseHistoryQuery(new URLSearchParams(`sagaId=${echoSaga.id}&limit=5`))).toEqual({
+      sagaId: echoSaga.id,
+      limit: 5,
+    });
+    const queryError = (query: string): string => {
+      try {
+        parseHistoryQuery(new URLSearchParams(query));
+      } catch (error) {
+        return (error as { code?: string }).code ?? "NO_CODE";
+      }
+      throw new Error(`expected parseHistoryQuery(${query}) to throw`);
+    };
+    expect(queryError("status=Bogus")).toBe("INVALID_STATUS");
+    expect(queryError("sagaId=nope")).toBe("INVALID_SAGA_ID");
+    for (const bad of ["0", "51", "abc", "2.5"]) {
+      expect(queryError(`limit=${bad}`)).toBe("INVALID_LIMIT");
+    }
+    expect(queryError("cursor=!!!")).toBe("INVALID_CURSOR");
+    expect(queryError("order=asc")).toBe("UNSUPPORTED_QUERY");
+  });
+  it("round-trips opaque history cursors without readable row content", () => {
+    const id = "a".repeat(64);
+    const cursor = encodeHistoryCursor({ createdAt: "2026-09-05T00:00:00.000Z", id });
+    expect(cursor).not.toContain("2026-09-05");
+    expect(decodeHistoryCursor(cursor)).toEqual({ createdAt: "2026-09-05T00:00:00.000Z", id });
+    expect(() => decodeHistoryCursor("not-a-cursor!!")).toThrow();
+    expect(() => decodeHistoryCursor(encodeHistoryCursor({ createdAt: "", id }))).toThrow();
   });
 });
