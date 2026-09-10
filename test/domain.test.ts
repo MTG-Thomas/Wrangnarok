@@ -45,6 +45,9 @@ describe("MVP slice contracts", () => {
     // checkpoints may retry, up to the ceiling. Unknown names fail closed.
     expect(stepRetryLimit("echo-http-v1")).toBe(0);
     expect(stepRetryLimit("ninja-list-orgs-v1")).toBe(0);
+    // SmokeWorkflow D1 probe steps are not idempotent checkpoints: fail closed to 0 (issue #54).
+    expect(stepRetryLimit("smoke-write-v1")).toBe(0);
+    expect(stepRetryLimit("smoke-verify-v1")).toBe(0);
     expect(stepRetryLimit("prepare-input-v1")).toBe(STEP_RETRY_CEILING);
     expect(stepRetryLimit("persist-success-v1")).toBe(STEP_RETRY_CEILING);
     expect(stepRetryLimit("persist-failure-v1")).toBe(STEP_RETRY_CEILING);

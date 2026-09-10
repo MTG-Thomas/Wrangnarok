@@ -311,7 +311,7 @@ export class SmokeWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams>
       const prepared = await step.do(
         "prepare-input-v1",
         {
-          retries: { limit: 2, delay: "1 second" },
+          retries: { limit: stepRetryLimit("prepare-input-v1"), delay: "1 second" },
           timeout: "10 seconds",
         },
         async () => {
@@ -336,7 +336,7 @@ export class SmokeWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams>
       const written = await step.do(
         "smoke-write-v1",
         {
-          retries: { limit: 2, delay: "1 second" },
+          retries: { limit: stepRetryLimit("smoke-write-v1"), delay: "1 second" },
           timeout: "10 seconds",
         },
         async () => {
@@ -362,7 +362,7 @@ export class SmokeWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams>
       const verified = await step.do(
         "smoke-verify-v1",
         {
-          retries: { limit: 2, delay: "1 second" },
+          retries: { limit: stepRetryLimit("smoke-verify-v1"), delay: "1 second" },
           timeout: "10 seconds",
         },
         async () => {
@@ -410,7 +410,7 @@ export class SmokeWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams>
       await step.do(
         "persist-success-v1",
         {
-          retries: { limit: 2, delay: "1 second" },
+          retries: { limit: stepRetryLimit("persist-success-v1"), delay: "1 second" },
           timeout: "10 seconds",
         },
         async () => {
@@ -447,7 +447,7 @@ export class SmokeWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams>
       await step.do(
         "persist-failure-v1",
         {
-          retries: { limit: 2, delay: "1 second" },
+          retries: { limit: stepRetryLimit("persist-failure-v1"), delay: "1 second" },
           timeout: "10 seconds",
         },
         () => failExecution(this.env.DB, id, safe),
