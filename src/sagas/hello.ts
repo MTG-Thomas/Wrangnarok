@@ -49,14 +49,15 @@ export const helloSagaDef = defineSaga<HelloResult>({
       const greeted = await step.do(
         "greet-v1",
         async (): Promise<{ ok: true; result: HelloResult } | { ok: false; error: SafeError }> => {
-        await beginOperation(ctx.db, id, "greet-v1", 1);
-        const result: HelloResult = {
-          greeting: `Hello, ${prepared.input.name}!`,
-          name: prepared.input.name,
-        };
-        await finishOperation(ctx.db, id, "greet-v1", result);
-        return { ok: true as const, result };
-      });
+          await beginOperation(ctx.db, id, "greet-v1", 1);
+          const result: HelloResult = {
+            greeting: `Hello, ${prepared.input.name}!`,
+            name: prepared.input.name,
+          };
+          await finishOperation(ctx.db, id, "greet-v1", result);
+          return { ok: true as const, result };
+        },
+      );
       if (!greeted.ok) {
         expectedFailure = greeted.error;
         throw new NonRetryableError(greeted.error.code);
