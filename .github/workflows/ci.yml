@@ -92,6 +92,11 @@ jobs:
       - name: D1 migrations (local)
         run: npm run db:migrate:local
 
+      # Temp-dir roundtrip of the file-based mailbox bridge (alias, send,
+      # read, reply correlation). No credentials, no network, no live store.
+      - name: Mailbox bridge selftest
+        run: npm run mailbox:selftest
+
       - name: Validate repository contract
         shell: bash
         run: |
