@@ -20,7 +20,18 @@ const BUNDLE_ID = "b10a7c2e-3f4d-4a5b-8c6d-7e8f9a0b1c2d";
 const ENDPOINT_V1 = "http://127.0.0.1:8788/echo";
 const ENDPOINT_V2 = "http://127.0.0.1:8789/echo";
 
-function manifest(version = "1.0.0", endpoint = ENDPOINT_V1) {
+interface MutableManifest {
+  manifestVersion: number;
+  bundle: { id: string; name: string; version: string };
+  sagas: { id: string; revision: string }[];
+  integrations: {
+    id: string;
+    connections: { org: string; config: Record<string, string>; secretsRequired: string[] }[];
+  }[];
+  config: { key: string; value: string }[];
+}
+
+function manifest(version = "1.0.0", endpoint = ENDPOINT_V1): MutableManifest {
   return {
     manifestVersion: 1,
     bundle: { id: BUNDLE_ID, name: "echo-starter", version },
@@ -178,7 +189,7 @@ it("rejects credentials embedded in the manifest", async () => {
     code: "CREDENTIAL_IN_MANIFEST",
   });
   const leakyConfig = manifest();
-  (leakyConfig.config as { key: string; value: string }[]).push({ key: "clientSecret", value: "hunter2" });
+  leakyConfig.config.push({ key: "clientSecret", value: "hunter2" });
   await expect(installBundle(bindings.DB, leakyConfig)).rejects.toMatchObject({
     status: 400,
     code: "CREDENTIAL_IN_MANIFEST",
