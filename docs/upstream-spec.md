@@ -150,6 +150,30 @@ Portable definitions declare needs (`SolutionConnectionSchema`); resolution fall
 
 **Wrangnarök implication (feeds Phase 3):** copy the 424-fail-loud-on-declared vs silent-None-otherwise split instead of a uniform `CONNECTION_NOT_CONFIGURED`; put refresh in one shared primitive with per-Connection status rather than per-Saga code; enforce subset-only scope overrides with an explicit, auditable fallback order before adopting any global cascade.
 
+### 16. Files/artifacts: policy-checked URLs, finalize-after-PUT, versioned deletes (upstream sweep, Sep 2026)
+
+All pins at vendor/upstream commit `0598020e` (2026-09-04).
+
+Uploads and downloads go through server-minted presigned S3 URLs, never through the API process as a pipe: `PUT`/`GET` URLs are generated only after per-action policy checks (`signed_get`, `signed_put`, `delete`) scoped by location, org scope, and path, with declared-solution-location requirements on writes (`api/src/routers/files.py:922-1029`). URL expiry is bounded 1 second to 7 days, default 600 (`files.py:165-184`); batch issuance caps at 100 with per-path allow/deny results (`files.py:187-205,1737-1747`).
+
+Reads tier across scopes with an existence-first match — the shared read-only fallback pattern, again (`files.py:942-986`). Writes require a declared location plus policy. A browser `PUT` is not trusted until the client finalizes it with asserted metadata (path, content-type, size, sha256: `SignedUploadCompleteRequest`, `files.py:208`).
+
+Deletes are policy-checked, mutation-locked, and optimistic-versioned: missing file or stale version answers `409` (`file_missing`, `version_conflict`) rather than silently succeeding (`files.py:1306-1365`). Retention is opt-in scheduled cleanup, default 90 days, range 1–3650 (`api/src/models/contracts/artifact_retention.py:6-21`; `api/src/routers/maintenance.py:60-122`). Size caps are per-surface, not global: logos 5 MB (`routers/branding.py:28`), avatars 2 MB (`routers/profile.py:27`), form file fields enforce per-field `max_size_mb` (`routers/forms.py:1937-1942`), chat caps attachments per message. Large objects stream via multipart without full-memory retention (`api/src/services/file_storage/s3_client.py:215-280`). File policies are CRUD-managed with pubsub invalidation (`files.py:881-919`); structural listing is admin-only (`files.py:218-228`); a policy access-test endpoint exists (`files.py:249-264`).
+
+**Wrangnarök implication (feeds Phase 4):** Artifacts stay Deferred, but the required shape is now pinned — R2 presigned URLs plus D1 metadata plus per-Operation authorization, with finalize-after-PUT, versioned deletes, and a retention policy as mandatory pieces. No Container or Worker-local filesystem persistence assumptions; per-surface byte caps stated explicitly rather than inherited.
+
+### 17. App SDK and forms: async invoke, owner-scoped reads, declared fields (upstream sweep, Sep 2026)
+
+All pins at vendor/upstream commit `0598020e` (2026-09-04).
+
+Invocation is async-only: `POST /api/workflows/execute` returns an execution ID plus status, never the result; terminal state arrives over WS frames while the result still needs `GET /api/executions/{id}` (`api/src/routers/workflows.py:734-744`; `app-sdk/use-workflow.ts:17-31`). There is no client deadline; the app polls at 2 s and retries only 404/408/429/5xx, fast-failing other 4xx (`use-workflow.ts:76-89,250-256`). The web client is a generated OpenAPI client whose retry discipline is method-shaped: `GET`/`PUT`/`DELETE` retry 502/503/504 with 250/750/2000 ms backoff, `POST`/`PATCH` never (`client/src/lib/api-client.ts:1-13,35-82`). Path refs (`path::fn`) scope to the calling install via app ID plus org scope (`app-sdk/use-workflow.ts:91-99,147-157`).
+
+Execution reads are owner-scoped for non-admins, with redaction of variables/context/memory/CPU and hidden `DEBUG`/`TRACEBACK` logs (`api/src/routers/executions.py:155-190,337-366,462-522`). The UI polls detail every 2 s while `Pending`/`Running` and tolerates brief 404s; cancel invalidates list plus detail (`hooks/useExecutions.ts:66-126,180-200`).
+
+Forms bind by name: each field name is a workflow parameter name, max 50 fields with unique names, from a closed type enum (`api/src/models/contracts/forms.py:68-70,134-146`; `api/src/models/enums.py:33-48`). The server validates submissions against the persisted field declarations — unknown names rejected, display-only types excluded — with per-type coercion and checks (email, ISO dates, option membership, pattern/min/max) and hard caps (200 keys, 256 KB) (`api/src/services/shared/form_runtime.py:32-157`; `contracts/forms.py:231-278`). Launch merges validated input over defaults, exposes inputs top-level plus `context.form_inputs`, and a deferred submit inserts a `SCHEDULED` row instead of running inline (`api/src/routers/forms.py:1354-1395`). Dynamic option providers and auto-fill targets are declared and capped (50 keys/64 KB option fetch); launch requires a random session-bound startup handle with a 30-minute TTL, and submitting without one is `422` (`form_runtime.py:178-231`). Public/embed forms need a fresh capability fingerprint and exact-match origins, no wildcards (`form_runtime.py:358-441`). Authz tiers run authenticated-minus-externals, everyone, role-based, private(owner), with unset-means-authenticated and unknown-means-deny; direct execution is allowlisted (admin, form/app grantee, integration-tied provider); form submit uses the form gate as authoritative, bypassing workflow RBAC anchored to the form org (`api/src/routers/forms.py:1322-1337`).
+
+**Wrangnarök implication (feeds Phase 4):** Dynamic forms stay Deferred, verdict confirmed — the surface (providers, startup handles, fingerprints, embed fencing) is orthogonal to the MVP. When forms arrive: field-names-bind-to-Saga-inputs, server-validates-against-persisted-declaration, submit-gate-as-authoritative, and embed fingerprinting are the invariants to keep. The method-shaped SDK retry discipline (`GET` retries, `POST` never) is worth copying into our client now. AI-assisted-development (Adopt as philosophy) and Git-based management (Adopt) verdicts stand confirmed with no new runtime contract.
+
 ## Candidate product invariants
 
 These are stronger than implementation preferences and should guide design reviews:
@@ -174,9 +198,9 @@ Priority order is intentional. Inspect first:
 
 Then, in roughly this order:
 
-- current integration SDK and OAuth implementation contracts;
-- files/artifacts;
-- app/web SDK and forms;
+- current integration SDK and OAuth implementation contracts (swept, §15);
+- files/artifacts (swept, §16);
+- app/web SDK and forms (swept, §17);
 - agent/MCP surface;
 - Solution manifests and packaging/version semantics;
 - claims/policies and authentication model;
