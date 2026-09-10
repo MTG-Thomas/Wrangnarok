@@ -96,6 +96,12 @@ Native V8 coverage is not supported under workerd: it needs `node:inspector`, wh
 runtime does not implement (Cloudflare documents this as a known Vitest-integration limitation).
 `coverage/lcov.info` is uploaded to Codecov from CI.
 
+Every metric (lines, functions, branches, statements) must stay at or above
+95%. The floor is enforced in `vitest.config.ts` (`coverage.thresholds`), so
+`npm run test:coverage` exits non-zero on a regression — locally and in the
+CI runtime gate. Raise coverage with the change, never lower the floor to
+make a red run green.
+
 ## CI direction
 
 Initial CI should require:
