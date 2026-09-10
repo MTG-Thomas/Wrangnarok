@@ -15,7 +15,7 @@ Status vocabulary: **Adopt** preserves the product capability; **Adapt** preserv
 | Explicit access boundary | **Adopt** | A caller must be authorized through the complete dependency chain | Worker auth + D1 policies/application checks |
 | Connection/config management | **Adopt** | **Connections** scoped/resolved through Organizations | D1 + secret mechanism |
 | OAuth management / refresh | **Defer** | Integration-specific auth contract with common lifecycle helpers | Worker + D1/secrets |
-| Secret management | **Investigate** | Determine a safe Cloudflare-native per-Organization secret model | Secrets / encrypted D1 or another native facility |
+| Secret management | **Adapt** | v0 Accepted (ADR 005, owner-approved 2026-09-10 per issue #78): deployment-level Secrets Store credentials plus org-scoped non-secret Connection mapping with scrub discipline retained; per-Organization envelope encryption is tripwire-gated, not v1 | Secrets Store + D1 |
 | Dynamic forms | **Defer** | Form field names bind to Saga inputs | Worker + static UI + D1 |
 | Tables / application storage | **Adapt** | JSON/document-like author storage over D1, if justified | D1 |
 | Row-level authorization/policies | **Defer / Investigate** | Preserve deny-by-absence and tenant-safe query semantics if Tables ship | Application policy layer over D1 |
@@ -150,6 +150,46 @@ Portable definitions declare needs (`SolutionConnectionSchema`); resolution fall
 
 **Wrangnarök implication (feeds Phase 3):** copy the 424-fail-loud-on-declared vs silent-None-otherwise split instead of a uniform `CONNECTION_NOT_CONFIGURED`; put refresh in one shared primitive with per-Connection status rather than per-Saga code; enforce subset-only scope overrides with an explicit, auditable fallback order before adopting any global cascade.
 
+### 16. Files/artifacts: policy-checked URLs, finalize-after-PUT, versioned deletes (upstream sweep, Sep 2026)
+
+All pins at vendor/upstream commit `0598020e` (2026-09-04).
+
+Uploads and downloads go through server-minted presigned S3 URLs, never through the API process as a pipe: `PUT`/`GET` URLs are generated only after per-action policy checks (`signed_get`, `signed_put`, `delete`) scoped by location, org scope, and path, with declared-solution-location requirements on writes (`api/src/routers/files.py:922-1029`). URL expiry is bounded 1 second to 7 days, default 600 (`files.py:165-184`); batch issuance caps at 100 with per-path allow/deny results (`files.py:187-205,1737-1747`).
+
+Reads tier across scopes with an existence-first match — the shared read-only fallback pattern, again (`files.py:942-986`). Writes require a declared location plus policy. A browser `PUT` is not trusted until the client finalizes it with asserted metadata (path, content-type, size, sha256: `SignedUploadCompleteRequest`, `files.py:208`).
+
+Deletes are policy-checked, mutation-locked, and optimistic-versioned: missing file or stale version answers `409` (`file_missing`, `version_conflict`) rather than silently succeeding (`files.py:1306-1365`). Retention is opt-in scheduled cleanup, default 90 days, range 1–3650 (`api/src/models/contracts/artifact_retention.py:6-21`; `api/src/routers/maintenance.py:60-122`). Size caps are per-surface, not global: logos 5 MB (`routers/branding.py:28`), avatars 2 MB (`routers/profile.py:27`), form file fields enforce per-field `max_size_mb` (`routers/forms.py:1937-1942`), chat caps attachments per message. Large objects stream via multipart without full-memory retention (`api/src/services/file_storage/s3_client.py:215-280`). File policies are CRUD-managed with pubsub invalidation (`files.py:881-919`); structural listing is admin-only (`files.py:218-228`); a policy access-test endpoint exists (`files.py:249-264`).
+
+**Wrangnarök implication (feeds Phase 4):** Artifacts stay Deferred, but the required shape is now pinned — R2 presigned URLs plus D1 metadata plus per-Operation authorization, with finalize-after-PUT, versioned deletes, and a retention policy as mandatory pieces. No Container or Worker-local filesystem persistence assumptions; per-surface byte caps stated explicitly rather than inherited.
+
+### 17. App SDK and forms: async invoke, owner-scoped reads, declared fields (upstream sweep, Sep 2026)
+
+All pins at vendor/upstream commit `0598020e` (2026-09-04).
+
+Invocation is async-only: `POST /api/workflows/execute` returns an execution ID plus status, never the result; terminal state arrives over WS frames while the result still needs `GET /api/executions/{id}` (`api/src/routers/workflows.py:734-744`; `app-sdk/use-workflow.ts:17-31`). There is no client deadline; the app polls at 2 s and retries only 404/408/429/5xx, fast-failing other 4xx (`use-workflow.ts:76-89,250-256`). The web client is a generated OpenAPI client whose retry discipline is method-shaped: `GET`/`PUT`/`DELETE` retry 502/503/504 with 250/750/2000 ms backoff, `POST`/`PATCH` never (`client/src/lib/api-client.ts:1-13,35-82`). Path refs (`path::fn`) scope to the calling install via app ID plus org scope (`app-sdk/use-workflow.ts:91-99,147-157`).
+
+Execution reads are owner-scoped for non-admins, with redaction of variables/context/memory/CPU and hidden `DEBUG`/`TRACEBACK` logs (`api/src/routers/executions.py:155-190,337-366,462-522`). The UI polls detail every 2 s while `Pending`/`Running` and tolerates brief 404s; cancel invalidates list plus detail (`hooks/useExecutions.ts:66-126,180-200`).
+
+Forms bind by name: each field name is a workflow parameter name, max 50 fields with unique names, from a closed type enum (`api/src/models/contracts/forms.py:68-70,134-146`; `api/src/models/enums.py:33-48`). The server validates submissions against the persisted field declarations — unknown names rejected, display-only types excluded — with per-type coercion and checks (email, ISO dates, option membership, pattern/min/max) and hard caps (200 keys, 256 KB) (`api/src/services/shared/form_runtime.py:32-157`; `contracts/forms.py:231-278`). Launch merges validated input over defaults, exposes inputs top-level plus `context.form_inputs`, and a deferred submit inserts a `SCHEDULED` row instead of running inline (`api/src/routers/forms.py:1354-1395`). Dynamic option providers and auto-fill targets are declared and capped (50 keys/64 KB option fetch); launch requires a random session-bound startup handle with a 30-minute TTL, and submitting without one is `422` (`form_runtime.py:178-231`). Public/embed forms need a fresh capability fingerprint and exact-match origins, no wildcards (`form_runtime.py:358-441`). Authz tiers run authenticated-minus-externals, everyone, role-based, private(owner), with unset-means-authenticated and unknown-means-deny; direct execution is allowlisted (admin, form/app grantee, integration-tied provider); form submit uses the form gate as authoritative, bypassing workflow RBAC anchored to the form org (`api/src/routers/forms.py:1322-1337`).
+
+**Wrangnarök implication (feeds Phase 4):** Dynamic forms stay Deferred, verdict confirmed — the surface (providers, startup handles, fingerprints, embed fencing) is orthogonal to the MVP. When forms arrive: field-names-bind-to-Saga-inputs, server-validates-against-persisted-declaration, submit-gate-as-authoritative, and embed fingerprinting are the invariants to keep. The method-shaped SDK retry discipline (`GET` retries, `POST` never) is worth copying into our client now. AI-assisted-development (Adopt as philosophy) and Git-based management (Adopt) verdicts stand confirmed with no new runtime contract.
+
+### 18. Agents and MCP: opt-in tools, gateway-vs-native, deny-by-default (upstream sweep, Sep 2026)
+
+All pins at vendor/upstream commit `0598020e` (2026-09-04).
+
+Tool identity mirrors our own saga contract: `@tool` is `@workflow(is_tool=True)` with identity-only decorator parameters (name, description, category, tags); parameters are inferred from the function signature while runtime config lives in the database (`api/src/sdk/decorators.py:15-27,128-142,165-213`). The registry lists only active `type='tool'` workflows, prefers `tool_description` over `description`, and normalizes names with a category prefix (or `wf_`) so workflow tools cannot shadow system tools (`api/src/services/tool_registry.py:23-53,91-117`).
+
+Resolution is explicit and deterministic: an agent carries its own tool list (opt-in, never ambient); system tools win conflicts; workflow tools resolve sorted by ID; name conflicts hide the loser with a warning (`api/src/services/execution/agent_helpers.py:107-189`). The caller's identity controls whether per-user-OAuth MCP tools enter the visible set.
+
+The MCP surface is FastMCP over Streamable HTTP only — no SSE, no stdio (`api/src/routers/mcp.py:5`; `api/src/mcp_server/server.py:1-16`) — with a dual endpoint over one registry: `/mcp` serves 7 stable gateway tools while `/mcp/{agent_id}` serves the native per-agent surface (`routers/mcp.py:10-11`; `mcp_server/middleware.py:1-43`). Workflow-backed tools enumerate the same ToolRegistry with stale-entry removal (`mcp_server/server.py:764-906`).
+
+Credentials split four ways: global templates without secrets, per-org connections carrying `encrypted_client_secret` plus an `oauth_token_id` reference, a tool catalog with verbatim input schemas, and per-user credentials with consent and granted scopes (`api/src/models/orm/external_mcp.py`). Token resolution funnels through one five-path table (user, service-chat, needs-reauth, service-autonomous, misconfigured) with a 5-minute freshness margin and single refresh-plus-persist (`api/src/mcp_client/auth_resolution.py:1-28,53-128,229-328`); dispatch retries once on 401/403 markers and caps envelopes at 250 KB (`dispatch.py:17-22,157-303`).
+
+Authorization fails closed throughout: list filters return nothing unauthenticated and only gateway names unscoped; call filters deny hidden and out-of-agent tools; org scoping lives in the database with deny-by-default agent grants; the per-workflow gate reuses the rule that listable equals executable (`mcp_server/middleware.py:45-233`; `tool_access.py:62-110,183-210,353-472`). External tool names are namespaced (`mcp__<connectionUUID>__<tool>`, UUID-validated on parse) with `_workflow` suffixing on native collisions (`api/src/services/execution/agent_helpers.py:31-43`; `mcp_server/server.py:807-843`).
+
+**Wrangnarök implication (feeds Phase 6):** Agents/tool workflows stay Deferred, verdict confirmed. When they arrive, the invariants to keep are: opt-in tool metadata on suitable Sagas with normal Sagas remaining distinct; a gateway-vs-native split; normalized namespaced tool names with description priority; caller-scoped resolution; server-side permissions authoritative even when an agent can discover a tool; hidden-tool denial. No MCP server, agent runtime, or tool-execution path until Phase 6 earns them.
+
 ## Candidate product invariants
 
 These are stronger than implementation preferences and should guide design reviews:
@@ -174,10 +214,10 @@ Priority order is intentional. Inspect first:
 
 Then, in roughly this order:
 
-- current integration SDK and OAuth implementation contracts;
-- files/artifacts;
-- app/web SDK and forms;
-- agent/MCP surface;
+- current integration SDK and OAuth implementation contracts (swept, §15);
+- files/artifacts (swept, §16);
+- app/web SDK and forms (swept, §17);
+- agent/MCP surface (swept, §18);
 - Solution manifests and packaging/version semantics;
 - claims/policies and authentication model;
 - API surface and execution observability;

@@ -5,6 +5,7 @@ import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { executionId, ninjaSaga } from "../src/domain";
 import migration from "../migrations/0001_initial.sql?raw";
+import migration3 from "../migrations/0003_usage_blocks.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 const bindings = env as unknown as Bindings;
 const principal = { orgId: "00000000-0000-4000-8000-000000000001", userId: "00000000-0000-4000-8000-000000000002" };
@@ -50,6 +51,9 @@ function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus 
 beforeEach(async () => {
   // Real local D1 SQL statements, not an in-memory repository double.
   await bindings.DB.exec(migration);
+  // usage_blocks (0003) is audited below: persisted usage must never carry
+  // secrets, tokens, or payload bodies either.
+  await bindings.DB.exec(migration3);
   await bindings.DB.exec(seed);
   // The committed seed carries no real endpoints (override pattern); each
   // suite owns its fixture Connection rows. Dummy host: never contacted
@@ -99,16 +103,37 @@ it("lists NinjaOne organizations end to end and reuses a submission", async () =
   const replay = await worker.fetch(request("/api/executions", "POST"), bindings);
   expect(replay.status).toBe(200);
   expect(await replay.json()).toMatchObject({ executionId: id, replayed: true });
-  // Secrets and tokens never persist: audit every D1 row for both sentinels.
+  // Secrets and tokens never persist: audit every D1 row for both sentinels,
+  // including the persisted usage block.
   const tables = await bindings.DB.batch([
     bindings.DB.prepare("SELECT input_json,result_json,error_json FROM executions"),
     bindings.DB.prepare("SELECT result_json,error_json FROM operations"),
     bindings.DB.prepare("SELECT endpoint FROM connections"),
+    bindings.DB.prepare("SELECT usage_json FROM usage_blocks"),
   ]);
   const dumped = JSON.stringify(tables.map((result) => result.results));
   expect(dumped).not.toContain(SECRET_SENTINEL);
   expect(dumped).not.toContain(TOKEN_SENTINEL);
   expect(dumped).toContain("ninja-in-test.invalid");
+});
+it("exposes no secret material on discovery, history, or detail surfaces", async () => {
+  // v0 acceptance: the declared secretFields (clientSecret) plus transient
+  // tokens must be absent from every browser-facing surface, not just D1.
+  const id = await executionId(principal, key);
+  await using instance = await introspectWorkflowInstance(bindings.NINJA_WORKFLOW, id);
+  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  await instance.waitForStatus("complete");
+  const bodies: string[] = [];
+  for (const path of ["/api/sagas", "/api/executions", `/api/executions/${id}`]) {
+    const response = await worker.fetch(request(path), bindings);
+    expect(response.status).toBe(200);
+    bodies.push(await response.text());
+  }
+  for (const text of bodies) {
+    expect(text).not.toContain(SECRET_SENTINEL);
+    expect(text).not.toContain(TOKEN_SENTINEL);
+  }
+  expect(bodies.join("")).toContain("ninjaone-orgs");
 });
 it("persists NINJA_UNAUTHORIZED without copying vendor bodies", async () => {
   mockNinja({ error: "invalid_client" }, [], 401, 200);
@@ -120,6 +145,8 @@ it("persists NINJA_UNAUTHORIZED without copying vendor bodies", async () => {
   const text = await response.text();
   expect(JSON.parse(text)).toMatchObject({ status: "Failed", error: { code: "NINJA_UNAUTHORIZED" } });
   expect(text).not.toContain("invalid_client");
+  expect(text).not.toContain(SECRET_SENTINEL);
+  expect(text).not.toContain(TOKEN_SENTINEL);
 });
 it("surfaces a throttled token request as NINJA_RATE_LIMITED without calling orgs", async () => {
   // Acceptance gap G1 (issue #76): the token call had no distinct 429 code

@@ -1,8 +1,8 @@
 # ADR 005: Per-Organization Secret Storage
 
-- **Status:** Proposed — not yet approved for production use
-- **Date:** 2026-09-09
-- **Extends:** ADR 003 (Integrations and Connections), `docs/upstream-spec.md` Secret management row
+- **Status:** Accepted — v0, owner-approved 2026-09-10 per issue #78
+- **Date:** 2026-09-09 (v0 redraft 2026-09-10)
+- **Extends:** ADR 003 (Integrations and Connections; now Implemented per #75), `docs/upstream-spec.md` Secret management row
 
 ## Context
 
@@ -13,123 +13,128 @@ Upstream Bifrost binds Integrations to per-organization OAuth/config state.
 Wrangnarök must provide the same product boundary Cloudflare-natively,
 starting from Worker + Workflows + D1 only (AGENTS.md constraint 7).
 
-## Why Worker secrets + Secrets Store alone are insufficient
+Operator experience since the Rung-1 NinjaOne integration reshapes the
+problem: MSP-platform credentials are effectively global with vendor-side
+multitenancy — one M2M app credential sees every tenant organization
+through the vendor API. Per-Organization secrets have no demonstrated need
+(AGENTS.md constraint 7), so v0 does not build per-Organization secret
+storage. The envelope scheme is retained as a tripwire-gated upgrade, not v1.
 
-Secrets Store is real and worth using — just not for per-Organization
-credentials. Verified against current Cloudflare docs (open beta, Aug 2026):
+## Decision v0 (accepted 2026-09-10 per issue #78)
 
-- One store per account, **100 secrets max**, each a ≤1024-byte string,
-  write-only after creation (only the bound service can `get()`).
-- Workers bindings are **per-secret and statically declared** (`binding` +
-  `store_id` + `secret_name` in wrangler config). Each new credential needs
-  a config entry plus a redeploy by a Secrets Store Deployer.
-- Local dev cannot touch production secrets (separate local secrets).
+Deployment-level secrets plus org-scoped non-secret Connection mapping:
 
-That shape fails per-Organization credentials structurally, not just
-numerically:
+- Integration credential sets live at the **deployment level** in **Secrets
+  Store** (one entry per credential, per environment; local-only values for
+  `dev`). This matches the current NinjaOne posture (`NINJA_CLIENT_ID` /
+  `NINJA_CLIENT_SECRET` from env) and formalizes it: the credential belongs
+  to the deployment's vendor relationship, not to any Organization.
+- Connection rows stay **org-scoped and non-secret**: `(org_id,
+  integration_id)` → endpoint plus non-secret config
+  (`UNIQUE(org_id, integration_id)` already in migration 0001). No secret
+  or token columns, plaintext or otherwise.
+- Each `IntegrationDefinition` declares `secretFields` (already in
+  `src/integrations/index.ts`: `echo` none, `ninjaone` `clientSecret`).
+  Declarations drive the scrub/redaction discipline below; secret material
+  is resolved transiently at the Integration Action call boundary and never
+  serialized through discovery, history, or Execution results.
+- No OAuth token persistence yet: client-credentials tokens are fetched per
+  execution and dropped (the degenerate inline refresh that works today).
+  Cached tokens are secret storage and wait for the tripwire.
 
-1. **Worker secrets are deployment-bound, not Organization-bound.** One value per
-   deployment/environment. They cannot express N Organizations × M Connections,
-   cannot be CRUD-managed per Organization via the application API, and change
-   only via redeploy with broad deploy privileges.
-2. **Secrets Store cardinality and lifecycle are account-scoped.** Even if the
-   100-secret beta cap rose tomorrow, every Connection credential would still
-   need a static binding entry plus a redeploy to onboard one Organization,
-   with no Organization dimension to scope lookups. Application-level
-   Organization isolation still has to be built on top — at which point the
-   envelope scheme has been rebuilt with extra steps and a ceiling.
-3. **D1 encryption at rest is not application secret design.** D1 is
-   encrypted at rest, but a plaintext `api_token TEXT` column would still
-   expose credentials to any D1 reader, backup, log, or ExecutionHistory query.
+## Scrub and redaction discipline (retained in full)
 
-## Decision (proposed direction, not yet accepted)
+Unchanged from the prior draft and non-negotiable in v0:
 
-Use application-level envelope encryption with a deployment master key:
+- Decrypted material exists only transiently, server-side, inside
+  Worker/Workflow execution at the Action call boundary.
+- No secrets in D1 rows, ExecutionHistory, Execution inputs/outputs,
+  Workflow step payloads, Worker logs, error messages, or smoke-test output.
+- No API — admin debug included — echoes decrypted Connection secrets.
+- Workerd tests audit every persisted surface with secret sentinels
+  (precedent: `test/ninjaone.test.ts`, `test/ninja-echo-digest.test.ts`).
 
-- One **master key (KEK)** per environment (`dev`, `production`), stored
-  in **Secrets Store** (local-only secret for `dev`; never remote/production
-  values in local config). Never in Git, D1, ExecutionHistory,
-  logs, or client responses. `dev` KEK ≠ `production` KEK.
-- Per-Connection secrets encrypted inside the Worker with Web Crypto
-  **AES-GCM-256 + random 96-bit nonce**. Envelope form: random per-Connection
-  data key (DEK) encrypts the payload; DEK is wrapped by the current KEK.
-- D1 `connections` row stores only: `ciphertext BLOB`, `nonce BLOB`,
-  `wrapped_dek BLOB`, `key_version INTEGER`, `algorithm TEXT` (e.g.
-  `AES-GCM-256-envelope-v1`), plus non-secret config/metadata.
-- Decryption happens only transiently, server-side, inside Worker/Workflow
-  execution at the Integration Action call boundary. Decrypted material is never
-  persisted, never returned by APIs, and never written to ExecutionHistory, Execution
-  results, Workflow state, or logs.
-- Integration schema declares which fields are secret; `ctx.integrations.*` injects
-  decrypted values only to the Action implementation.
+## Tripwire: envelope encryption as a gated upgrade
 
-## Key rotation / versioning
+The application-level envelope scheme (Web Crypto AES-GCM-256, per-Connection
+DEK wrapped by a per-environment KEK in Secrets Store, `ciphertext` /
+`nonce` / `wrapped_dek` / `key_version` / `algorithm` beside non-secret
+config, decrypt-only-transient) is fully specified in the prior draft and
+preserved as the upgrade design — it is not built until the tripwire fires.
 
-- `key_version` selects the KEK that wrapped the DEK. Encrypt always with
-  latest; decrypt with the matching historical version.
-- Retain at most the previous KEK version(s) as decrypt-only Secrets Store
-  versions during rotation, then destroy per runbook.
-- Rotation = add new KEK version → re-wrap DEKs (or re-encrypt) via staged
-  migration → verify dev smoke → destroy old version. Same forward-compatible
-  discipline as ADR 004 D1 migrations.
-- Format string (`algorithm`) must be versioned before declaring stability;
-  v1 is experimental.
+The tripwire fires on the **first Integration with genuinely per-tenant
+secrets**: a vendor auth model with no global-with-multitenancy option, or
+a compliance demand for per-tenant credential isolation. Pre-authorized now:
+firing the tripwire may introduce a **separate dependency** (crypto helper,
+KMS-adjacent library) if that is what the envelope takes — no second
+justification round for the dependency itself, only for the firing.
 
-## What the MVP slice must NOT do
+Firing the tripwire means: an ADR amendment recording which Integration
+fired it and why no global credential exists; the envelope implemented per
+the retained spec (encrypt-with-latest, decrypt-with-version, staged
+re-wrap rotation, dev-smoke-then-destroy drill); and D1 backups understood
+to carry ciphertext thereafter (unrecoverable without the matching KEK).
 
-- No plaintext credential/token columns in D1.
-- No secrets in ExecutionHistory rows, Execution Operation inputs/outputs, Workflow
-  step payloads, Worker logs, error messages, or smoke-test output.
-- No API that echoes decrypted Connection secrets (admin debug included).
-- No OAuth token persistence yet (deferred per ADR 003); demo Integration uses a
-  mock endpoint with non-secret config only.
-- No per-Organization fan-out of Worker secrets or Secrets Store entries.
+## Why Secrets Store alone is insufficient for per-org secrets (tripwire rationale)
 
-## Backup / restore implication
+This is why the envelope — not more deployment secrets — is the upgrade
+when the tripwire fires. Secrets Store is real and correct for v0's
+platform-level keys, but structurally wrong for per-Organization
+credentials: one store per account capped at 100 secrets, per-secret
+statically declared bindings, and every new credential needing a config
+entry plus a redeploy by a Secrets Store Deployer. Onboarding one
+Organization must never require a redeploy, and Organization isolation
+would still have to be built on top — at which point the envelope has been
+rebuilt with extra steps and a ceiling. D1 encryption at rest, likewise,
+does not make plaintext credential columns acceptable application design.
 
-- D1 backups contain ciphertext + nonces + wrapped DEKs only. They are
-  unrecoverable without the matching KEK version.
-- KEK backup/restore is separate from D1, environment-scoped, and access-logged.
-  Loss of all KEK versions for an environment = loss of all Connection secrets
-  in that environment (by design); recovery is re-onboarding Connections,
-  not decrypting backups.
-- Restores must preserve `key_version` → KEK mapping; never mix `dev` KEK
-  with `production` ciphertext.
+## v0 rotation, backup, restore
 
-## Production gate (explicit)
+- Rotation is Secrets Store rotation (version, verify, destroy) with a
+  Worker restart/redeploy; no re-wrap migration, because D1 holds no secrets.
+- D1 backups are secret-free by construction. KEK-style loss semantics do
+  not apply in v0; losing a deployment secret means re-onboarding one
+  vendor relationship, not N Organizations.
 
-This ADR is **not yet approved for production**. Before any Phase 3
-Connection-with-secrets ships, required review:
+## v0 acceptance (accepted 2026-09-10 per issue #78; unlocks 3.0 implementation)
 
-1. Threat model: Organization isolation, admin vs ordinary caller, backup/log attacker.
-2. Crypto + code review of Web Crypto usage, nonce generation, envelope format.
-3. Organization-isolation and redaction tests in workerd (allowed/denied callers,
-   ExecutionHistory/result/log audit with secret sentinels).
-4. Rotation drill on `dev` (add → re-wrap → verify `system.smoke` → destroy).
-5. Superseding ADR (or 005 v2 Accepted) + updated `docs/upstream-spec.md` row.
+Owner stamp per issue #78. Entry basis: #75 closed (ADR 003 Implemented),
+KEK provisioning dropped under v0, scrub/redaction discipline retained with
+`secretFields` coverage tests. Envelope stays Proposed/tripwire-gated; cached
+tokens and refresh stay 3.1-gated with no D1 schema for secrets until the
+tripwire fires. Milestone 3.0 exit (scrub/redaction matrix green,
+deployment-secret rotation runbook exercised on dev) is tracked by the
+milestone, not by this stamp. The superseded items below are kept as the
+acceptance record:
 
-## Consequences
+1. Threat model: deployment-secret compromise blast radius, admin vs
+   ordinary caller on Connection mapping writes, backup/log attacker.
+2. Scrub/redaction tests green in workerd for every Integration with a
+   non-empty `secretFields` list (allowed/denied callers, history/result/log
+   audit with sentinels).
+3. `secretFields` coverage: every Integration declares; every declared
+   field is excluded from discovery/history/result serialization by test.
+4. Acceptance stamp (this note, v0 Accepted) + updated
+   `docs/upstream-spec.md` secret-management row.
 
-- Integration code stays portable; Connection secrets stay Organization-scoped.
-- Adds crypto + rotation complexity — earned only when real credentials arrive.
-- First MVP slice stays unblocked without secret storage.
-
-## Alternatives considered (ecosystem survey, Sep 2026)
+## Alternatives considered (ecosystem survey, Sep 2026; verdicts stand)
 
 | Pattern | Verdict |
 | --- | --- |
-| Few static secrets (Worker secrets / Secrets Store) | Correct for platform-level keys (including our KEK). Fails per-Organization credentials on cardinality (100/account), static per-secret bindings, and redeploy-per-tenant onboarding. |
-| Per-Organization D1 databases (Cloudflare's own SaaS guidance: DB/KV/R2 per customer) | **Documented upgrade path, not v1 (see below).** Matches Cloudflare's "complete isolation" story and stays on the earned D1 primitive. |
-| Tenant-scoped Durable Objects as vaults (one DO per org, secrets in DO SQLite storage) | Strongest isolation story, but a new primitive (must be earned), paid-metered, and still needs app-level routing correctness — a request routed to the wrong org's DO fails identically. Requires its own ADR if ever demanded. |
+| Few static secrets (Worker secrets / Secrets Store) | **Adopted for v0 platform-level keys** (including any future KEK). Fails per-Organization credentials on cardinality (100/account), static per-secret bindings, and redeploy-per-tenant onboarding — which is why it is v0, not the tripwire answer. |
+| Application-level envelope encryption | **Tripwire-gated upgrade** (see above), not v1. |
+| Per-Organization D1 databases (Cloudflare's own SaaS guidance: DB/KV/R2 per customer) | **Documented upgrade path, not v0.** Matches Cloudflare's "complete isolation" story and stays on the earned D1 primitive. |
+| Tenant-scoped Durable Objects as vaults (one DO per org, secrets in DO SQLite storage) | Strongest isolation story, but a new primitive (must be earned), paid-metered, and still needs app-level routing correctness. Requires its own ADR if ever demanded. |
 | Workers for Platforms per-tenant bindings | Rejected twice over: paid-only dispatch namespaces (breaks the Free-tier constraint) and equally static bindings. |
-| External KMS (call out to AWS/GCP/Vault) | Rejected: vendor dependency, latency, and cost against the Cloudflare-native experiment constraint. Same trust-domain question, answered worse. |
+| External KMS (call out to AWS/GCP/Vault) | Rejected: vendor dependency, latency, and cost against the Cloudflare-native experiment constraint. |
 
 ## Storage topology: single D1 now, per-Organization D1 later
 
-v1 is a **single D1** with `org_id` columns and envelope ciphertext: unbounded
-Organizations on Free, static bindings, one migration stream (ADR 004),
-isolation by deny-by-absence `WHERE` clauses proven with allowed/denied caller
-tests. Per-Organization D1 databases are the Phase 3+ upgrade, gated on all of:
+v1 is a **single D1** with `org_id` columns and (under v0) zero secret
+columns: unbounded Organizations on Free, static bindings, one migration
+stream (ADR 004), isolation by deny-by-absence `WHERE` clauses proven with
+allowed/denied caller tests. Per-Organization D1 databases are the Phase 3+
+upgrade, gated on all of:
 
 1. A Paid plan (Free caps at **10 databases per account** — per-org D1 as v1
    would cap the product at 10 Organizations and violate the Free-tier
