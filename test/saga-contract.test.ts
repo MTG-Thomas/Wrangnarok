@@ -15,8 +15,10 @@ import type { SagaEventContext, SagaStep } from "../src/saga";
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "../src/sagas";
 import {
   BODY_LIMIT,
+  digestSaga,
   echoSaga,
   ninjaSaga,
+  parseDigestInput,
   parseInput,
   parseNinjaOrgsInput,
   parseSmokeInput,
@@ -32,7 +34,7 @@ const CHURN_MESSAGE =
 
 describe("Saga authoring contract (issue #57)", () => {
   it("keeps all I/O and nondeterminism inside step.do() for every registered Saga", () => {
-    expect(SAGA_DEFINITIONS).toHaveLength(3);
+    expect(SAGA_DEFINITIONS).toHaveLength(4);
     for (const def of SAGA_DEFINITIONS) {
       expect(() => assertDeterministicRun(def.name, def.run)).not.toThrow();
     }
@@ -100,6 +102,10 @@ describe("Saga authoring contract (issue #57)", () => {
       "ninjaone-orgs": {
         input: {},
         output: { organizationCount: 1, organizations: [{ id: 7, name: "Acme" }] },
+      },
+      "ninjaone-echo-digest": {
+        input: {},
+        output: { organizationCount: 1, echoed: { message: "NinjaOne organizations (1 total): Acme" } },
       },
       "system.smoke": {
         input: {},
@@ -169,10 +175,11 @@ describe("Saga authoring contract (issue #57)", () => {
 
   it("keeps definitions, domain constants, catalog, and manifest in agreement", () => {
     const byName = new Map(SAGA_DEFINITIONS.map((def) => [def.name, def]));
-    expect([...byName.keys()].sort()).toEqual(["echo", "ninjaone-orgs", "system.smoke"]);
+    expect([...byName.keys()].sort()).toEqual(["echo", "ninjaone-echo-digest", "ninjaone-orgs", "system.smoke"]);
     const expected = [
       { stable: echoSaga, parse: parseInput },
       { stable: ninjaSaga, parse: parseNinjaOrgsInput },
+      { stable: digestSaga, parse: parseDigestInput },
       { stable: smokeSaga, parse: parseSmokeInput },
     ];
     for (const { stable, parse } of expected) {

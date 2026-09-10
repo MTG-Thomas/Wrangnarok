@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   boundedJson,
   canTransition,
+  digestSaga,
   echoSaga,
   executionId,
   ninjaSaga,
+  parseDigestInput,
   parseInput,
   parseSubmission,
+  shapeDigest,
   STEP_RETRY_CEILING,
   stepRetryLimit,
 } from "../src/domain";
@@ -23,6 +26,12 @@ describe("MVP slice contracts", () => {
       saga: expect.objectContaining({ id: ninjaSaga.id }),
       input: {},
     });
+    expect(digestSaga.id).toBe("5f3bf136-ba9e-4529-8842-6786270ee80d");
+    expect(parseSubmission({ sagaId: digestSaga.id, input: {} })).toEqual({
+      saga: expect.objectContaining({ id: digestSaga.id }),
+      input: {},
+    });
+    expect(() => parseDigestInput({ message: "x" })).toThrow();
   });
   it("rejects submitted Organization overrides and unexpected input", () => {
     expect(() => parseSubmission({ sagaId: echoSaga.id, orgId: "other", input: { message: "x" } })).toThrow();
@@ -45,6 +54,7 @@ describe("MVP slice contracts", () => {
     // checkpoints may retry, up to the ceiling. Unknown names fail closed.
     expect(stepRetryLimit("echo-http-v1")).toBe(0);
     expect(stepRetryLimit("ninja-list-orgs-v1")).toBe(0);
+    expect(stepRetryLimit("echo-digest-v1")).toBe(0);
     // SmokeWorkflow D1 probe steps are not idempotent checkpoints: fail closed to 0 (issue #54).
     expect(stepRetryLimit("smoke-write-v1")).toBe(0);
     expect(stepRetryLimit("smoke-verify-v1")).toBe(0);
@@ -79,5 +89,28 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Pending", "Succeeded")).toBe(false);
     expect(canTransition("Pending", "Cancelled")).toBe(false);
     expect(canTransition("Cancelling", "Succeeded")).toBe(false);
+  });
+  it("shapes a bounded echoable digest from a NinjaOne census", () => {
+    expect(
+      shapeDigest({
+        organizationCount: 2,
+        organizations: [
+          { id: 1, name: "Acme" },
+          { id: 2, name: "Globex" },
+        ],
+      }),
+    ).toEqual({ message: "NinjaOne organizations (2 total): Acme, Globex" });
+    expect(shapeDigest({ organizationCount: 0, organizations: [] })).toEqual({
+      message: "NinjaOne organizations (0 total): none",
+    });
+    // Unbounded vendor lists never leak into the echo input bound: names cap
+    // at 5 and the message truncates to 1024 UTF-8 bytes on a boundary.
+    const many = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, name: `Org ${index + 1}` }));
+    const digested = shapeDigest({ organizationCount: 100, organizations: many });
+    expect(new TextEncoder().encode(digested.message).length).toBeLessThanOrEqual(1024);
+    expect(digested.message).toContain("(100 total)");
+    const wide = shapeDigest({ organizationCount: 1, organizations: [{ id: 1, name: "🎃".repeat(500) }] });
+    expect(new TextEncoder().encode(wide.message).length).toBeLessThanOrEqual(1024);
+    expect(() => parseInput(wide)).not.toThrow();
   });
 });

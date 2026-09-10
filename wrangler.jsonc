@@ -41,6 +41,11 @@
       "class_name": "NinjaOrgsWorkflow",
     },
     {
+      "binding": "DIGEST_WORKFLOW",
+      "name": "wrangnarok-ninjaone-echo-digest-v1",
+      "class_name": "NinjaEchoDigestWorkflow",
+    },
+    {
       "binding": "SMOKE_WORKFLOW",
       "name": "wrangnarok-smoke-v1",
       "class_name": "SmokeWorkflow",
@@ -80,6 +85,11 @@
           "binding": "NINJA_WORKFLOW",
           "name": "wrangnarok-ninjaone-orgs-v1-dev",
           "class_name": "NinjaOrgsWorkflow",
+        },
+        {
+          "binding": "DIGEST_WORKFLOW",
+          "name": "wrangnarok-ninjaone-echo-digest-v1-dev",
+          "class_name": "NinjaEchoDigestWorkflow",
         },
         {
           "binding": "SMOKE_WORKFLOW",
