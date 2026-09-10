@@ -13,6 +13,14 @@ export const ninjaSaga = Object.freeze({
   description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
 });
 export const NINJA_INTEGRATION_ID = "0606e237-137b-4629-8346-85468e1c2df6";
+// Phase 2 multi-Integration Saga: NinjaOne census digested through the echo
+// Integration. Stable identity per ADR 002 (UUID + revision).
+export const digestSaga = Object.freeze({
+  id: "5f3bf136-ba9e-4529-8842-6786270ee80d",
+  name: "ninjaone-echo-digest",
+  revision: "ninjaone-echo-digest-v1",
+  description: "Phase 2: NinjaOne organization census digested through the echo Integration",
+});
 // system.smoke is loopback-free: D1-only Operations + transform steps, zero
 // external vendor dependency. Stable identity per ADR 002 (UUID + revision).
 export const smokeSaga = Object.freeze({
@@ -100,6 +108,14 @@ export interface NinjaOrgsResult {
 }
 export const NINJA_ORGS_MAX = 25;
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
+export interface DigestInput {
+  /* empty: census is read live, digest shaped in-Saga */
+}
+export interface DigestResult {
+  organizationCount: number;
+  echoed: EchoInput;
+}
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- input-less Saga: no parameters by design
 export interface SmokeInput {
   /* empty: loopback-free census, no parameters */
 }
@@ -154,6 +170,28 @@ export function parseSmokeInput(value: unknown): SmokeInput {
   }
   return {};
 }
+export function parseDigestInput(value: unknown): DigestInput {
+  if (!object(value) || Object.keys(value).length !== 0) {
+    throw new Fault(400, "INVALID_INPUT", "The ninjaone-echo-digest Saga takes an empty input object.");
+  }
+  return {};
+}
+// Digest census names shown in the echoed summary. The persisted echo output
+// stays under the echo input bound (1024 UTF-8 bytes) via truncation below,
+// so the digest never inherits an unbounded vendor list.
+export const DIGEST_MAX_NAMES = 5;
+/** Pure transform: shape a NinjaOne census into an echoable digest message. */
+export function shapeDigest(census: NinjaOrgsResult): EchoInput {
+  const names = census.organizations.slice(0, DIGEST_MAX_NAMES).map((org) => org.name);
+  let message = `NinjaOne organizations (${census.organizationCount} total): ${names.join(", ") || "none"}`;
+  const bytes = new TextEncoder().encode(message);
+  if (bytes.length > 1024) {
+    let end = 1024;
+    while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+    message = new TextDecoder().decode(bytes.slice(0, end));
+  }
+  return parseInput({ message });
+}
 export interface SagaDef {
   readonly id: string;
   readonly name: string;
@@ -164,6 +202,7 @@ export interface SagaDef {
 const catalog: SagaDef[] = [
   { ...echoSaga, parse: parseInput },
   { ...ninjaSaga, parse: parseNinjaOrgsInput },
+  { ...digestSaga, parse: parseDigestInput },
   { ...smokeSaga, parse: parseSmokeInput },
 ];
 export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {

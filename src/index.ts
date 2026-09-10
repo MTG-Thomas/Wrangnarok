@@ -5,7 +5,7 @@ import { boundedJson, canTransition, Fault, parseKey, parseSubmission } from "./
 import { SAGA_CATALOG } from "./sagas";
 import { cancelExecution, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import type { ExecutionRow } from "./executions";
-export { EchoWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
+export { EchoWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
   return Response.json(body, {

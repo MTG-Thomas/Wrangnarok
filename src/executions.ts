@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-import { Fault, executionId, ninjaSaga, RECOVERY_WINDOW_MS, smokeSaga } from "./domain";
+import { digestSaga, Fault, executionId, ninjaSaga, RECOVERY_WINDOW_MS, smokeSaga } from "./domain";
 import type { ExecutionStatus, Principal, SafeError, SagaDef } from "./domain";
 import type { OrgCtx } from "./saga";
 import type { Bindings } from "./bindings";
@@ -30,6 +30,7 @@ export async function visibleExecution(db: D1Database, id: string, caller: Princ
 /** One native Workflow binding per Saga. Never inferred from the request. */
 export function workflowForSaga(env: Bindings, sagaId: string): Workflow<{ executionId: string }> {
   if (sagaId === ninjaSaga.id) return env.NINJA_WORKFLOW;
+  if (sagaId === digestSaga.id) return env.DIGEST_WORKFLOW;
   if (sagaId === smokeSaga.id) return env.SMOKE_WORKFLOW;
   return env.ECHO_WORKFLOW;
 }
