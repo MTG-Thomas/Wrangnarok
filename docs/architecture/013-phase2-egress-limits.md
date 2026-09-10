@@ -38,7 +38,7 @@ connectivity — each Integration re-states its limits here.
 | Redirects | `manual` on both calls; 3xx surfaces `NINJA_AUTH_FAILED` / `NINJA_VENDOR_FAILED`. |
 | Timeout | `NINJA_TIMEOUT_MS` (5000ms) on both calls, abort plus late-resolve — both surface `NINJA_VENDOR_TIMEOUT` (`src/domain.ts`). |
 | Byte caps | Token response under shared 4096-byte `boundedJson`; orgs transport cap 262144 bytes; persisted shape is count plus max 25 orgs (`NINJA_ORGS_MAX`) under the D1 result CHECK. |
-| Error codes | 401 `NINJA_UNAUTHORIZED`, 429 `NINJA_RATE_LIMITED` (orgs call; a throttled token call surfaces `NINJA_AUTH_FAILED` — follow-up, see ADR-012), 5xx `NINJA_VENDOR_FAILED`, non-array `NINJA_BAD_RESPONSE`. No automatic retry on any of them. |
+| Error codes | 401 `NINJA_UNAUTHORIZED`, 429 `NINJA_RATE_LIMITED` (both calls), 5xx `NINJA_VENDOR_FAILED`, non-array `NINJA_BAD_RESPONSE`. No automatic retry on any of them. |
 | Retries | 0 — `stepRetryLimit("ninja-list-orgs-v1")`. |
 | Concurrency | Serial steps; fanout cap 8 per ADR 001 (unused here). |
 | Secrets | Client ID/secret from Worker env only, transient inside the Action; presence enforced behind the Action boundary (`NINJA_NOT_CONFIGURED`); tokens fetched per execution, never cached, never persisted (audited in `test/ninjaone.test.ts` and `test/ninja-echo-digest.test.ts`). |
