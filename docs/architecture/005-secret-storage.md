@@ -1,6 +1,6 @@
 # ADR 005: Per-Organization Secret Storage
 
-- **Status:** Proposed — v0 redraft per wrang-main decision (issue #78, 2026-09-10)
+- **Status:** Accepted — v0, owner-approved 2026-09-10 per issue #78
 - **Date:** 2026-09-09 (v0 redraft 2026-09-10)
 - **Extends:** ADR 003 (Integrations and Connections; now Implemented per #75), `docs/upstream-spec.md` Secret management row
 
@@ -20,7 +20,7 @@ through the vendor API. Per-Organization secrets have no demonstrated need
 (AGENTS.md constraint 7), so v0 does not build per-Organization secret
 storage. The envelope scheme is retained as a tripwire-gated upgrade, not v1.
 
-## Decision v0 (proposed direction, not yet accepted)
+## Decision v0 (accepted 2026-09-10 per issue #78)
 
 Deployment-level secrets plus org-scoped non-secret Connection mapping:
 
@@ -96,9 +96,16 @@ does not make plaintext credential columns acceptable application design.
   not apply in v0; losing a deployment secret means re-onboarding one
   vendor relationship, not N Organizations.
 
-## v0 acceptance (unlocks 3.0)
+## v0 acceptance (accepted 2026-09-10 per issue #78; unlocks 3.0 implementation)
 
-This ADR is **not yet accepted**. Before milestone 3.0 ships on v0:
+Owner stamp per issue #78. Entry basis: #75 closed (ADR 003 Implemented),
+KEK provisioning dropped under v0, scrub/redaction discipline retained with
+`secretFields` coverage tests. Envelope stays Proposed/tripwire-gated; cached
+tokens and refresh stay 3.1-gated with no D1 schema for secrets until the
+tripwire fires. Milestone 3.0 exit (scrub/redaction matrix green,
+deployment-secret rotation runbook exercised on dev) is tracked by the
+milestone, not by this stamp. The superseded items below are kept as the
+acceptance record:
 
 1. Threat model: deployment-secret compromise blast radius, admin vs
    ordinary caller on Connection mapping writes, backup/log attacker.
@@ -107,7 +114,7 @@ This ADR is **not yet accepted**. Before milestone 3.0 ships on v0:
    audit with sentinels).
 3. `secretFields` coverage: every Integration declares; every declared
    field is excluded from discovery/history/result serialization by test.
-4. Acceptance stamp (superseding note or v0 Accepted) + updated
+4. Acceptance stamp (this note, v0 Accepted) + updated
    `docs/upstream-spec.md` secret-management row.
 
 ## Alternatives considered (ecosystem survey, Sep 2026; verdicts stand)
