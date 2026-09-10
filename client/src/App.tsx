@@ -8,7 +8,7 @@ export function App(): React.JSX.Element {
   return (
     <div className="shell">
       <Nav />
-      <main>
+      <main className="page">
         <Routes>
           <Route path="/" element={<Navigate to="/history" replace />} />
           <Route path="/history" element={<ExecutionHistoryList />} />
