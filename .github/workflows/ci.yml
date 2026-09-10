@@ -108,6 +108,7 @@ jobs:
           test -s docs/architecture/006-naming.md
           test -s docs/architecture/007-mvp-slice.md
           test -s docs/architecture/008-full-stack-app.md
+          test -s docs/architecture/009-workers-builds-evaluation.md
 
           grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
           grep -q "END OF TERMS AND CONDITIONS" LICENSE
