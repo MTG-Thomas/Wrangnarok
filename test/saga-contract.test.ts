@@ -183,6 +183,30 @@ describe("Saga authoring contract (issue #57)", () => {
     for (const def of SAGA_DEFINITIONS) {
       expect(Array.isArray(def.requiredIntegrations)).toBe(true);
     }
+    // Knob boundary (ADR 010 section 4): timeouts, retries, schedules, and
+    // other runtime policy must never live in Saga source — only the
+    // stepRetryLimit code table and platform adapter may carry them.
+    for (const def of SAGA_DEFINITIONS) {
+      for (const key of [
+        "timeout",
+        "timeouts",
+        "retry",
+        "retries",
+        "schedule",
+        "schedules",
+        "cron",
+        "endpoint",
+        "endpoints",
+        "access",
+        "rateLimit",
+        "cache",
+        "ttl",
+        "concurrency",
+        "backoff",
+      ]) {
+        expect(def, `Saga "${def.name}" carries persisted-policy key "${key}"`).not.toHaveProperty(key);
+      }
+    }
   });
 
   it("keeps definitions, domain constants, catalog, and manifest in agreement", () => {

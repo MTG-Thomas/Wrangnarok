@@ -1,6 +1,7 @@
 # ADR 010: Phase 1b design for #58 — ctx, states, Connections, source boundary
 
-**Status:** Proposed design for #58, NOT accepted. Implements no code; constrains the later implementation lane. Defers to ADR 001 where silent.
+**Status:** Implemented per issue #75 (lane-A, PR #80). Section 1–4 decisions
+below are now code; the open questions record the picks the lane made.
 
 ## 1. Organization ctx propagation
 
@@ -51,8 +52,19 @@ Boundary tests (workerd, real D1/Workflow bindings; vendor HTTP mocked): (a) sou
 
 ## Open questions (options, not decisions)
 
-- `attemptToken` representation: (i) `executionId:dispatched` reuse vs (ii) fresh per-dispatch nonce column — lane picks with #15 owner.
-- 424 code name/shape vs upstream HTTP mapping — lane aligns with API error envelope owner.
-- Where declared `required` lives (SagaDef field vs per-Operation arg) — lane picks; doc requires declaration somewhere checkable.
+Implementation picks (issue #75):
+
+- `attemptToken` representation: (i) `executionId:dispatched` reuse — no new
+  column, no migration. Single dispatch per deterministic ID means one epoch;
+  status-fenced conditional writes are the stale-token rejection.
+- 424 code name/shape: `INTEGRATION_REQUIREMENT_UNSATISFIED` as a structured
+  step result surfacing through `error_json` (Failed, no retry).
+- Where declared `required` lives: mandatory `requiredIntegrations` field on
+  `SagaDefinition` (source declaration, validated at startup, frozen).
+- Retry-ceiling values stay in the `stepRetryLimit()` code table plus
+  `VENDOR_TIMEOUT_MS` platform mapping — never Saga source properties.
+
+Still open (explicitly Phase 3+, not this lane):
+
 - `Scheduled` promotion design (keyless identity, due index, Cron) — explicitly Phase 3+, not this lane.
 - Whether retry-ceiling values graduate from code table to persisted operator policy — needs #15 owner + Free-tier cost note.

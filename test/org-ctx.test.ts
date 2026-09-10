@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Phase 1b (ADR 010): OrgCtx construction plus the Cancelling lost-terminal
-// race. Runs in real workerd with a real D1 binding; drives the terminal
+// Phase 1b (ADR 010): OrgCtx construction, Connection resolution contract,
+// the Cancelling lost-terminal race, plus the source/persisted boundary
+// checks. Runs in real workerd with a real D1 binding; drives the terminal
 // checkpoints directly so both race orders are deterministic (no timing).
 import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { echoSaga, ECHO_INTEGRATION_ID, NINJA_INTEGRATION_ID } from "../src/domain";
 import { buildOrgCtx } from "../src/saga";
@@ -17,6 +19,7 @@ import seed from "../scripts/seed-local.sql?raw";
 const bindings = env as unknown as Bindings;
 const orgId = "00000000-0000-4000-8000-000000000001";
 const userId = "00000000-0000-4000-8000-000000000002";
+const auth = { Authorization: `Bearer ${"a".repeat(64)}` };
 
 async function insertExecution(id: string, status: string): Promise<void> {
   await bindings.DB.prepare(
@@ -99,6 +102,44 @@ it("fails loud on declared-but-missing and returns None on undeclared", async ()
   // the Saga decides its own fallback/skip.
   const silent = await resolveConnection(bindings.DB, org, NINJA_INTEGRATION_ID, []);
   expect(silent).toEqual({ found: false, declared: false });
+});
+
+it("keeps Execution history readable after a Saga source rename", async () => {
+  // Saga behavior always comes from source; the D1 row mirrors the
+  // saga_id/name/revision snapshot for diagnosis. Renaming source must never
+  // erase or hide history.
+  const id = "b".repeat(64);
+  await insertExecution(id, "Succeeded");
+  await bindings.DB.prepare("UPDATE executions SET saga_name=?,saga_revision=? WHERE id=?")
+    .bind("echo-renamed", "echo-v2", id)
+    .run();
+  const detail = await worker.fetch(
+    new Request(`http://local.test/api/executions/${id}`, { method: "GET", headers: { ...auth } }),
+    bindings,
+  );
+  expect(detail.status).toBe(200);
+  expect(await detail.json()).toMatchObject({
+    executionId: id,
+    sagaId: echoSaga.id,
+    sagaName: "echo-renamed",
+    sagaRevision: "echo-v2",
+    status: "Succeeded",
+  });
+});
+
+it("applies the local seed idempotently", async () => {
+  // Fresh-checkout setup: setup-local.mjs never overwrites .dev.vars
+  // (flag wx) and the seed is ON CONFLICT DO NOTHING. Re-applying changes
+  // nothing.
+  await bindings.DB.exec(seed);
+  const orgs = await bindings.DB.prepare("SELECT COUNT(*) AS n FROM organizations WHERE id=?")
+    .bind(orgId)
+    .first<{ n: number }>();
+  const conns = await bindings.DB.prepare("SELECT COUNT(*) AS n FROM connections WHERE org_id=?")
+    .bind(orgId)
+    .first<{ n: number }>();
+  expect(orgs?.n).toBe(1);
+  expect(conns?.n).toBe(1);
 });
 
 it("lets a racing terminal checkpoint win as Failed once Cancelling", async () => {
