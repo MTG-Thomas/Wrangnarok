@@ -25,6 +25,14 @@ queue_rules:
 pull_request_rules:
   # NOTE: `@mergifyio queue` comments are native Mergify commands, not a
   # condition key — no rule needed for the manual trigger.
+  - name: Auto-update behind automerge PRs
+    conditions:
+      - label=automerge
+      - -conflict
+      - base=main
+      - "#changes-requested-reviews-by=0"
+    actions:
+      update:
   - name: Auto-queue labeled green PRs
     conditions:
       - label=automerge
