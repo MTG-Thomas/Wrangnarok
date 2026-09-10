@@ -74,7 +74,7 @@ export default {
           }
           throw new Fault(409, "EXECUTION_NOT_CANCELLABLE", "Terminal Executions cannot be cancelled.");
         }
-        const binding = row.saga_id === ninjaSaga.id ? env.NINJA_WORKFLOW : env.ECHO_WORKFLOW;
+        const binding = workflowForSaga(env, row.saga_id);
         try {
           await (await binding.get(row.id)).terminate();
         } catch {
