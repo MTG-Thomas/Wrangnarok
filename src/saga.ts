@@ -54,11 +54,54 @@ export interface SagaSecrets {
   readonly clientSecret?: string;
 }
 
+/** Organization context for one Execution (ADR 010 section 1, Phase 1b).
+ * Built inside prepare-input-v1 from the immutable D1 Execution row — never
+ * from client-supplied context, and never from Workflow params (which carry
+ * only { executionId }). attemptToken is the dispatch epoch
+ * `${executionId}:${dispatched}`; with one dispatch per deterministic ID
+ * there is exactly one epoch, so the status-fenced conditional writes in
+ * failExecution/cancelExecution are the stale-token rejection mechanism
+ * (late, post-terminal, and post-cancel callbacks match no row and no-op).
+ * A fresh per-dispatch nonce column is deferred until a demonstrated
+ * ambiguous-dispatch case needs it. */
+export interface OrgCtx {
+  readonly orgId: string;
+  readonly userId: string;
+  readonly executionId: string;
+  readonly sagaId: string;
+  readonly sagaRevision: string;
+  readonly operationId?: string;
+  readonly attemptToken: string;
+}
+
+/** Minimal D1 Execution row shape needed to build an OrgCtx. */
+export interface OrgCtxRow {
+  readonly id: string;
+  readonly org_id: string;
+  readonly user_id: string;
+  readonly saga_id: string;
+  readonly saga_revision: string;
+  readonly dispatched: number;
+}
+
+export function buildOrgCtx(row: OrgCtxRow, operationId?: string): OrgCtx {
+  return Object.freeze({
+    orgId: row.org_id,
+    userId: row.user_id,
+    executionId: row.id,
+    sagaId: row.saga_id,
+    sagaRevision: row.saga_revision,
+    ...(operationId === undefined ? {} : { operationId }),
+    attemptToken: `${row.id}:${row.dispatched}`,
+  });
+}
+
 /** Validated event context for one Saga execution. executionId is the
  * deterministic D1/Workflow identity, checked against the native instance ID
- * by the adapter. The Organization is NEVER carried here: the Saga loads its
- * immutable Execution row (org_id included) inside prepare-input-v1, and org
- * context propagation stays deferred to Phase 1b (issue #58). */
+ * by the adapter. Organization context is NOT carried here: each Saga builds
+ * its OrgCtx from the immutable D1 Execution row inside prepare-input-v1
+ * (Phase 1b, ADR 010) and threads it through Connection resolution and
+ * terminal checkpoints — never from caller-supplied org. */
 export interface SagaEventContext {
   readonly executionId: string;
   readonly integrations: SagaIntegrations;

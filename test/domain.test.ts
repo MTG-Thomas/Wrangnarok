@@ -63,6 +63,9 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Running", "TimedOut")).toBe(true);
     expect(canTransition("Running", "Cancelling")).toBe(true);
     expect(canTransition("Cancelling", "Cancelled")).toBe(true);
+    // ADR 010 lost-terminal race: a terminal checkpoint that lands while the
+    // row is Cancelling still wins as Failed; the cancel marker no-ops after.
+    expect(canTransition("Cancelling", "Failed")).toBe(true);
     for (const terminal of ["Succeeded", "Failed", "TimedOut", "Cancelled"] as const) {
       for (const next of [
         "Pending",
@@ -79,5 +82,8 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Pending", "Succeeded")).toBe(false);
     expect(canTransition("Pending", "Cancelled")).toBe(false);
     expect(canTransition("Cancelling", "Succeeded")).toBe(false);
+    expect(canTransition("Cancelling", "Cancelling")).toBe(false);
+    expect(canTransition("Cancelling", "TimedOut")).toBe(false);
+    expect(canTransition("Cancelling", "Running")).toBe(false);
   });
 });

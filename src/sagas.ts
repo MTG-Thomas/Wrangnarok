@@ -31,8 +31,8 @@ import {
   smokeSaga,
 } from "./domain";
 import type { EchoInput, ExecutionParams, NinjaOrgsResult, SafeError, SmokeResult } from "./domain";
-import { assertJsonSerializable, bindSagaStep, buildCatalog, defineSaga } from "./saga";
-import type { CatalogEntry, SagaDefinition, SagaEventContext } from "./saga";
+import { assertJsonSerializable, bindSagaStep, buildCatalog, buildOrgCtx, defineSaga } from "./saga";
+import type { CatalogEntry, OrgCtx, SagaDefinition, SagaEventContext } from "./saga";
 import { beginOperation, failExecution, finishOperation } from "./executions";
 import type { ExecutionRow } from "./executions";
 import { buildUsage, logUsage, persistUsage } from "./usage";
@@ -73,6 +73,9 @@ export const echoSagaDef = defineSaga<EchoInput>({
           throw new NonRetryableError("Execution was cancelled.");
         }
         const input = parseInput(JSON.parse(row.input_json));
+        // Phase 1b (ADR 010): Organization context comes from the immutable
+        // D1 row via buildOrgCtx — never from client input or Workflow params.
+        const orgCtx: OrgCtx = buildOrgCtx(row, "prepare-input-v1");
         await ctx.db
           .prepare(
             "UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'",
@@ -81,13 +84,13 @@ export const echoSagaDef = defineSaga<EchoInput>({
           .run();
         await beginOperation(ctx.db, id, "prepare-input-v1", 0);
         await finishOperation(ctx.db, id, "prepare-input-v1", input);
-        return { input, orgId: row.org_id };
+        return { input, orgCtx };
       });
       const outcome = await step.do("echo-http-v1", async () => {
         await beginOperation(ctx.db, id, "echo-http-v1", 1);
         const connection = await ctx.db
           .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgId, ECHO_INTEGRATION_ID)
+          .bind(prepared.orgCtx.orgId, ECHO_INTEGRATION_ID)
           .first<{ endpoint: string }>();
         if (!connection)
           return {
@@ -197,13 +200,15 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
           .run();
         await beginOperation(ctx.db, id, "prepare-input-v1", 0);
         await finishOperation(ctx.db, id, "prepare-input-v1", {});
-        return { orgId: row.org_id };
+        // Phase 1b (ADR 010): Organization context comes from the immutable
+        // D1 row via buildOrgCtx — never from client input or Workflow params.
+        return { orgCtx: buildOrgCtx(row, "prepare-input-v1") };
       });
       const outcome = await step.do("ninja-list-orgs-v1", async () => {
         await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
         const connection = await ctx.db
           .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgId, NINJA_INTEGRATION_ID)
+          .bind(prepared.orgCtx.orgId, NINJA_INTEGRATION_ID)
           .first<{ endpoint: string }>();
         if (!connection)
           return {
@@ -315,7 +320,9 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
         await finishOperation(ctx.db, id, "prepare-input-v1", {});
         // startedMs is captured inside the Operation (replay-memoized), never
         // at the top of run: Date.now() outside step.do fails the contract.
-        return { orgId: row.org_id, startedMs: Date.now() };
+        // Phase 1b (ADR 010): Organization context comes from the immutable
+        // D1 row via buildOrgCtx — never from client input or Workflow params.
+        return { orgCtx: buildOrgCtx(row, "prepare-input-v1"), startedMs: Date.now() };
       });
       const written = await step.do("smoke-write-v1", async () => {
         // D1 write verification: durable probe row, then read it back in-step.
@@ -393,7 +400,7 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
           saga: smokeSaga.name,
           sagaRevision: smokeSaga.revision,
           executionId: id,
-          orgId: verified.result.orgId || prepared.orgId,
+          orgId: verified.result.orgId || prepared.orgCtx.orgId,
           status: "Succeeded",
           operationRows: count?.n ?? output.operationCount,
           reads: 4,

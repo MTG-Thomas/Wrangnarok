@@ -99,11 +99,14 @@ export async function failExecution(
   error: SafeError,
   status: "Failed" | "TimedOut" = "Failed",
 ): Promise<void> {
-  // Terminal checkpoints only: conditional on still being Pending/Running so
-  // a late checkpoint can never overwrite Cancelled (or another terminal).
-  // TimedOut is written exclusively by the explicit timeout-mark-v1 step, and
-  // Failed exclusively by persist-failure-v1. Operation rows stay within
-  // ('Running','Succeeded','Failed'); the timeout code lives in error_json.
+  // Terminal checkpoints only: conditional on still being
+  // Pending/Running/Cancelling so a late checkpoint can never overwrite a
+  // terminal state. Failed is written by persist-failure-v1, TimedOut
+  // exclusively by the explicit timeout-mark-v1 step. Operation rows stay
+  // within ('Running','Succeeded','Failed'); the timeout code lives in
+  // error_json. Lost-terminal race (ADR 010): a checkpoint that lands while
+  // the row is Cancelling still wins as Failed; the cancel marker below
+  // no-ops on non-Cancelling rows, so cancel-after-terminal never rewrites.
   const now = new Date().toISOString();
   const json = JSON.stringify(error);
   await db.batch([
@@ -114,7 +117,7 @@ export async function failExecution(
       .bind(now, json, id),
     db
       .prepare(
-        "UPDATE executions SET status=?,completed_at=?,error_json=? WHERE id=? AND status IN ('Pending','Running')",
+        "UPDATE executions SET status=?,completed_at=?,error_json=? WHERE id=? AND status IN ('Pending','Running','Cancelling')",
       )
       .bind(status, now, json, id),
   ]);
