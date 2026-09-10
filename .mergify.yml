@@ -1,8 +1,9 @@
 # Mergify queue: native GitHub merge queue is unavailable to personal-account
 # repos, so Mergify owns merging into main. Free for open source.
-# Setup: install the Mergify GitHub App on this repo (admin click), then
-# comment `@mergifyio queue` on a green PR. No CI rewrite needed: Mergify
-# validates against temp branches using the existing push/pull_request triggers.
+# Two on-ramps, both requiring human intent: the `@mergifyio queue` comment,
+# or the `automerge` label on a green PR with no requested changes.
+# No CI rewrite needed: Mergify validates against temp branches using the
+# existing push/pull_request triggers.
 queue_rules:
   - name: default
     merge_conditions:
@@ -13,6 +14,14 @@ pull_request_rules:
   - name: Queue on comment
     conditions:
       - comment=@mergifyio queue
+    actions:
+      queue:
+        name: default
+  - name: Auto-queue labeled green PRs
+    conditions:
+      - label=automerge
+      - check-success=Validate
+      - "#changes-requested-reviews-by=0"
     actions:
       queue:
         name: default

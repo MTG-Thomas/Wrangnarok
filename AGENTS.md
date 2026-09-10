@@ -50,3 +50,7 @@ When studying Bifrost, record observable behavior and invariants in `docs/upstre
 ## Collaboration
 
 One lane per worktree. Parallel agents (human or AI) must work on separate branches checked out in separate `git worktree` directories — never two lanes in one checkout. Name worktrees after the branch. Remove the worktree (`git worktree remove`) when its PR merges. Git defines no default worktree location, so this project fixes one: create ephemeral lane worktrees under the harness's pre-approved scratch root (`$env:TEMP\opencode`, currently `C:\Users\ThomasBray\AppData\Local\Temp\opencode`), one subdirectory per branch named after the branch (slashes sanitized) — never inside the main checkout.
+
+## Merging
+
+Native GitHub merge queue is unavailable to personal-account repos, so Mergify owns merging into `main` (see `.mergify.yml`). Green PRs enter the queue via `@mergifyio queue` comment or the `automerge` label (green + no requested changes). Never merge a red PR, never force-push a shared lane branch, and keep the merge method as merge commits unless an ADR says otherwise.
