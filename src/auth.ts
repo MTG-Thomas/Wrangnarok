@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { Fault, hash, UUID } from "./domain";
 import type { Principal } from "./domain";
+import { verifyAccess, type AccessEnv } from "./access";
 export interface LabAuth {
   LAB_ENABLED?: string;
   LAB_TOKEN?: string;
   LAB_ORG_ID?: string;
   LAB_USER_ID?: string;
 }
-/** Local fixture only. Organization and user never come from request headers or JSON. */
-export async function authenticate(request: Request, env: LabAuth): Promise<Principal> {
+/** Local fixture only. Organization and user never come from request headers or JSON.
+ * A present Cf-Access-Jwt-Assertion routes exclusively to Access verification
+ * (ADR 014); unconfigured Access fails closed, never falls through to LAB. */
+export async function authenticate(request: Request, env: LabAuth & AccessEnv): Promise<Principal> {
+  const assertion = request.headers.get("Cf-Access-Jwt-Assertion");
+  if (assertion) return verifyAccess(assertion, env);
   if (env.LAB_ENABLED !== "true") throw new Fault(404, "NOT_FOUND", "Not found.");
   if (
     !env.LAB_TOKEN ||
