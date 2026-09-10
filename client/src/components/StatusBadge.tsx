@@ -8,6 +8,7 @@ const KNOWN_STATUSES: ReadonlySet<string> = new Set<string>([
   "Failed",
   "Running",
   "Pending",
+  "Cancelling",
   "Cancelled",
   "TimedOut",
 ]);
@@ -17,6 +18,7 @@ const GLYPHS: Readonly<Record<string, string>> = {
   Failed: "✕",
   Running: "●",
   Pending: "○",
+  Cancelling: "◌",
   Cancelled: "■",
   TimedOut: "◷",
 };

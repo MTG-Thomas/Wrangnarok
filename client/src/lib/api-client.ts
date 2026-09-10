@@ -6,7 +6,13 @@
 // the Token field in the UI) and sent as `Authorization: Bearer <token>`.
 // Secrets are never bundled in client code.
 import { parseApiError } from "./api-error";
-import type { ExecutionDetail, ExecutionHistoryResponse, SagasResponse, SagaSummary } from "./client-types";
+import type {
+  ExecutionDetail,
+  ExecutionHistoryResponse,
+  ExecutionStatus,
+  SagasResponse,
+  SagaSummary,
+} from "./client-types";
 
 const TOKEN_KEY = "wrangnarok.token";
 
@@ -66,9 +72,23 @@ function isDetailResponse(value: unknown): value is ExecutionDetail {
   return typeof v["executionId"] === "string" && Array.isArray(v["operations"]) && "runtimeStatus" in v;
 }
 
-/** GET /api/executions — ExecutionHistory list (summaries + hasMore + nextCursor). */
-export async function fetchExecutionHistory(): Promise<ExecutionHistoryResponse> {
-  const data = await get("/api/executions");
+/** Server-side history filters (allowlisted query keys; anything else is UNSUPPORTED_QUERY). */
+export interface HistoryListQuery {
+  status?: ExecutionStatus;
+  sagaId?: string;
+}
+
+/**
+ * GET /api/executions — ExecutionHistory list (summaries + hasMore + nextCursor).
+ * Status/Saga filters run server-side; search/date-range stay client-side
+ * (see lib/history-view.ts).
+ */
+export async function fetchExecutionHistory(query: HistoryListQuery = {}): Promise<ExecutionHistoryResponse> {
+  const params = new URLSearchParams();
+  if (query.status) params.set("status", query.status);
+  if (query.sagaId) params.set("sagaId", query.sagaId);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await get(`/api/executions${suffix}`);
   if (!isHistoryResponse(data)) throw new Error("Unexpected history response shape.");
   return data;
 }

@@ -244,6 +244,12 @@ body {
   color: #935705;
 }
 
+.badge--cancelling {
+  background: #fef3e2;
+  border-color: #f5cf8a;
+  color: #935705;
+}
+
 .badge--unknown {
   background: #f3f0ff;
   border-color: #d0c6f5;
@@ -258,6 +264,118 @@ body {
   50% {
     opacity: 0.25;
   }
+}
+
+/* ---- History header summary ---- */
+
+.summary-line {
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-size: 0.875rem;
+  margin: -0.5rem 0 1rem;
+}
+
+/* ---- History filter bar + status pills ---- */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.filter-field label {
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.filter-field input:not([type="checkbox"]),
+.filter-field select {
+  border: 1px solid var(--wrangnarok-mist, #e2e8f0);
+  border-radius: var(--wrangnarok-radius-sm, 0.5rem);
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 0.375rem 0.625rem;
+}
+
+.filter-field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 1.25rem;
+}
+
+.filter-field--check label {
+  font-size: 0.875rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--wrangnarok-sunrise, #f45d0b);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.pill {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--wrangnarok-mist, #e2e8f0);
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+}
+
+.pill:hover {
+  border-color: var(--wrangnarok-amber, #f59e0b);
+}
+
+.pill[aria-pressed="true"] {
+  background: var(--wrangnarok-slate, #1f2937);
+  border-color: var(--wrangnarok-slate, #1f2937);
+  color: #fff;
+}
+
+.pill-count {
+  background: rgba(82, 96, 109, 0.12);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0 0.5rem;
+}
+
+.pill[aria-pressed="true"] .pill-count {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 /* ---- History table ---- */
@@ -297,6 +415,54 @@ body {
 
 .history-table tbody tr:last-child {
   border-bottom: none;
+}
+
+.day-row th {
+  background: var(--wrangnarok-cloud, #f7f7f4);
+  color: var(--wrangnarok-text-muted, #52606d);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.375rem 0.75rem;
+  text-transform: uppercase;
+}
+
+.cell--numeric {
+  text-align: right;
+}
+
+.cell--chevron {
+  text-align: right;
+  width: 2rem;
+}
+
+.chevron-link {
+  color: var(--wrangnarok-text-muted, #52606d);
+  display: inline-block;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  text-decoration: none;
+}
+
+.chevron-link:hover {
+  color: var(--wrangnarok-sunrise, #f45d0b);
+}
+
+.muted--small {
+  font-size: 0.75rem;
+}
+
+.visually-hidden {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
 }
 
 .saga-link {
@@ -414,7 +580,8 @@ body {
 
 a:focus-visible,
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--wrangnarok-sunrise, #f45d0b);
   outline-offset: 2px;
 }
