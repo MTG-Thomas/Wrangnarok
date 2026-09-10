@@ -15,9 +15,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Two parallel gates with identical coverage to the old serial job: wall time
+# is the max, not the sum. `Validate` aggregates both so branch protection
+# keeps requiring exactly one check name.
 jobs:
-  validate:
-    name: Validate
+  static:
+    name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -66,32 +69,6 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm test
-
-      # system.smoke exercises the same path locally that post-deploy smoke
-      # exercises in dev: Worker request handling, D1, Workflow Operations,
-      # terminal persistence, and the usage block. Credential-free workerd.
-      - name: Smoke saga (local, credential-free)
-        run: npx vitest run test/smoke.test.ts
-
-      - name: Build UI
-        run: npm run build:ui
-
-      - name: Wrangler dry run
-        run: npx wrangler deploy --dry-run
-
-      - name: Wrangler dry run (dev environment)
-        run: npx wrangler deploy --dry-run --env dev
-
-      # Applies migrations through the Wrangler CLI against local D1, catching
-      # CLI-vs-workerd drift that in-test DB.exec alone would miss.
-      - name: D1 migrations (local)
-        run: npm run db:migrate:local
-
       # Temp-dir roundtrip of the file-based mailbox bridge (alias, send,
       # read, reply correlation). No credentials, no network, no live store.
       - name: Mailbox bridge selftest
@@ -118,3 +95,57 @@ jobs:
 
           grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
           grep -q "END OF TERMS AND CONDITIONS" LICENSE
+
+  runtime:
+    name: Runtime checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # system.smoke exercises the same path locally that post-deploy smoke
+      # exercises in dev: Worker request handling, D1, Workflow Operations,
+      # terminal persistence, and the usage block. Credential-free workerd.
+      - name: Smoke saga (local, credential-free)
+        run: npx vitest run test/smoke.test.ts
+
+      - name: Build UI
+        run: npm run build:ui
+
+      - name: Wrangler dry run
+        run: npx wrangler deploy --dry-run
+
+      - name: Wrangler dry run (dev environment)
+        run: npx wrangler deploy --dry-run --env dev
+
+      # Applies migrations through the Wrangler CLI against local D1, catching
+      # CLI-vs-workerd drift that in-test DB.exec alone would miss.
+      - name: D1 migrations (local)
+        run: npm run db:migrate:local
+
+  validate:
+    name: Validate
+    needs: [static, runtime]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Gates green
+        run: echo "static and runtime checks passed."
