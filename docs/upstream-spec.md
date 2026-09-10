@@ -15,7 +15,7 @@ Status vocabulary: **Adopt** preserves the product capability; **Adapt** preserv
 | Explicit access boundary | **Adopt** | A caller must be authorized through the complete dependency chain | Worker auth + D1 policies/application checks |
 | Connection/config management | **Adopt** | **Connections** scoped/resolved through Organizations | D1 + secret mechanism |
 | OAuth management / refresh | **Defer** | Integration-specific auth contract with common lifecycle helpers | Worker + D1/secrets |
-| Secret management | **Investigate** | Determine a safe Cloudflare-native per-Organization secret model | Secrets / encrypted D1 or another native facility |
+| Secret management | **Adapt** | v0 Accepted (ADR 005, owner-approved 2026-09-10 per issue #78): deployment-level Secrets Store credentials plus org-scoped non-secret Connection mapping with scrub discipline retained; per-Organization envelope encryption is tripwire-gated, not v1 | Secrets Store + D1 |
 | Dynamic forms | **Defer** | Form field names bind to Saga inputs | Worker + static UI + D1 |
 | Tables / application storage | **Adapt** | JSON/document-like author storage over D1, if justified | D1 |
 | Row-level authorization/policies | **Defer / Investigate** | Preserve deny-by-absence and tenant-safe query semantics if Tables ship | Application policy layer over D1 |
