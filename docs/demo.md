@@ -58,6 +58,14 @@ Invoke-RestMethod http://127.0.0.1:8903/api/executions/$id -Headers $H
 Invoke-RestMethod http://127.0.0.1:8903/api/executions -Headers $H
 ```
 
+## Remote dev smoke: human runbook (deferred for machine callers)
+
+The deployed dev smoke (`wrangler deploy --env dev` + `system.smoke` per
+ADR 004) stays a human-with-account runbook: machine callers are blocked at
+the Access edge (everything challenges without an SSO session; service-token
+flow unresolved as of 2026-09-10). Lane verification uses the local loopback
+path above; `.dev.vars` is never rotated by automation.
+
 ## Last verified (2026-09-10, lane-C, local workerd, origin/main `abffdac`)
 
 - `GET /api/sagas` listed `echo, ninjaone-orgs, ninjaone-echo-digest, system.smoke, hello`.
