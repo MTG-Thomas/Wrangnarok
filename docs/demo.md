@@ -58,14 +58,17 @@ Invoke-RestMethod http://127.0.0.1:8903/api/executions/$id -Headers $H
 Invoke-RestMethod http://127.0.0.1:8903/api/executions -Headers $H
 ```
 
-## Last verified (2026-09-10, lane-C, local workerd, origin/main `238d354`)
+## Last verified (2026-09-10, lane-C, local workerd, origin/main `abffdac`)
 
-- `GET /api/sagas` listed `echo, ninjaone-orgs, ninjaone-echo-digest, system.smoke`.
+- `GET /api/sagas` listed `echo, ninjaone-orgs, ninjaone-echo-digest, system.smoke, hello`.
 - `POST /api/executions` (system.smoke): `202`, `replayed: false`.
 - Detail: `Succeeded`; operations `prepare-input-v1` / `smoke-write-v1` /
   `smoke-verify-v1` all `Succeeded`; result `d1WriteOk: true, d1ReadOk: true`;
   advisory `runtimeStatus: complete`.
-- History: 2 executions (local D1 persists across runs), `?status=Succeeded`
-  server filter verified live, `nextCursor` present.
+- History: local D1 persists across runs; `?status=Succeeded` server filter
+  verified live, `nextCursor` present.
+- Usage actuals per run: D1 4 reads / 8 writes / 3 operation rows; Workflow
+  1 instance / 4 steps / 35 ms; Worker requests/CPU `null` (not exposed by
+  workerd — see the Free-tier table in `docs/upstream-spec.md`).
 - Replay with same key + input: `200`, `replayed: true`.
 - Short keys (14-15 chars) are rejected with `400 INVALID_IDEMPOTENCY_KEY`.
