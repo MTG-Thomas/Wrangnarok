@@ -126,6 +126,10 @@ async function fetchToken(connection: NinjaConnection, credentials: NinjaCredent
     await response.body?.cancel();
     throw new Fault(502, "NINJA_UNAUTHORIZED", "NinjaOne rejected the credentials.");
   }
+  if (response.status === 429) {
+    await response.body?.cancel();
+    throw new Fault(502, "NINJA_RATE_LIMITED", "NinjaOne rate-limited the token request.");
+  }
   if (!response.ok) {
     await response.body?.cancel();
     throw new Fault(502, "NINJA_AUTH_FAILED", "NinjaOne did not issue a token.");

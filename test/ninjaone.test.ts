@@ -121,6 +121,21 @@ it("persists NINJA_UNAUTHORIZED without copying vendor bodies", async () => {
   expect(JSON.parse(text)).toMatchObject({ status: "Failed", error: { code: "NINJA_UNAUTHORIZED" } });
   expect(text).not.toContain("invalid_client");
 });
+it("surfaces a throttled token request as NINJA_RATE_LIMITED without calling orgs", async () => {
+  // Acceptance gap G1 (issue #76): the token call had no distinct 429 code
+  // and collapsed into NINJA_AUTH_FAILED. Exactly one outbound call proves
+  // the orgs hop never runs and nothing retries.
+  mockNinja({ error: "rate_limited" }, [], 429, 200);
+  const id = await executionId(principal, key);
+  await using instance = await introspectWorkflowInstance(bindings.NINJA_WORKFLOW, id);
+  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  await instance.waitForStatus("errored");
+  const response = await worker.fetch(request(`/api/executions/${id}`), bindings);
+  const text = await response.text();
+  expect(JSON.parse(text)).toMatchObject({ status: "Failed", error: { code: "NINJA_RATE_LIMITED" } });
+  expect(text).not.toContain("rate_limited");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
 it("rejects non-empty input and unknown sagas", async () => {
   expect((await worker.fetch(request("/api/executions", "POST", { message: "x" }), bindings)).status).toBe(400);
   const unknown = new Request("http://local.test/api/executions", {
