@@ -143,6 +143,11 @@ jobs:
       - name: Wrangler dry run (dev environment)
         run: npx wrangler deploy --dry-run --env dev
 
+      # Worker bundle budget (ADR 004): fails closed over 100 KiB so
+      # dependency bloat and cold-start creep break the build.
+      - name: Worker bundle budget
+        run: npm run check:bundle
+
       # Applies migrations through the Wrangler CLI against local D1, catching
       # CLI-vs-workerd drift that in-test DB.exec alone would miss.
       - name: D1 migrations (local)
