@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Wrangnarok mark</title>
+  <desc id="desc">Angular mountain and W emblem beneath an ascending spark, framed by an open orbit.</desc>
+  <defs>
+    <linearGradient id="ember" x1="32" y1="216" x2="132" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F45D0B"/>
+      <stop offset="1" stop-color="#FFAD2F"/>
+    </linearGradient>
+  </defs>
+  <path d="M37 133A94 94 0 0 1 101 43" fill="none" stroke="url(#ember)" stroke-width="11" stroke-linecap="round"/>
+  <path d="M155 43a94 94 0 0 1 64 90" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" opacity=".82"/>
+  <path d="M128 18l11 25 25 11-25 11-11 25-11-25-25-11 25-11z" fill="url(#ember)"/>
+  <path d="M28 201l58-69v43l42-55v49l42-49v55l58-69v95l-58-55v67l-42-48-42 48v-67z" fill="currentColor"/>
+  <path d="M28 201l58-69v43l42-55v45l-42 48v-67z" fill="url(#ember)"/>
+</svg>

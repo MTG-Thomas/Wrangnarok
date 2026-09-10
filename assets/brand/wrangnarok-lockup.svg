@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 180" role="img" aria-labelledby="title desc">
+  <title id="title">Wrangnarok</title>
+  <desc id="desc">Wrangnarok horizontal brand lockup with emblem and Automation Across Realms tagline.</desc>
+  <defs>
+    <linearGradient id="ember" x1="20" y1="160" x2="112" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#F45D0B"/><stop offset="1" stop-color="#FFAD2F"/></linearGradient>
+  </defs>
+  <g transform="translate(14 8) scale(.62)" color="#111820">
+    <path d="M37 133A94 94 0 0 1 101 43" fill="none" stroke="url(#ember)" stroke-width="11" stroke-linecap="round"/>
+    <path d="M155 43a94 94 0 0 1 64 90" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" opacity=".82"/>
+    <path d="M128 18l11 25 25 11-25 11-11 25-11-25-25-11 25-11z" fill="url(#ember)"/>
+    <path d="M28 201l58-69v43l42-55v49l42-49v55l58-69v95l-58-55v67l-42-48-42 48v-67z" fill="currentColor"/>
+    <path d="M28 201l58-69v43l42-55v45l-42 48v-67z" fill="url(#ember)"/>
+  </g>
+  <text x="190" y="88" fill="#111820" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="48" font-weight="750" letter-spacing="8">WRANGNAROK</text>
+  <text x="194" y="124" fill="#52606D" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="500" letter-spacing="7">AUTOMATION ACROSS REALMS</text>
+</svg>
