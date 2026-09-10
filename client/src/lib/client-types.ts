@@ -41,6 +41,11 @@ export interface SagaSummary {
   name: string;
   revision: string;
   description: string;
+  /** Optional discovery metadata (ADR 002): never operational policy. */
+  tags?: string[];
+  category?: string;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
 }
 
 export interface SagasResponse {

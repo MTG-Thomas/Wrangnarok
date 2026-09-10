@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "note": "Checked-in snapshot of stable Saga identities (ADR 002, Accepted per issue #57). Changing a stable id creates a DIFFERENT Saga: dependents (Triggers, history, API callers) break silently unless remapped. Update this manifest in the same PR with justification, or the saga-contract CI gate (test/saga-contract.test.ts) fails loudly.",
+  "sagas": [
+    {
+      "id": "720b9ebf-9b6a-4eac-bae9-6ed22c970401",
+      "name": "echo",
+      "revision": "echo-v1"
+    },
+    {
+      "id": "2c79a880-f1ac-4183-b324-d05daffc321a",
+      "name": "ninjaone-orgs",
+      "revision": "ninjaone-orgs-v1"
+    },
+    {
+      "id": "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
+      "name": "system.smoke",
+      "revision": "system.smoke-v1"
+    }
+  ]
+}

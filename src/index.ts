@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
-import { boundedJson, canTransition, echoSaga, Fault, ninjaSaga, parseKey, parseSubmission, smokeSaga } from "./domain";
+import { boundedJson, canTransition, Fault, parseKey, parseSubmission } from "./domain";
+import { SAGA_CATALOG } from "./sagas";
 import { cancelExecution, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import type { ExecutionRow } from "./executions";
 export { EchoWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
@@ -25,7 +26,9 @@ export default {
       const caller = await authenticate(request, env);
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported by this slice.");
       if (url.pathname === "/api/sagas" && request.method === "GET")
-        return json({ sagas: [echoSaga, ninjaSaga, smokeSaga] });
+        // Static Git-owned Catalog (ADR 002): discovery metadata only.
+        // D1 Execution rows mirror saga_id/name/revision but never drive behavior.
+        return json({ sagas: SAGA_CATALOG });
       if (url.pathname === "/api/executions" && request.method === "POST") {
         const key = parseKey(request.headers.get("Idempotency-Key"));
         if (
