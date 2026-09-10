@@ -6,7 +6,7 @@
 // the Token field in the UI) and sent as `Authorization: Bearer <token>`.
 // Secrets are never bundled in client code.
 import { parseApiError } from "./api-error";
-import type { ExecutionDetail, ExecutionHistoryResponse } from "./client-types";
+import type { ExecutionDetail, ExecutionHistoryResponse, SagasResponse, SagaSummary } from "./client-types";
 
 const TOKEN_KEY = "wrangnarok.token";
 
@@ -42,6 +42,22 @@ function isHistoryResponse(value: unknown): value is ExecutionHistoryResponse {
   return Array.isArray(v["executions"]) && typeof v["hasMore"] === "boolean";
 }
 
+function isSagasResponse(value: unknown): value is SagasResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v["sagas"])) return false;
+  return (v["sagas"] as unknown[]).every((entry): entry is SagaSummary => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const e = entry as Record<string, unknown>;
+    return (
+      typeof e["id"] === "string" &&
+      typeof e["name"] === "string" &&
+      typeof e["revision"] === "string" &&
+      typeof e["description"] === "string"
+    );
+  });
+}
+
 function isDetailResponse(value: unknown): value is ExecutionDetail {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -52,6 +68,13 @@ function isDetailResponse(value: unknown): value is ExecutionDetail {
 export async function fetchExecutionHistory(): Promise<ExecutionHistoryResponse> {
   const data = await get("/api/executions");
   if (!isHistoryResponse(data)) throw new Error("Unexpected history response shape.");
+  return data;
+}
+
+/** GET /api/sagas — Sagas catalog (read-only discovery metadata). */
+export async function listSagas(): Promise<SagasResponse> {
+  const data = await get("/api/sagas");
+  if (!isSagasResponse(data)) throw new Error("Unexpected sagas response shape.");
   return data;
 }
 
