@@ -45,7 +45,7 @@ If a change introduces a new platform primitive, changes Saga/Execution/Operatio
 
 ## Upstream archaeology
 
-When studying Bifrost, record observable behavior and invariants in `docs/upstream-spec.md`. Do not assume a PostgreSQL/Redis/RabbitMQ/process architecture is itself a requirement. Prefer current upstream docs/tests/source over old plans when they disagree.
+When studying Bifrost, record observable behavior and invariants in `docs/upstream-spec.md`. Do not assume a PostgreSQL/Redis/RabbitMQ/process architecture is itself a requirement. Prefer current upstream docs/tests/source over old plans when they disagree. Hew to upstream product philosophy by default; every divergence must be explicit with Cloudflare-driven rationale recorded in the ADR.
 
 ## Collaboration
 
