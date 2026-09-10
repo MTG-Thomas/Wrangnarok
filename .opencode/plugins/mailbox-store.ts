@@ -26,17 +26,24 @@ export const ADDRESS_MAX = 128;
 export const INBOX_MAX = 100;
 export const ALIAS_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
+/** Inbox files touched within this window count as live peers for delivery. */
+export const RECENT_WINDOW_MS = 15 * 60 * 1000;
+
+/** Pure recency check so file-based (non-opencode) peers stay testable in workerd. */
+export function isRecentlyActive(mtimeMs: number, nowMs: number, windowMs: number = RECENT_WINDOW_MS): boolean {
+  return Number.isFinite(mtimeMs) && mtimeMs <= nowMs && nowMs - mtimeMs <= windowMs;
+}
+
 const KINDS: readonly string[] = ["note", "steer", "request", "reply"];
 const PRIORITIES: readonly string[] = ["standard", "high"];
 const STATUSES: readonly string[] = ["queued", "delivered", "read", "acked"];
 
 export class MailboxFault extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
+  readonly code: string;
+  constructor(code: string, message: string) {
     super(message);
     this.name = "MailboxFault";
+    this.code = code;
   }
 }
 

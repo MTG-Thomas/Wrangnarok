@@ -8,11 +8,16 @@
 // ~/.local/share/opencode/mailbox/<project>/. Standard mail is poll-based
 // (mailbox_read at turn start); high-priority mail is pushed by throwing
 // into the recipient's next tool call via tool.execute.before.
+//
+// File-based peers (scripts/mailbox-cli.mjs) share the same stores without an
+// opencode session: inbox files touched within RECENT_WINDOW_MS count as live
+// for delivery, so unknown names still fault but fresh file peers are
+// reachable. Push never applies to them; they poll.
 
 import type { Plugin, ToolContext } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,10 +25,12 @@ import {
   INBOX_MAX,
   MailboxFault,
   MailboxMessage,
+  RECENT_WINDOW_MS,
   buildMessage,
   findReply,
   formatLine,
   formatPushBlock,
+  isRecentlyActive,
   markStatus,
   parseLine,
   peekPushable,
@@ -155,6 +162,30 @@ class FileStore {
       return [];
     }
   }
+
+  /**
+   * File-based peers (e.g. scripts/mailbox-cli.mjs harnesses without an
+   * opencode session) have no entry in the live session list. Inbox files
+   * touched within the recency window count as live for delivery so unknown
+   * names still fault but fresh file peers stay reachable. Stems are stable:
+   * safeFile is idempotent, so a stem always addresses its own inbox.
+   */
+  activeSessions(nowMs: number = Date.now(), windowMs: number = RECENT_WINDOW_MS): string[] {
+    try {
+      return readdirSync(this.root)
+        .filter((name) => name.endsWith(".jsonl"))
+        .filter((name) => {
+          try {
+            return isRecentlyActive(statSync(join(this.root, name)).mtimeMs, nowMs, windowMs);
+          } catch {
+            return false;
+          }
+        })
+        .map((name) => name.slice(0, -".jsonl".length));
+    } catch {
+      return [];
+    }
+  }
 }
 
 const MailboxPlugin = (async ({ client, worktree, directory }) => {
@@ -162,13 +193,17 @@ const MailboxPlugin = (async ({ client, worktree, directory }) => {
   const store = new FileStore(root);
 
   async function liveSessionIds(): Promise<Set<string>> {
+    const live = new Set<string>();
     try {
       const sessions = unwrap<readonly { id: string }[]>(await client.session.list());
-      if (!Array.isArray(sessions)) return new Set();
-      return new Set(sessions.map((s) => s.id));
+      if (Array.isArray(sessions)) {
+        for (const s of sessions) live.add(s.id);
+      }
     } catch {
-      return new Set();
+      // Client unavailable: fall through to file activity alone.
     }
+    for (const id of store.activeSessions()) live.add(id);
+    return live;
   }
 
   const mailboxSend = tool({
