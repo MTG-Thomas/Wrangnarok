@@ -13,7 +13,7 @@ Goal: prove the minimal durable execution loop on Cloudflare Free.
 - one Execution
 - multiple durable Operations backed by Workflow steps
 - one simple HTTP Integration
-- execution status/results (JSON history + detail API; tiny read-only debug page if cheap — full full-stack web UI stays Phase 4)
+- execution status/results (JSON history + detail API; first read-only UI slices — history view, sagas catalog — served from the same Worker per ADR 008; fuller author-facing UI stays Phase 4)
 - idempotency conflict (409) + 15-minute same-revision retry gate (Pending never swept) + HTTP hardening per ADR 001
 - failure test
 - documented Free-tier consumption
