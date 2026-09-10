@@ -106,7 +106,7 @@ Starting a Saga is asynchronous. The API acknowledges accepted work and returns 
 
 A later API may support delayed/scheduled start via a distinct durable `Scheduled` state, but MVP slice only requires immediate start. `Scheduled` stays deferred; do not overload `Pending` for pre-publish scheduling.
 
-Worker `POST /sagas/:sagaId/executions` (implemented as `POST /api/executions`) MUST use this order because D1 + `Workflow.createBatch()` are non-atomic (dual-write). D1 is the idempotency record; the Cloudflare Workflow instance is the executor.
+Worker `POST /api/executions` with `{ sagaId, input }` in the body MUST use this order because D1 + `Workflow.createBatch()` are non-atomic (dual-write). D1 is the idempotency record; the Cloudflare Workflow instance is the executor. Body-carried `sagaId` keeps one stable admission endpoint; the Workflow binding is never inferred from the request.
 
 D1 schema (excerpt, canonical — matches migration):
 
