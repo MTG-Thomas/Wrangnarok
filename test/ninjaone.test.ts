@@ -19,7 +19,7 @@ function request(path: string, method = "GET", body: unknown = {}) {
     ...(method === "POST" ? { body: JSON.stringify({ sagaId: ninjaSaga.id, input: body }) } : {}),
   });
 }
-function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus = 200) {
+function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus = 200, orgsDelayMs = 0) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === "https://ninja-in-test.invalid/oauth/token") {
@@ -35,6 +35,9 @@ function mockNinja(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus 
       });
     }
     if (url === "https://ninja-in-test.invalid/api/v2/organizations") {
+      // Optional slow vendor: the Integration's 5s deadline fires first and
+      // must surface NINJA_VENDOR_TIMEOUT, never a hang.
+      if (orgsDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, orgsDelayMs));
       // Read headers without rebuilding a Request: init may carry a
       // cross-realm AbortSignal that the Request constructor rejects.
       const headers = input instanceof Request ? input.headers : new Headers(init?.headers as HeadersInit);
@@ -188,3 +191,22 @@ it("truncates large organization lists to a bounded persisted summary", async ()
   expect(body.result.organizationCount).toBe(100);
   expect(body.result.organizations).toHaveLength(25);
 });
+it("surfaces a slow NinjaOne vendor as TimedOut through the explicit timeout step", async () => {
+  // Timeout parity with the echo and digest legs: the Integration deadline
+  // fires first and the Saga routes NINJA_VENDOR_TIMEOUT to timeout-mark-v1.
+  // Token + orgs attempt only: no retry, no echo of anything.
+  mockNinja(
+    { access_token: TOKEN_SENTINEL, expires_in: 3600, token_type: "Bearer" },
+    [{ id: 1, name: "Acme" }],
+    200,
+    200,
+    6000,
+  );
+  const id = await executionId(principal, key);
+  await using instance = await introspectWorkflowInstance(bindings.NINJA_WORKFLOW, id);
+  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  await instance.waitForStatus("errored");
+  const response = await worker.fetch(request(`/api/executions/${id}`), bindings);
+  expect(await response.json()).toMatchObject({ status: "TimedOut", error: { code: "NINJA_VENDOR_TIMEOUT" } });
+  expect(fetch).toHaveBeenCalledTimes(2);
+}, 20000);
