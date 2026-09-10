@@ -26,8 +26,8 @@ export const NAV_ENTRIES: NavEntry[] = [
   },
   {
     label: "Sagas and Catalog",
-    enabled: false,
-    issue: `${REPO}/issues/16`,
+    to: "/sagas",
+    enabled: true,
     phase: "Phase 1 / Phase 4",
   },
   {
