@@ -251,10 +251,14 @@ Measurement is mandatory, not assumed (see ADR 004 `system.smoke`):
 
    | Primitive | Free allowance | Smoke actual (per run) | Notes/source |
    | --- | --- | --- | --- |
-   | D1 stored rows | [verify vs current Cloudflare pricing] | measured | MVP slice state + ExecutionHistory |
-   | D1 reads / writes | [verify vs current Cloudflare pricing] | measured | per `system.smoke` usage block |
-   | Workflows steps / instances | [verify vs current Cloudflare pricing] | measured | Execution + Operations |
-   | Workers requests / CPU-ms | [verify vs current Cloudflare pricing] | measured | Worker/API handling |
+   | D1 stored data / rows | 5 GB total; no per-table row-count cap | 3 application Operation rows observed; database storage not measured by the local test | [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) and [D1 limits](https://developers.cloudflare.com/d1/platform/limits/), checked 2026-09-10. The 3 rows are application observations, not Cloudflare metered storage. |
+   | D1 rows read / written | 5,000,000 rows read/day; 100,000 rows written/day | 4 application-observed reads; 8 application-observed writes | [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), checked 2026-09-10. These smoke counters are statements/operation counts and are not D1 `meta.rows_read`/`meta.rows_written` billing telemetry. |
+   | Workflow steps | 3,000 steps/day (billing allowance) | 4 steps | [Workers pricing, Workflows table](https://developers.cloudflare.com/workers/platform/pricing/#workflows), checked 2026-09-10. |
+   | Workflow instances / executions | 100,000 executions/day (Free limit) | 1 instance | [Workflow limits](https://developers.cloudflare.com/workflows/reference/limits/), checked 2026-09-10. |
+   | Workflow duration / retention | Wall-clock duration per step is unlimited; completed state retained 3 days | Per-execution `durationMs` is emitted by `system.smoke`, but is not archived by the local/CI test; the full smoke test completed in 137 ms of test time | [Workflow pricing](https://developers.cloudflare.com/workflows/reference/pricing/) and [Workflow limits](https://developers.cloudflare.com/workflows/reference/limits/), checked 2026-09-10. Test duration is not Workflow billing telemetry. |
+   | Worker requests / CPU-ms | 100,000 requests/day; 10 ms CPU per invocation | Worker requests and CPU-ms are `null` in the local Workflow usage block (not exposed by workerd); no deployed request/CPU sample is archived | [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), checked 2026-09-10. |
+
+   The smoke actuals above were verified with `npx vitest run test/smoke.test.ts` on 2026-09-10 (`2` tests passed). The usage block's D1 counters are deliberately application-observed and must not be mistaken for Cloudflare's metered row counts. A deployed smoke artifact using D1 `meta` plus Workers request/CPU analytics is still required before claiming production metering accuracy; local and CI runs remain credential-free and do not consume production allowance.
 
    Do not hard-code allowance numbers from memory; link the pricing/docs page checked and the date checked. Use `[verify vs current Cloudflare pricing]` where uncertain.
 3. Track at least: D1 (stored data, rows, reads, writes), Workflows (steps, instances, duration/retention), Workers (requests/day, CPU-ms). Add R2/KV/ Queue/DO rows only when an ADR earns that primitive.
