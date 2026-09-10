@@ -49,6 +49,11 @@
       "name": "wrangnarok-smoke-v1",
       "class_name": "SmokeWorkflow",
     },
+    {
+      "binding": "HELLO_WORKFLOW",
+      "name": "wrangnarok-hello-v1",
+      "class_name": "HelloWorkflow",
+    },
   ],
   // ADR 004 environments: dev is the first deployment target and smoke-test
   // environment with its own mutable resources. Production is intentionally
@@ -98,6 +103,11 @@
           "binding": "SMOKE_WORKFLOW",
           "name": "wrangnarok-smoke-v1-dev",
           "class_name": "SmokeWorkflow",
+        },
+        {
+          "binding": "HELLO_WORKFLOW",
+          "name": "wrangnarok-hello-v1-dev",
+          "class_name": "HelloWorkflow",
         },
       ],
     },

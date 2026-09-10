@@ -30,6 +30,15 @@ export const smokeSaga = Object.freeze({
   description:
     "Platform smoke: Worker request handling, D1 write/read verification, multi-Operation Workflow, terminal persistence, usage block — no vendor dependency",
 });
+// Migration pilot (issue #119): workspace `workflows/sample/hello_world.py`
+// re-authored as a TypeScript Saga. Stable identity per ADR 002 (UUID + revision).
+export const helloSaga = Object.freeze({
+  id: "395e15f0-3627-41f6-8922-008ce37e3b35",
+  name: "hello",
+  revision: "hello-v1",
+  description:
+    "Migration pilot: prepare input plus a pure greeting transform shaped from the workspace hello_world workflow — no vendor dependency",
+});
 // Disposable smoke Organization (ADR 004): smoke runs here, never against
 // production tenant/Connection data. Seeded in tests; provisioned in dev via
 // the runbook (docs/architecture/004-ci-cd.md).
@@ -145,6 +154,13 @@ export interface SmokeResult {
   operationCount: number;
   operations: string[];
 }
+export interface HelloInput {
+  name: string;
+}
+export interface HelloResult {
+  greeting: string;
+  name: string;
+}
 export interface ExecutionParams {
   executionId: string;
 }
@@ -190,6 +206,18 @@ export function parseSmokeInput(value: unknown): SmokeInput {
   }
   return {};
 }
+export function parseHelloInput(value: unknown): HelloInput {
+  if (
+    !object(value) ||
+    Object.keys(value).some((key) => key !== "name") ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    new TextEncoder().encode(value.name).length > 1024
+  ) {
+    throw new Fault(400, "INVALID_INPUT", "Expected one name of 1 to 1024 UTF-8 bytes.");
+  }
+  return { name: value.name };
+}
 export function parseDigestInput(value: unknown): DigestInput {
   if (!object(value) || Object.keys(value).length !== 0) {
     throw new Fault(400, "INVALID_INPUT", "The ninjaone-echo-digest Saga takes an empty input object.");
@@ -224,6 +252,7 @@ const catalog: SagaDef[] = [
   { ...ninjaSaga, parse: parseNinjaOrgsInput },
   { ...digestSaga, parse: parseDigestInput },
   { ...smokeSaga, parse: parseSmokeInput },
+  { ...helloSaga, parse: parseHelloInput },
 ];
 export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {
   if (

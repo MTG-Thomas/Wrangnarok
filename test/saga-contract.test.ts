@@ -17,10 +17,12 @@ import {
   BODY_LIMIT,
   ECHO_INTEGRATION_ID,
   digestSaga,
+  helloSaga,
   echoSaga,
   NINJA_INTEGRATION_ID,
   ninjaSaga,
   parseDigestInput,
+  parseHelloInput,
   parseInput,
   parseNinjaOrgsInput,
   parseSmokeInput,
@@ -36,7 +38,7 @@ const CHURN_MESSAGE =
 
 describe("Saga authoring contract (issue #57)", () => {
   it("keeps all I/O and nondeterminism inside step.do() for every registered Saga", () => {
-    expect(SAGA_DEFINITIONS).toHaveLength(4);
+    expect(SAGA_DEFINITIONS).toHaveLength(5);
     for (const def of SAGA_DEFINITIONS) {
       expect(() => assertDeterministicRun(def.name, def.run)).not.toThrow();
     }
@@ -101,6 +103,10 @@ describe("Saga authoring contract (issue #57)", () => {
   it("round-trips every Saga input/output through JSON within the persisted bound", () => {
     const samples: Record<string, { input: unknown; output: unknown }> = {
       echo: { input: { message: "hello" }, output: { message: "hello" } },
+      hello: {
+        input: { name: "Ada" },
+        output: { greeting: "Hello, Ada!", name: "Ada" },
+      },
       "ninjaone-orgs": {
         input: {},
         output: { organizationCount: 1, organizations: [{ id: 7, name: "Acme" }] },
@@ -190,6 +196,7 @@ describe("Saga authoring contract (issue #57)", () => {
       ECHO_INTEGRATION_ID,
     ]);
     expect(byName.get("system.smoke")?.requiredIntegrations).toEqual([]);
+    expect(byName.get("hello")?.requiredIntegrations).toEqual([]);
     for (const def of SAGA_DEFINITIONS) {
       expect(Array.isArray(def.requiredIntegrations)).toBe(true);
     }
@@ -221,12 +228,19 @@ describe("Saga authoring contract (issue #57)", () => {
 
   it("keeps definitions, domain constants, catalog, and manifest in agreement", () => {
     const byName = new Map(SAGA_DEFINITIONS.map((def) => [def.name, def]));
-    expect([...byName.keys()].sort()).toEqual(["echo", "ninjaone-echo-digest", "ninjaone-orgs", "system.smoke"]);
+    expect([...byName.keys()].sort()).toEqual([
+      "echo",
+      "hello",
+      "ninjaone-echo-digest",
+      "ninjaone-orgs",
+      "system.smoke",
+    ]);
     const expected = [
       { stable: echoSaga, parse: parseInput },
       { stable: ninjaSaga, parse: parseNinjaOrgsInput },
       { stable: digestSaga, parse: parseDigestInput },
       { stable: smokeSaga, parse: parseSmokeInput },
+      { stable: helloSaga, parse: parseHelloInput },
     ];
     for (const { stable, parse } of expected) {
       const def = byName.get(stable.name);

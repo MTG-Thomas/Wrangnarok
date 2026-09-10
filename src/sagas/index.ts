@@ -17,11 +17,13 @@
 import { buildCatalog } from "../saga";
 import type { CatalogEntry, SagaDefinition } from "../saga";
 import { digestSagaDef } from "./digest";
+import { helloSagaDef } from "./hello";
 import { echoSagaDef } from "./echo";
 import { ninjaOrgsSagaDef } from "./ninjaorgs";
 import { smokeSagaDef } from "./smoke";
 
 export { digestSagaDef, NinjaEchoDigestWorkflow } from "./digest";
+export { helloSagaDef, HelloWorkflow } from "./hello";
 export { echoSagaDef, EchoWorkflow } from "./echo";
 export { ninjaOrgsSagaDef, NinjaOrgsWorkflow } from "./ninjaorgs";
 export { smokeSagaDef, SmokeWorkflow } from "./smoke";
@@ -33,6 +35,7 @@ export const SAGA_DEFINITIONS: readonly SagaDefinition<unknown>[] = [
   ninjaOrgsSagaDef,
   digestSagaDef,
   smokeSagaDef,
+  helloSagaDef,
 ];
 
 /** Static Git-owned Catalog (ADR 002): duplicate stable IDs or names throw at

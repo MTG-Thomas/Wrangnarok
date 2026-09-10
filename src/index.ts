@@ -4,7 +4,7 @@ import type { Bindings } from "./bindings";
 import { boundedJson, canTransition, Fault, parseHistoryQuery, parseKey, parseSubmission } from "./domain";
 import { SAGA_CATALOG } from "./sagas";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
-export { EchoWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
+export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
   return Response.json(body, {

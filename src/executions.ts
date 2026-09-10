@@ -5,6 +5,7 @@ import {
   encodeHistoryCursor,
   Fault,
   executionId,
+  helloSaga,
   ninjaSaga,
   RECOVERY_WINDOW_MS,
   smokeSaga,
@@ -43,6 +44,7 @@ export function workflowForSaga(env: Bindings, sagaId: string): Workflow<{ execu
   if (sagaId === ninjaSaga.id) return env.NINJA_WORKFLOW;
   if (sagaId === digestSaga.id) return env.DIGEST_WORKFLOW;
   if (sagaId === smokeSaga.id) return env.SMOKE_WORKFLOW;
+  if (sagaId === helloSaga.id) return env.HELLO_WORKFLOW;
   return env.ECHO_WORKFLOW;
 }
 export async function submit(env: Bindings, caller: Principal, key: string, saga: SagaDef, input: unknown) {
