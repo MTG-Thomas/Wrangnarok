@@ -10,6 +10,7 @@ import {
   smokeSaga,
 } from "./domain";
 import type { ExecutionStatus, HistoryQuery, Principal, SafeError, SagaDef } from "./domain";
+import type { Connection } from "./integrations";
 import { buildOrgCtx } from "./saga";
 import type { OrgCtx } from "./saga";
 import type { Bindings } from "./bindings";
@@ -91,13 +92,15 @@ export async function submit(env: Bindings, caller: Principal, key: string, saga
   }
   return { executionId: id, replayed: inserted.meta.changes === 0, statusUrl: `/api/executions/${id}` };
 }
-/** Connection resolution outcome (ADR 010 section 3, Phase 1b). Lookup is
- * always exactly one row for this Organization — never a global cascade,
- * never cross-org. Declared-but-missing fails loud with 424 so a miswired
- * install can never silently skip work; undeclared (optional) access
- * resolves to None and the Saga decides its own fallback/skip. */
+/** Connection resolution outcome (ADR 010 section 3, Phase 1b; entity split
+ * per ADR 003). Lookup is always exactly one row for this Organization —
+ * never a global cascade, never cross-org. A hit returns the typed
+ * Connection (IDs plus non-secret config); declared-but-missing fails loud
+ * with 424 so a miswired install can never silently skip work; undeclared
+ * (optional) access resolves to None and the Saga decides its own
+ * fallback/skip. */
 export type ConnectionResolution =
-  | { readonly found: true; readonly connection: { endpoint: string } }
+  | { readonly found: true; readonly connection: Connection }
   | { readonly found: false; readonly declared: true; readonly error: SafeError }
   | { readonly found: false; readonly declared: false };
 
@@ -107,11 +110,19 @@ export async function resolveConnection(
   integrationId: string,
   required: readonly string[],
 ): Promise<ConnectionResolution> {
-  const connection = await db
-    .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
+  const row = await db
+    .prepare("SELECT id,org_id,integration_id,endpoint FROM connections WHERE org_id=? AND integration_id=?")
     .bind(org.orgId, integrationId)
-    .first<{ endpoint: string }>();
-  if (connection) return { found: true, connection };
+    .first<{ id: string; org_id: string; integration_id: string; endpoint: string }>();
+  if (row) {
+    const connection: Connection = {
+      id: row.id,
+      integrationId: row.integration_id,
+      orgId: row.org_id,
+      endpoint: row.endpoint,
+    };
+    return { found: true, connection };
+  }
   if (required.includes(integrationId)) {
     return {
       found: false,
