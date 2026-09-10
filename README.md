@@ -1,5 +1,7 @@
 # Wrangnarök
 
+[![codecov](https://codecov.io/gh/MTG-Thomas/Wrangnarok/branch/main/graph/badge.svg)](https://codecov.io/gh/MTG-Thomas/Wrangnarok)
+
 > An experimental, Cloudflare-native reimagining of [Bifrost](https://github.com/gobifrost/bifrost).
 
 Wrangnarök asks a deliberately constrained question:
