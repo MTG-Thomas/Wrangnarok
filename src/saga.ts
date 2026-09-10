@@ -21,7 +21,7 @@ import type { WorkflowSleepDuration, WorkflowStep } from "cloudflare:workers";
 import { stepRetryLimit, UUID } from "./domain";
 import type { EchoInput, NinjaOrgsResult } from "./domain";
 import type { EchoConnection } from "./integrations/echo";
-import type { NinjaConnection, NinjaCredentials } from "./integrations/ninjaone";
+import type { NinjaConnection, NinjaSecrets } from "./integrations/ninjaone";
 
 /** Durable Operation API surfaced to Saga authors. Deliberately smaller than
  * the native WorkflowStep: do() for retry-unit work, sleep() for explicit
@@ -39,7 +39,7 @@ export interface EchoIntegrationHandle {
   echo(connection: EchoConnection, input: EchoInput, operationId: string): Promise<EchoInput>;
 }
 export interface NinjaOneIntegrationHandle {
-  listOrganizations(connection: NinjaConnection, credentials: NinjaCredentials): Promise<NinjaOrgsResult>;
+  listOrganizations(connection: NinjaConnection, secrets: NinjaSecrets): Promise<NinjaOrgsResult>;
 }
 export interface SagaIntegrations {
   readonly echo: EchoIntegrationHandle;

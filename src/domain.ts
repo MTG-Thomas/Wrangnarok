@@ -53,6 +53,10 @@ export const STEP_RETRY_CEILING = 2;
 // deadline and surfaces ECHO_VENDOR_TIMEOUT. TimedOut is only ever written by
 // the explicit timeout-mark-v1 checkpoint, never inferred from introspection.
 export const VENDOR_TIMEOUT_MS = 1000;
+// NinjaOne vendor deadline (Phase 2, issue #76): same posture as echo — the
+// Integration enforces its own deadline and surfaces NINJA_VENDOR_TIMEOUT
+// for both aborted and merely-late vendors. Sagas route it to timeout-mark-v1.
+export const NINJA_TIMEOUT_MS = 5000;
 export const EXECUTION_ID = /^[a-f0-9]{64}$/;
 export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export type ExecutionStatus = "Pending" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelling" | "Cancelled";
@@ -196,10 +200,10 @@ export function parseDigestInput(value: unknown): DigestInput {
 // stays under the echo input bound (1024 UTF-8 bytes) via truncation below,
 // so the digest never inherits an unbounded vendor list.
 export const DIGEST_MAX_NAMES = 5;
-/** Pure transform: shape a NinjaOne census into an echoable digest message. */
-export function shapeDigest(census: NinjaOrgsResult): EchoInput {
-  const names = census.organizations.slice(0, DIGEST_MAX_NAMES).map((org) => org.name);
-  let message = `NinjaOne organizations (${census.organizationCount} total): ${names.join(", ") || "none"}`;
+/** Pure transform: shape a NinjaOne organization list into an echoable digest message. */
+export function shapeDigest(orgs: NinjaOrgsResult): EchoInput {
+  const names = orgs.organizations.slice(0, DIGEST_MAX_NAMES).map((org) => org.name);
+  let message = `NinjaOne organizations (${orgs.organizationCount} total): ${names.join(", ") || "none"}`;
   const bytes = new TextEncoder().encode(message);
   if (bytes.length > 1024) {
     let end = 1024;
