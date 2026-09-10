@@ -23,6 +23,10 @@ export default defineConfig({
       reporter: ["text", "lcov", "json"],
       include: ["src/**/*.ts"],
       exclude: ["test/**", "client/**", "**/*.d.ts", ".opencode/**", "scripts/**"],
+      // Coverage habit: every metric stays at or above 95%. Vitest exits
+      // non-zero below any threshold, so both local runs and the CI runtime
+      // gate fail closed on regressions.
+      thresholds: { lines: 95, functions: 95, branches: 95, statements: 95 },
     },
   },
 });

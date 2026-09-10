@@ -24,13 +24,13 @@ Tracked by issue #1.
 
 Before adding lots of integrations, settle the contracts that are expensive to change later:
 
-- stable Saga identity independent of source edits
-- Saga discovery/registration model
-- Execution and Operation state model
-- Organization context propagation via `ctx` (builds on Phase 0 `default` stub; still no multi-tenancy/auth)
-- Integration vs Connection contract
-- local-development behavior
-- source metadata vs persisted runtime policy
+- stable Saga identity independent of source edits — Implemented (#80, #85)
+- Saga discovery/registration model — Implemented (#83, #85)
+- Execution and Operation state model — Implemented (#83)
+- Organization context propagation via `ctx` (builds on Phase 0 `default` stub; still no multi-tenancy/auth) — Implemented (#80, #83)
+- Integration vs Connection contract — Implemented (#80, #83, #88)
+- local-development behavior — Implemented (#80)
+- source metadata vs persisted runtime policy — Implemented (#80, #83)
 
 ## Phase 2 — Real orchestration
 

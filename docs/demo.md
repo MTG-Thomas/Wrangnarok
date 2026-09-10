@@ -58,13 +58,14 @@ Invoke-RestMethod http://127.0.0.1:8903/api/executions/$id -Headers $H
 Invoke-RestMethod http://127.0.0.1:8903/api/executions -Headers $H
 ```
 
-## Last verified (2026-09-10, lane-C, local workerd)
+## Last verified (2026-09-10, lane-C, local workerd, origin/main `238d354`)
 
-- `GET /api/sagas` listed `echo, ninjaone-orgs, system.smoke`.
+- `GET /api/sagas` listed `echo, ninjaone-orgs, ninjaone-echo-digest, system.smoke`.
 - `POST /api/executions` (system.smoke): `202`, `replayed: false`.
 - Detail: `Succeeded`; operations `prepare-input-v1` / `smoke-write-v1` /
   `smoke-verify-v1` all `Succeeded`; result `d1WriteOk: true, d1ReadOk: true`;
   advisory `runtimeStatus: complete`.
-- History: 1 execution, `hasMore: false`.
+- History: 2 executions (local D1 persists across runs), `?status=Succeeded`
+  server filter verified live, `nextCursor` present.
 - Replay with same key + input: `200`, `replayed: true`.
 - Short keys (14-15 chars) are rejected with `400 INVALID_IDEMPOTENCY_KEY`.
