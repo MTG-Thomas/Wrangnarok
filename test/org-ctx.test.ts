@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0
 // Phase 1b (ADR 010): OrgCtx construction, Connection resolution contract,
-// the Cancelling lost-terminal race, plus the source/persisted boundary
-// checks. Runs in real workerd with a real D1 binding; drives the terminal
-// checkpoints directly so both race orders are deterministic (no timing).
+// owner-cancel-wins over racing terminal checkpoints, plus the
+// source/persisted boundary checks. Runs in real workerd with a real D1
+// binding; drives the terminal checkpoints directly so both race orders are
+// deterministic (no timing).
 import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { echoSaga, ECHO_INTEGRATION_ID, NINJA_INTEGRATION_ID } from "../src/domain";
-import { buildOrgCtx } from "../src/saga";
-import { cancelExecution, failExecution, resolveConnection } from "../src/executions";
+import { buildOrgCtx, withOperation } from "../src/saga";
+import { beginOperation, cancelExecution, failExecution, finishOperation, resolveConnection } from "../src/executions";
 import type { ExecutionRow } from "../src/executions";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
@@ -46,6 +47,16 @@ async function statusOf(id: string): Promise<string> {
     .first<{ status: string }>();
   if (!row) throw new Error(`missing execution ${id}`);
   return row.status;
+}
+
+async function operationOf(id: string, name: string) {
+  const row = await bindings.DB.prepare(
+    "SELECT status,result_json,error_json FROM operations WHERE execution_id=? AND name=?",
+  )
+    .bind(id, name)
+    .first<{ status: string; result_json: string | null; error_json: string | null }>();
+  if (!row) throw new Error(`missing operation ${name} for ${id}`);
+  return row;
 }
 
 beforeEach(async () => {
@@ -142,14 +153,16 @@ it("applies the local seed idempotently", async () => {
   expect(conns?.n).toBe(1);
 });
 
-it("lets a racing terminal checkpoint win as Failed once Cancelling", async () => {
+it("lets an owner-requested cancel win over a racing terminal checkpoint", async () => {
+  // ADR 001: once the Cancelling marker is written, the checkpoint is the
+  // stale one — it no-ops, and the cancel marker lands Cancelled. An
+  // acknowledged cancellation is never flipped to Failed afterward.
   const id = "d".repeat(64);
   await insertExecution(id, "Cancelling");
   await failExecution(bindings.DB, id, { code: "ECHO_INTEGRATION_FAILED", message: "lost race" });
-  expect(await statusOf(id)).toBe("Failed");
-  // The cancel marker arrives late and must no-op: terminal stays Failed.
+  expect(await statusOf(id)).toBe("Cancelling");
   await cancelExecution(bindings.DB, id);
-  expect(await statusOf(id)).toBe("Failed");
+  expect(await statusOf(id)).toBe("Cancelled");
 });
 
 it("keeps Cancelled against a late terminal checkpoint", async () => {
@@ -160,4 +173,42 @@ it("keeps Cancelled against a late terminal checkpoint", async () => {
   // Late checkpoint after cancellation matches no row: no overwrite.
   await failExecution(bindings.DB, id, { code: "ECHO_INTEGRATION_FAILED", message: "late" });
   expect(await statusOf(id)).toBe("Cancelled");
+});
+
+it("narrows an OrgCtx to the step doing the work", async () => {
+  const id = "b".repeat(64);
+  await insertExecution(id, "Pending");
+  const row = await bindings.DB.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
+  if (!row) throw new Error("missing execution");
+  const stepOrg = withOperation(buildOrgCtx(row, "prepare-input-v1"), "echo-http-v1");
+  expect(stepOrg.operationId).toBe("echo-http-v1");
+  expect(stepOrg).toMatchObject({ orgId, userId, executionId: id, attemptToken: `${id}:1` });
+});
+
+it("never lets a late finish overwrite terminal Operation history", async () => {
+  const id = "1".repeat(64);
+  await insertExecution(id, "Pending");
+  await beginOperation(bindings.DB, id, "echo-http-v1", 1);
+  await failExecution(bindings.DB, id, { code: "ECHO_INTEGRATION_FAILED", message: "first" });
+  expect((await operationOf(id, "echo-http-v1")).status).toBe("Failed");
+  // A still-running vendor callback completes late: the fenced finish
+  // matches no Running row and no-ops instead of inventing success.
+  await finishOperation(bindings.DB, id, "echo-http-v1", { message: "late" });
+  const op = await operationOf(id, "echo-http-v1");
+  expect(op.status).toBe("Failed");
+  expect(op.result_json).toBeNull();
+  expect(JSON.parse(op.error_json as string)).toMatchObject({ code: "ECHO_INTEGRATION_FAILED" });
+  // Re-begin after terminal is equally fenced: history is never resurrected.
+  await beginOperation(bindings.DB, id, "echo-http-v1", 1);
+  expect((await operationOf(id, "echo-http-v1")).status).toBe("Failed");
+});
+
+it("resets a Running Operation row on step retry", async () => {
+  const id = "2".repeat(64);
+  await insertExecution(id, "Pending");
+  await beginOperation(bindings.DB, id, "prepare-input-v1", 0);
+  await beginOperation(bindings.DB, id, "prepare-input-v1", 0);
+  expect((await operationOf(id, "prepare-input-v1")).status).toBe("Running");
+  await finishOperation(bindings.DB, id, "prepare-input-v1", { message: "hello" });
+  expect(await operationOf(id, "prepare-input-v1")).toMatchObject({ status: "Succeeded" });
 });

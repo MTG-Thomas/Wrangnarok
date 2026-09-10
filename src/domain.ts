@@ -74,15 +74,16 @@ const CHECKPOINT_STEPS: ReadonlySet<string> = new Set([
 export function stepRetryLimit(stepName: string): number {
   return CHECKPOINT_STEPS.has(stepName) ? STEP_RETRY_CEILING : 0;
 }
-// Canonical transition table (ADR 001, issue #16; lost-terminal race per ADR
-// 010). Cancelling is transient: Pending/Running -> Cancelling, then either
-// Cancelled (cancel marker wins) or Failed (a racing terminal checkpoint
-// wins; cancelExecution no-ops on non-Cancelling rows). Terminal states have
+// Canonical transition table (ADR 001). Cancelling is transient:
+// Pending/Running -> Cancelling -> Cancelled. Once the owner-requested
+// Cancelling marker is written, cancel wins: a terminal checkpoint that
+// lands after it is the stale one and no-ops, so an acknowledged
+// cancellation is never flipped to Failed afterward. Terminal states have
 // no outgoing transitions. Unit-tested as pure TypeScript.
 const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]> = {
   Pending: ["Running", "Failed", "Cancelling"],
   Running: ["Succeeded", "Failed", "TimedOut", "Cancelling"],
-  Cancelling: ["Cancelled", "Failed"],
+  Cancelling: ["Cancelled"],
   Succeeded: [],
   Failed: [],
   TimedOut: [],
@@ -90,6 +91,21 @@ const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]>
 };
 export function canTransition(from: ExecutionStatus, to: ExecutionStatus): boolean {
   return EXECUTION_TRANSITIONS[from].includes(to);
+}
+// Operation state model (ADR 010 section 2, Phase 1b follow-up). Operations
+// stay within ('Running','Succeeded','Failed'); the timeout code lives in
+// error_json, never as an Operation status. A step (re)begin moves a fresh
+// row to Running or resets a retried Running row; terminal rows are never
+// resurrected — begin/finish writes are fenced on status='Running' in SQL,
+// and this table is the pure-TypeScript gate for the same rule.
+export type OperationStatus = "Running" | "Succeeded" | "Failed";
+const OPERATION_TRANSITIONS: Record<OperationStatus, readonly OperationStatus[]> = {
+  Running: ["Succeeded", "Failed"],
+  Succeeded: [],
+  Failed: [],
+};
+export function canTransitionOperation(from: OperationStatus, to: OperationStatus): boolean {
+  return OPERATION_TRANSITIONS[from].includes(to);
 }
 export interface Principal {
   readonly userId: string;
