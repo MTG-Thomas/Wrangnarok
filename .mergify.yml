@@ -28,7 +28,7 @@ pull_request_rules:
   - name: Auto-update behind automerge PRs
     conditions:
       - label=automerge
-      - conflict=false
+      - -conflict
       - base=main
       - "#changes-requested-reviews-by=0"
     actions:
