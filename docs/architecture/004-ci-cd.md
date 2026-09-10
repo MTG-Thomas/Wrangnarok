@@ -23,7 +23,8 @@ The baseline PR pipeline is:
 4. TypeScript typecheck;
 5. unit tests;
 6. Worker-runtime integration tests using Cloudflare's Vitest/workerd tooling and local bindings;
-7. `wrangler deploy --dry-run` or the closest current non-mutating build validation.
+7. `wrangler deploy --dry-run` or the closest current non-mutating build validation;
+8. Worker bundle budget (`npm run check:bundle`, see below).
 
 External Integration/vendor behavior is mocked or served by deterministic fixtures. Cloudflare services are locally emulated wherever Cloudflare provides supported local bindings.
 
@@ -59,6 +60,12 @@ Typical staged change:
 5. remove obsolete schema in a later release.
 
 D1 recovery features are a safety net, not a substitute for compatible migrations.
+
+### Worker bundle budget
+
+The Worker bundle MUST stay under 100 KiB of raw emitted bytes, enforced by `npm run check:bundle` in PR CI. The script measures the exact bundle `wrangler deploy --dry-run --outfile` produces (no CLI output parsing), so a heavy dependency or cold-start creep breaks the build instead of drifting.
+
+The budget is deliberately generous against the current ~62 KiB bundle. Shrink the bundle first when it trips; raise the budget only with the reason recorded alongside the bump — never silently to make a red run green.
 
 ### Platform smoke Saga
 
