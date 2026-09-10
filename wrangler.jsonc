@@ -61,6 +61,10 @@
       "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "dev",
+        // LAB_ENABLED is a non-secret kill-switch (NOT a credential): dev
+        // API is unreachable rubble without it (authenticate 404s). The
+        // actual credentials stay in secrets per the NOTE below.
+        "LAB_ENABLED": "true",
         // NOTE: LAB_TOKEN/LAB_ORG_ID/LAB_USER_ID (and NINJA_* when needed)
         // come from `wrangler secret put --env dev` ONLY. Do not add empty
         // placeholders here: empty vars shadow uploaded secrets at runtime.
