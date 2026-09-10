@@ -93,7 +93,16 @@ it("resolves the exact-org Connection through the OrgCtx", async () => {
   const org = buildOrgCtx(row, "echo-http-v1");
   const resolved = await resolveConnection(bindings.DB, org, ECHO_INTEGRATION_ID, [ECHO_INTEGRATION_ID]);
   expect(resolved).toMatchObject({ found: true });
-  if (resolved.found) expect(resolved.connection.endpoint).toBe("http://127.0.0.1:8788/echo");
+  // ADR 003 split: the hit is a typed Connection (stable IDs plus
+  // non-secret config) — never bare endpoint text, never credentials.
+  if (resolved.found) {
+    expect(resolved.connection).toMatchObject({
+      integrationId: ECHO_INTEGRATION_ID,
+      orgId,
+      endpoint: "http://127.0.0.1:8788/echo",
+    });
+    expect(typeof resolved.connection.id).toBe("string");
+  }
 });
 
 it("fails loud on declared-but-missing and returns None on undeclared", async () => {
