@@ -21,6 +21,11 @@
       "id": "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
       "name": "system.smoke",
       "revision": "system.smoke-v1"
+    },
+    {
+      "id": "395e15f0-3627-41f6-8922-008ce37e3b35",
+      "name": "hello",
+      "revision": "hello-v1"
     }
   ]
 }

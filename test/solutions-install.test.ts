@@ -7,7 +7,15 @@ import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { Bindings } from "../src/bindings";
-import { digestSaga, ECHO_INTEGRATION_ID, echoSaga, NINJA_INTEGRATION_ID, ninjaSaga, smokeSaga } from "../src/domain";
+import {
+  digestSaga,
+  ECHO_INTEGRATION_ID,
+  echoSaga,
+  helloSaga,
+  NINJA_INTEGRATION_ID,
+  ninjaSaga,
+  smokeSaga,
+} from "../src/domain";
 import { installBundle, parseBundleManifest, updateConnectionEndpoint } from "../src/solutions";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
@@ -235,7 +243,7 @@ it("never adopts loose rows or rows managed by another bundle", async () => {
 it("keeps the installer catalog in agreement with the static Saga definitions", () => {
   // The installer must accept pins for every Saga the code catalog defines
   // (same stable IDs and revisions the Saga definitions are built from).
-  for (const saga of [echoSaga, ninjaSaga, digestSaga, smokeSaga]) {
+  for (const saga of [echoSaga, ninjaSaga, digestSaga, smokeSaga, helloSaga]) {
     const parsed = parseBundleManifest({
       manifestVersion: 1,
       bundle: { id: BUNDLE_ID, name: "catalog-probe", version: "1.0.0" },
