@@ -53,4 +53,4 @@ One lane per worktree. Parallel agents (human or AI) must work on separate branc
 
 ## Merging
 
-Native GitHub merge queue is unavailable to personal-account repos, so Mergify owns merging into `main` (see `.mergify.yml`). Green PRs enter the queue via `@mergifyio queue` comment or the `automerge` label (green + no requested changes). Never merge a red PR, never force-push a shared lane branch, and keep the merge method as merge commits unless an ADR says otherwise.
+Native GitHub merge queue is unavailable to personal-account repos, so Mergify owns merging into `main` (see `.mergify.yml`). Green PRs enter the queue via `@mergifyio queue` comment or the `automerge` label (green + no requested changes). Apply the `automerge` label at PR creation when the PR is intended to merge as-is, so green PRs never starve waiting for a second trip. The queue is serial by design (strict protection + batch size 1): expect roughly 3 minutes per PR and linear drain under burst — do not trade strictness for throughput without an ADR. Never merge a red PR, never force-push a shared lane branch, and keep the merge method as merge commits unless an ADR says otherwise.
