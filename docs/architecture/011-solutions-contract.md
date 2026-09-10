@@ -3,6 +3,7 @@
 - **Status:** Proposed (gates production promotion per issue #35; dev deploy unaffected)
 - **Date:** 2026-09-10
 - **Extends:** upstream findings 9–11, ADR 002 (stable identity), ADR 003 (Integration vs Connection), ADR 005 (secret storage)
+- **Upstream compatibility:** verified against `gobifrost/bifrost` Solutions machinery (`api/src/services/solutions/`, ORM + contracts, Sep 2026 mirror). Ideology preserved throughout; divergences below are explicit and Cloudflare-driven.
 
 ## Context
 
@@ -32,6 +33,8 @@ A bundle is one manifest file plus the Git tree it points at. Schema (v1):
 
 Structural exclusions (rejected by validation, not convention): credential/token *values* (only `secretsRequired` names), Execution/Operation/history rows, Workflow instance IDs, environment URLs that embed tenant identity. Secrets resolve at install time from env/Secrets Store per ADR 005 — the manifest never carries them and `secretsRequired` names must exist in the Integration's declared secret schema.
 
+**Explicit divergence — format:** upstream ships `bifrost.solution.yaml` plus `.bifrost/*.yaml` declarations inside a zip. Wrangnarök uses a single JSON manifest: Worker-native parsing with no YAML dependency, and no packaging step in v1 (Section 5). Same ideology (source + declarations only, values excluded); different container.
+
 ### 2. Install is reconciliation, not seeding
 
 `installBundle(db, manifest, { strict })` is idempotent per row and restart-safe:
@@ -45,16 +48,43 @@ Re-running an install is a no-op when nothing drifted. Interrupted activation re
 
 ### 3. Owned vs loose: one flag, enforced in code
 
+Upstream marks ownership with a nullable install id (`solution_id NULL` = loose,
+non-NULL = owned by exactly one install): live mutation of owned rows is
+blocked (409 plus a persistence-layer backstop), redeploy upserts owned rows in
+place and deletes absentees scoped to the install (`solution_id == sid AND id
+NOT IN bundle`), installed entities get deterministic stable IDs, and file
+payloads are never deleted. Wrangnarök copies this shape with D1 means:
+
 - **Managed:** `connections` config columns + `bundle_installs` ledger carry `managed_by = <bundle_id>@<version>`. Ordinary application/API write paths MUST reject writes to managed rows (`MANAGED_RESOURCE` error); only the installer writes them.
 - **Loose:** `executions`, `operations`, `usage_blocks`, and any row with `managed_by IS NULL`. The app owns these freely.
 - Live mutation of a managed row outside install is rejected at the repository layer (centralize Connection writes through one function that checks the flag), demonstrated by test — not by policy prose.
+- Redeploy deletes managed absentees scoped to the bundle install (entities in D1 but no longer in the manifest), except payload-like rows, which are never deleted (applies to future Artifacts; nothing qualifies in v1).
+- Installed entity identity is deterministic (`uuid5`-style over install + manifest identity) so reinstall converges instead of forking duplicates.
 
 ### 4. Activation and rollback are install operations
 
-- Upgrade = install a newer bundle version (reconcile, bump `bundle_installs.version`). Rollback = install the previous manifest (same code path, downgrades managed rows to recorded values). No separate rollback machinery in v1.
-- Saga *behavior* versions travel with code deploys (Worker bundle), not manifests: the manifest pins expected `revision` strings and install **fails closed** (`REVISION_MISMATCH`) when code and manifest disagree, so a deploy can never silently serve undeclared behavior.
+Upstream keeps immutable deployment rows (hashes, pins, states) behind a mutable
+active pointer moved by compare-and-swap, with `conflicted`/`recovery_required`
+outcomes and rollback reusing the same CAS path; downgrades are refused unless
+forced; execution fail-closes with no active pointer. Wrangnarök adopts the
+semantics with D1 means, minus the Postgres/S3/Vite-compile plumbing:
 
-### 5. v1 implementation slice (what #35 ships)
+- Upgrade = install a newer bundle version (reconcile, bump `bundle_installs.version`). Rollback = install the previous manifest (same code path, downgrades managed rows to recorded values). No separate rollback machinery in v1.
+- Each install writes an immutable install record (bundle id/version, manifest hash, resolved IDs); the install pointer moves only on full reconcile success, and a lost race surfaces `conflicted`, never silent overwrite. Downgrades are refused unless forced.
+- Saga *behavior* versions travel with code deploys (Worker bundle), not manifests: the manifest pins expected `revision` strings and install **fails closed** (`REVISION_MISMATCH`) when code and manifest disagree, so a deploy can never silently serve undeclared behavior.
+- Execution fail-closes with no active install for the referenced bundle, with one exception: local/loose development (no install present) keeps working, mirroring upstream's legacy-repo exception. The boundary is explicit, not a silent fallback.
+
+### 5. Install preflight fails closed before any write
+
+Upstream gates deploy on preflight (missing modules, downgrade, pending-capture blockers, locks, scope). Wrangnarök's install preflight, all checked before the first write:
+
+- manifest resolves against the static code catalog (every saga/integration ID exists);
+- pinned revisions match deployed code, else `REVISION_MISMATCH`;
+- every `secretsRequired` name exists in the Integration's secret schema and has a value available (env/Secrets Store), else fail closed — never install half-credentialed;
+- no ownership conflicts (a managed row owned by a *different* bundle id aborts with `INSTALL_CONFLICT`; hijack by re-install is refused);
+- downgrade without explicit force is refused.
+
+### 6. v1 implementation slice (what #35 ships)
 
 - Manifest parser/validator (hand-rolled, no new deps — mirrors the saga-catalog validation style) + one checked-in example bundle (echo saga + echo fixture Integration, `default` org only).
 - `installBundle` + local runner (`npm run install:local`, D1-local, fixture secrets from env) + `--dry-run` drift report.
