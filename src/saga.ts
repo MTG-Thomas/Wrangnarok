@@ -122,9 +122,10 @@ export interface IoSchema {
 export type SagaRun<TOutput> = (ctx: SagaEventContext, step: SagaStep) => Promise<TOutput>;
 
 /** Static Saga definition. Identity/discovery metadata only: id, name,
- * revision, description, optional category/tags and IO schemas, plus parse and
- * run. Any operational-policy key (timeouts, retries, schedules, endpoints,
- * access rules) is rejected by validateSagaDefinition. */
+ * revision, description, optional category/tags and IO schemas, the declared
+ * Integration requirement list, plus parse and run. Any operational-policy
+ * key (timeouts, retries, schedules, endpoints, access rules) is rejected by
+ * validateSagaDefinition. */
 export interface SagaDefinition<TOutput = unknown> {
   readonly id: string;
   readonly name: string;
@@ -132,6 +133,13 @@ export interface SagaDefinition<TOutput = unknown> {
   readonly description: string;
   readonly category?: string;
   readonly tags?: readonly string[];
+  /** Stable Integration IDs this Saga requires in its Organization context
+   * (ADR 010 section 3, Phase 1b). A declared-but-missing Connection fails
+   * loud with 424 INTEGRATION_REQUIREMENT_UNSATISFIED; undeclared (optional)
+   * access resolves to None and never throws. The declaration is mandatory —
+   * every Saga states it explicitly, even when empty. Source declaration
+   * only — never endpoints, credentials, or policy. */
+  readonly requiredIntegrations: readonly string[];
   readonly inputSchema?: IoSchema;
   readonly outputSchema?: IoSchema;
   readonly parse: (value: unknown) => unknown;
@@ -200,6 +208,19 @@ export function validateSagaDefinition(def: SagaDefinition): void {
   if (typeof def.parse !== "function" || typeof def.run !== "function") {
     throw new Error(`Invalid Saga definition "${def.name}": parse and run are required.`);
   }
+  if (def.requiredIntegrations === undefined) {
+    throw new Error(
+      `Invalid Saga definition "${def.name}": requiredIntegrations must be declared explicitly (empty when none).`,
+    );
+  }
+  if (
+    !Array.isArray(def.requiredIntegrations) ||
+    def.requiredIntegrations.some((id) => typeof id !== "string" || !UUID.test(id))
+  ) {
+    throw new Error(
+      `Invalid Saga definition "${def.name}": requiredIntegrations must be an explicit list of stable Integration UUIDs (empty when none).`,
+    );
+  }
   const record = def as unknown as Record<string, unknown>;
   for (const key of OPERATIONAL_POLICY_KEYS) {
     if (key in record) {
@@ -214,7 +235,11 @@ export function validateSagaDefinition(def: SagaDefinition): void {
  * cross-Saga duplicate detection happens in buildCatalog. */
 export function defineSaga<TOutput>(def: SagaDefinition<TOutput>): SagaDefinition<TOutput> {
   validateSagaDefinition(def);
-  return Object.freeze({ ...def, tags: def.tags === undefined ? undefined : Object.freeze([...def.tags]) });
+  return Object.freeze({
+    ...def,
+    tags: def.tags === undefined ? undefined : Object.freeze([...def.tags]),
+    requiredIntegrations: Object.freeze([...def.requiredIntegrations]),
+  });
 }
 
 /** Static Git-owned registration (ADR 002): collect Saga definitions into the

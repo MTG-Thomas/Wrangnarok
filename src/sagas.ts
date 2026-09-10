@@ -33,7 +33,7 @@ import {
 import type { EchoInput, ExecutionParams, NinjaOrgsResult, SafeError, SmokeResult } from "./domain";
 import { assertJsonSerializable, bindSagaStep, buildCatalog, buildOrgCtx, defineSaga } from "./saga";
 import type { CatalogEntry, OrgCtx, SagaDefinition, SagaEventContext } from "./saga";
-import { beginOperation, failExecution, finishOperation } from "./executions";
+import { beginOperation, failExecution, finishOperation, resolveConnection } from "./executions";
 import type { ExecutionRow } from "./executions";
 import { buildUsage, logUsage, persistUsage } from "./usage";
 import { echo } from "./integrations/echo";
@@ -53,6 +53,7 @@ export const echoSagaDef = defineSaga<EchoInput>({
   revision: echoSaga.revision,
   description: echoSaga.description,
   tags: ["utility", "fixture"],
+  requiredIntegrations: [ECHO_INTEGRATION_ID],
   inputSchema: echoInputSchema,
   outputSchema: echoInputSchema,
   parse: parseInput,
@@ -88,18 +89,25 @@ export const echoSagaDef = defineSaga<EchoInput>({
       });
       const outcome = await step.do("echo-http-v1", async () => {
         await beginOperation(ctx.db, id, "echo-http-v1", 1);
-        const connection = await ctx.db
-          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgCtx.orgId, ECHO_INTEGRATION_ID)
-          .first<{ endpoint: string }>();
-        if (!connection)
-          return {
-            ok: false as const,
-            error: {
-              code: "CONNECTION_NOT_CONFIGURED",
-              message: "No echo Connection is configured for this Organization.",
-            },
-          };
+        // Phase 1b (ADR 010): exact-org Connection resolution through the
+        // OrgCtx. Echo is declared required, so a miss fails loud with 424
+        // as a structured step result (no retry via NonRetryableError downstream).
+        const resolved = await resolveConnection(
+          ctx.db,
+          prepared.orgCtx,
+          ECHO_INTEGRATION_ID,
+          echoSagaDef.requiredIntegrations,
+        );
+        if (!resolved.found) {
+          const error = resolved.declared
+            ? resolved.error
+            : {
+                code: "CONNECTION_NOT_CONFIGURED",
+                message: "No echo Connection is configured for this Organization.",
+              };
+          return { ok: false as const, error };
+        }
+        const connection = resolved.connection;
         let result: EchoInput;
         try {
           result = await ctx.integrations.echo.echo(connection, prepared.input, `${id}-echo-http-v1`);
@@ -160,6 +168,7 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
   revision: ninjaSaga.revision,
   description: ninjaSaga.description,
   tags: ["ninjaone", "read-only"],
+  requiredIntegrations: [NINJA_INTEGRATION_ID],
   inputSchema: Object.freeze({
     type: "object" as const,
     properties: Object.freeze({}),
@@ -206,18 +215,25 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
       });
       const outcome = await step.do("ninja-list-orgs-v1", async () => {
         await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
-        const connection = await ctx.db
-          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgCtx.orgId, NINJA_INTEGRATION_ID)
-          .first<{ endpoint: string }>();
-        if (!connection)
-          return {
-            ok: false as const,
-            error: {
-              code: "CONNECTION_NOT_CONFIGURED",
-              message: "No NinjaOne Connection is configured for this Organization.",
-            },
-          };
+        // Phase 1b (ADR 010): exact-org Connection resolution through the
+        // OrgCtx. NinjaOne is declared required, so a miss fails loud with
+        // 424 as a structured step result (no retry via NonRetryableError).
+        const resolved = await resolveConnection(
+          ctx.db,
+          prepared.orgCtx,
+          NINJA_INTEGRATION_ID,
+          ninjaOrgsSagaDef.requiredIntegrations,
+        );
+        if (!resolved.found) {
+          const error = resolved.declared
+            ? resolved.error
+            : {
+                code: "CONNECTION_NOT_CONFIGURED",
+                message: "No NinjaOne Connection is configured for this Organization.",
+              };
+          return { ok: false as const, error };
+        }
+        const connection = resolved.connection;
         // Local-only credential posture (documented Rung 1 deviation): the
         // client secret lives in env, never in D1. ADR 005 envelope before
         // any second Organization.
@@ -276,6 +292,7 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
   revision: smokeSaga.revision,
   description: smokeSaga.description,
   tags: ["platform", "smoke"],
+  requiredIntegrations: [],
   inputSchema: Object.freeze({
     type: "object" as const,
     properties: Object.freeze({}),

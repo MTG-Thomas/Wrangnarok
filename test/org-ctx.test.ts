@@ -6,9 +6,9 @@ import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { Bindings } from "../src/bindings";
-import { echoSaga } from "../src/domain";
+import { echoSaga, ECHO_INTEGRATION_ID, NINJA_INTEGRATION_ID } from "../src/domain";
 import { buildOrgCtx } from "../src/saga";
-import { cancelExecution, failExecution } from "../src/executions";
+import { cancelExecution, failExecution, resolveConnection } from "../src/executions";
 import type { ExecutionRow } from "../src/executions";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
@@ -69,6 +69,36 @@ it("builds OrgCtx from the D1 row, never from caller input", async () => {
     operationId: "prepare-input-v1",
     attemptToken: `${id}:1`,
   });
+});
+
+it("resolves the exact-org Connection through the OrgCtx", async () => {
+  const id = "f".repeat(64);
+  await insertExecution(id, "Pending");
+  const row = await bindings.DB.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
+  if (!row) throw new Error("missing execution");
+  const org = buildOrgCtx(row, "echo-http-v1");
+  const resolved = await resolveConnection(bindings.DB, org, ECHO_INTEGRATION_ID, [ECHO_INTEGRATION_ID]);
+  expect(resolved).toMatchObject({ found: true });
+  if (resolved.found) expect(resolved.connection.endpoint).toBe("http://127.0.0.1:8788/echo");
+});
+
+it("fails loud on declared-but-missing and returns None on undeclared", async () => {
+  const id = "a".repeat(64);
+  await insertExecution(id, "Pending");
+  await bindings.DB.prepare("DELETE FROM connections WHERE org_id=?").bind(orgId).run();
+  const row = await bindings.DB.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
+  if (!row) throw new Error("missing execution");
+  const org = buildOrgCtx(row, "echo-http-v1");
+  const loud = await resolveConnection(bindings.DB, org, ECHO_INTEGRATION_ID, [ECHO_INTEGRATION_ID]);
+  expect(loud).toMatchObject({
+    found: false,
+    declared: true,
+    error: { code: "INTEGRATION_REQUIREMENT_UNSATISFIED" },
+  });
+  // Optional (undeclared) access resolves to None: no throw, no error row —
+  // the Saga decides its own fallback/skip.
+  const silent = await resolveConnection(bindings.DB, org, NINJA_INTEGRATION_ID, []);
+  expect(silent).toEqual({ found: false, declared: false });
 });
 
 it("lets a racing terminal checkpoint win as Failed once Cancelling", async () => {
