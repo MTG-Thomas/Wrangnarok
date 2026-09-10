@@ -11,12 +11,8 @@ queue_rules:
     batch_size: 3
     merge_method: merge
 pull_request_rules:
-  - name: Queue on comment
-    conditions:
-      - comment=@mergifyio queue
-    actions:
-      queue:
-        name: default
+  # NOTE: `@mergifyio queue` comments are native Mergify commands, not a
+  # condition key — no rule needed for the manual trigger.
   - name: Auto-queue labeled green PRs
     conditions:
       - label=automerge
