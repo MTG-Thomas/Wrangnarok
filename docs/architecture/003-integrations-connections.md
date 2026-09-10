@@ -1,6 +1,6 @@
 # ADR 003: Integrations and Connections
 
-Status: **Proposed**
+Status: **Implemented** (per issue #75)
 
 ## Context
 
@@ -136,3 +136,15 @@ Token refresh must not be implemented independently in every Saga.
 - OAuth scope override behavior.
 
 These remain specification fodder for later phases.
+
+## Implementation mapping
+
+Per issue #75 (lanes A: PRs #80, #83, #85, #88):
+
+- Integration registry: `src/integrations/index.ts` (`defineIntegration` validates stable UUID id, slug name, 1–280 char description, explicit `secretFields` list; definitions frozen via `Object.freeze`; `INTEGRATION_DEFINITIONS` canonical order; `integrationById` lookup).
+- Connection entity: typed `Connection` in `src/integrations/index.ts` (IDs plus non-secret `endpoint` only; secret material referenced transiently at execution time, never stored there), returned by `resolveConnection` in `src/executions.ts`.
+- Resolution: `resolveConnection` in `src/executions.ts` looks up exactly one row for the current Organization (`WHERE org_id=? AND integration_id=?`, never a global cascade, never cross-org); declared-but-missing fails loud with structured `424 INTEGRATION_REQUIREMENT_UNSATISFIED`; undeclared (optional) access resolves to `None` with no throw.
+- Declared requirements: mandatory `requiredIntegrations` field on `SagaDefinition` plus `CatalogEntry` in `src/saga.ts` (validated at startup, frozen; operational-policy keys rejected from source).
+- Secret-field declarations: `secretFields` on each `IntegrationDefinition` (`echo`: none; `ninjaone`: `clientSecret`); secret material never serialized through discovery, history, or Execution result APIs.
+
+What stays Proposed/deferred (not implemented by this closeout): OAuth flows (authorization-code, client-credentials refresh coordination, scope overrides/subsets, token replacement lifecycle), per-Organization envelope encryption per ADR 005 (still Proposed, not production-approved), global/default credential fallback (explicitly denied in MVP: lookup is exactly one row for this Organization), provider-organization mapping enumeration, and cross-org mapping administration from ordinary workflow APIs.
