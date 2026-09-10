@@ -15,8 +15,10 @@ import type { SagaEventContext, SagaStep } from "../src/saga";
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "../src/sagas";
 import {
   BODY_LIMIT,
+  ECHO_INTEGRATION_ID,
   digestSaga,
   echoSaga,
+  NINJA_INTEGRATION_ID,
   ninjaSaga,
   parseDigestInput,
   parseInput,
@@ -146,6 +148,7 @@ describe("Saga authoring contract (issue #57)", () => {
       name: "probe",
       revision: "probe-v1",
       description: "Contract probe Saga.",
+      requiredIntegrations: [],
       parse: (value: unknown) => value,
       run: async (_ctx: SagaEventContext, step: SagaStep): Promise<number> => step.do("probe-v1", async () => 1),
     });
@@ -163,13 +166,56 @@ describe("Saga authoring contract (issue #57)", () => {
       name: "probe",
       revision: "probe-v1",
       description: "Contract probe Saga.",
+      requiredIntegrations: [],
       parse: (value: unknown) => value,
       run: async (_ctx: SagaEventContext, step: SagaStep): Promise<number> => step.do("probe-v1", async () => 1),
     };
     expect(() => defineSaga({ ...base, id: "not-a-uuid" })).toThrow(/stable UUID/);
     expect(() => defineSaga({ ...base, description: "" })).toThrow(/description/);
+    expect(() => defineSaga({ ...base, requiredIntegrations: undefined as never })).toThrow(/requiredIntegrations/);
+    expect(() => defineSaga({ ...base, requiredIntegrations: ["not-a-uuid"] })).toThrow(/requiredIntegrations/);
     for (const policy of [{ retries: 2 }, { timeout: "10 seconds" }, { schedule: "* * * * *" }]) {
       expect(() => buildCatalog([defineSaga({ ...base, ...policy })])).toThrow(/operational policy/);
+    }
+  });
+
+  it("declares required Integrations explicitly on every registered Saga", () => {
+    // ADR 010 section 3: declared-but-missing fails loud (424), undeclared
+    // access resolves to None. The declaration is mandatory source metadata.
+    const byName = new Map(SAGA_DEFINITIONS.map((def) => [def.name, def]));
+    expect(byName.get("echo")?.requiredIntegrations).toEqual([ECHO_INTEGRATION_ID]);
+    expect(byName.get("ninjaone-orgs")?.requiredIntegrations).toEqual([NINJA_INTEGRATION_ID]);
+    expect(byName.get("ninjaone-echo-digest")?.requiredIntegrations).toEqual([
+      NINJA_INTEGRATION_ID,
+      ECHO_INTEGRATION_ID,
+    ]);
+    expect(byName.get("system.smoke")?.requiredIntegrations).toEqual([]);
+    for (const def of SAGA_DEFINITIONS) {
+      expect(Array.isArray(def.requiredIntegrations)).toBe(true);
+    }
+    // Knob boundary (ADR 010 section 4): timeouts, retries, schedules, and
+    // other runtime policy must never live in Saga source — only the
+    // stepRetryLimit code table and platform adapter may carry them.
+    for (const def of SAGA_DEFINITIONS) {
+      for (const key of [
+        "timeout",
+        "timeouts",
+        "retry",
+        "retries",
+        "schedule",
+        "schedules",
+        "cron",
+        "endpoint",
+        "endpoints",
+        "access",
+        "rateLimit",
+        "cache",
+        "ttl",
+        "concurrency",
+        "backoff",
+      ]) {
+        expect(def, `Saga "${def.name}" carries persisted-policy key "${key}"`).not.toHaveProperty(key);
+      }
     }
   });
 

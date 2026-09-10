@@ -70,14 +70,15 @@ const CHECKPOINT_STEPS: ReadonlySet<string> = new Set([
 export function stepRetryLimit(stepName: string): number {
   return CHECKPOINT_STEPS.has(stepName) ? STEP_RETRY_CEILING : 0;
 }
-// Canonical transition table (ADR 001, issue #16). Cancelling is transient:
-// Pending/Running -> Cancelling -> Cancelled. Pending cancels immediately;
-// Running cancels via terminate + marker. Terminal states have no outgoing
-// transitions. Unit-tested as pure TypeScript.
+// Canonical transition table (ADR 001, issue #16; lost-terminal race per ADR
+// 010). Cancelling is transient: Pending/Running -> Cancelling, then either
+// Cancelled (cancel marker wins) or Failed (a racing terminal checkpoint
+// wins; cancelExecution no-ops on non-Cancelling rows). Terminal states have
+// no outgoing transitions. Unit-tested as pure TypeScript.
 const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]> = {
   Pending: ["Running", "Failed", "Cancelling"],
   Running: ["Succeeded", "Failed", "TimedOut", "Cancelling"],
-  Cancelling: ["Cancelled"],
+  Cancelling: ["Cancelled", "Failed"],
   Succeeded: [],
   Failed: [],
   TimedOut: [],

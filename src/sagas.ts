@@ -42,9 +42,9 @@ import type {
   SafeError,
   SmokeResult,
 } from "./domain";
-import { assertJsonSerializable, bindSagaStep, buildCatalog, defineSaga } from "./saga";
-import type { CatalogEntry, SagaDefinition, SagaEventContext } from "./saga";
-import { beginOperation, failExecution, finishOperation } from "./executions";
+import { assertJsonSerializable, bindSagaStep, buildCatalog, buildOrgCtx, defineSaga } from "./saga";
+import type { CatalogEntry, OrgCtx, SagaDefinition, SagaEventContext } from "./saga";
+import { beginOperation, failExecution, finishOperation, resolveConnection } from "./executions";
 import type { ExecutionRow } from "./executions";
 import { buildUsage, logUsage, persistUsage } from "./usage";
 import { echo } from "./integrations/echo";
@@ -64,6 +64,7 @@ export const echoSagaDef = defineSaga<EchoInput>({
   revision: echoSaga.revision,
   description: echoSaga.description,
   tags: ["utility", "fixture"],
+  requiredIntegrations: [ECHO_INTEGRATION_ID],
   inputSchema: echoInputSchema,
   outputSchema: echoInputSchema,
   parse: parseInput,
@@ -84,6 +85,9 @@ export const echoSagaDef = defineSaga<EchoInput>({
           throw new NonRetryableError("Execution was cancelled.");
         }
         const input = parseInput(JSON.parse(row.input_json));
+        // Phase 1b (ADR 010): Organization context comes from the immutable
+        // D1 row via buildOrgCtx — never from client input or Workflow params.
+        const orgCtx: OrgCtx = buildOrgCtx(row, "prepare-input-v1");
         await ctx.db
           .prepare(
             "UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'",
@@ -92,22 +96,29 @@ export const echoSagaDef = defineSaga<EchoInput>({
           .run();
         await beginOperation(ctx.db, id, "prepare-input-v1", 0);
         await finishOperation(ctx.db, id, "prepare-input-v1", input);
-        return { input, orgId: row.org_id };
+        return { input, orgCtx };
       });
       const outcome = await step.do("echo-http-v1", async () => {
         await beginOperation(ctx.db, id, "echo-http-v1", 1);
-        const connection = await ctx.db
-          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgId, ECHO_INTEGRATION_ID)
-          .first<{ endpoint: string }>();
-        if (!connection)
-          return {
-            ok: false as const,
-            error: {
-              code: "CONNECTION_NOT_CONFIGURED",
-              message: "No echo Connection is configured for this Organization.",
-            },
-          };
+        // Phase 1b (ADR 010): exact-org Connection resolution through the
+        // OrgCtx. Echo is declared required, so a miss fails loud with 424
+        // as a structured step result (no retry via NonRetryableError downstream).
+        const resolved = await resolveConnection(
+          ctx.db,
+          prepared.orgCtx,
+          ECHO_INTEGRATION_ID,
+          echoSagaDef.requiredIntegrations,
+        );
+        if (!resolved.found) {
+          const error = resolved.declared
+            ? resolved.error
+            : {
+                code: "CONNECTION_NOT_CONFIGURED",
+                message: "No echo Connection is configured for this Organization.",
+              };
+          return { ok: false as const, error };
+        }
+        const connection = resolved.connection;
         let result: EchoInput;
         try {
           result = await ctx.integrations.echo.echo(connection, prepared.input, `${id}-echo-http-v1`);
@@ -168,6 +179,7 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
   revision: ninjaSaga.revision,
   description: ninjaSaga.description,
   tags: ["ninjaone", "read-only"],
+  requiredIntegrations: [NINJA_INTEGRATION_ID],
   inputSchema: Object.freeze({
     type: "object" as const,
     properties: Object.freeze({}),
@@ -208,22 +220,31 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
           .run();
         await beginOperation(ctx.db, id, "prepare-input-v1", 0);
         await finishOperation(ctx.db, id, "prepare-input-v1", {});
-        return { orgId: row.org_id };
+        // Phase 1b (ADR 010): Organization context comes from the immutable
+        // D1 row via buildOrgCtx — never from client input or Workflow params.
+        return { orgCtx: buildOrgCtx(row, "prepare-input-v1") };
       });
       const outcome = await step.do("ninja-list-orgs-v1", async () => {
         await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
-        const connection = await ctx.db
-          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgId, NINJA_INTEGRATION_ID)
-          .first<{ endpoint: string }>();
-        if (!connection)
-          return {
-            ok: false as const,
-            error: {
-              code: "CONNECTION_NOT_CONFIGURED",
-              message: "No NinjaOne Connection is configured for this Organization.",
-            },
-          };
+        // Phase 1b (ADR 010): exact-org Connection resolution through the
+        // OrgCtx. NinjaOne is declared required, so a miss fails loud with
+        // 424 as a structured step result (no retry via NonRetryableError).
+        const resolved = await resolveConnection(
+          ctx.db,
+          prepared.orgCtx,
+          NINJA_INTEGRATION_ID,
+          ninjaOrgsSagaDef.requiredIntegrations,
+        );
+        if (!resolved.found) {
+          const error = resolved.declared
+            ? resolved.error
+            : {
+                code: "CONNECTION_NOT_CONFIGURED",
+                message: "No NinjaOne Connection is configured for this Organization.",
+              };
+          return { ok: false as const, error };
+        }
+        const connection = resolved.connection;
         // Local-only credential posture (documented Rung 1 deviation): the
         // client secret lives in env, never in D1. ADR 005 envelope before
         // any second Organization.
@@ -282,6 +303,7 @@ export const digestSagaDef = defineSaga<DigestResult>({
   revision: digestSaga.revision,
   description: digestSaga.description,
   tags: ["ninjaone", "echo", "read-only"],
+  requiredIntegrations: [NINJA_INTEGRATION_ID, ECHO_INTEGRATION_ID],
   inputSchema: Object.freeze({
     type: "object" as const,
     properties: Object.freeze({}),
@@ -323,22 +345,30 @@ export const digestSagaDef = defineSaga<DigestResult>({
           .run();
         await beginOperation(ctx.db, id, "prepare-input-v1", 0);
         await finishOperation(ctx.db, id, "prepare-input-v1", input);
-        return { orgId: row.org_id };
+        // Phase 1b (ADR 010): Organization context comes from the immutable
+        // D1 row via buildOrgCtx — never from client input or Workflow params.
+        return { orgCtx: buildOrgCtx(row, "prepare-input-v1") };
       });
       const census = await step.do("ninja-list-orgs-v1", async () => {
         await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
-        const connection = await ctx.db
-          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgId, NINJA_INTEGRATION_ID)
-          .first<{ endpoint: string }>();
-        if (!connection)
-          return {
-            ok: false as const,
-            error: {
-              code: "CONNECTION_NOT_CONFIGURED",
-              message: "No NinjaOne Connection is configured for this Organization.",
-            },
-          };
+        // Phase 1b (ADR 010): exact-org resolution through the OrgCtx.
+        // NinjaOne is declared required, so a miss fails loud with 424.
+        const resolved = await resolveConnection(
+          ctx.db,
+          prepared.orgCtx,
+          NINJA_INTEGRATION_ID,
+          digestSagaDef.requiredIntegrations,
+        );
+        if (!resolved.found) {
+          const error = resolved.declared
+            ? resolved.error
+            : {
+                code: "CONNECTION_NOT_CONFIGURED",
+                message: "No NinjaOne Connection is configured for this Organization.",
+              };
+          return { ok: false as const, error };
+        }
+        const connection = resolved.connection;
         const { clientId, clientSecret } = ctx.secrets;
         if (!clientId || !clientSecret)
           return {
@@ -364,18 +394,24 @@ export const digestSagaDef = defineSaga<DigestResult>({
       }
       const echoed = await step.do("echo-digest-v1", async () => {
         await beginOperation(ctx.db, id, "echo-digest-v1", 2);
-        const connection = await ctx.db
-          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
-          .bind(prepared.orgId, ECHO_INTEGRATION_ID)
-          .first<{ endpoint: string }>();
-        if (!connection)
-          return {
-            ok: false as const,
-            error: {
-              code: "CONNECTION_NOT_CONFIGURED",
-              message: "No echo Connection is configured for this Organization.",
-            },
-          };
+        // Phase 1b (ADR 010): exact-org resolution through the OrgCtx. Echo
+        // is declared required, so a miss fails loud with 424.
+        const resolved = await resolveConnection(
+          ctx.db,
+          prepared.orgCtx,
+          ECHO_INTEGRATION_ID,
+          digestSagaDef.requiredIntegrations,
+        );
+        if (!resolved.found) {
+          const error = resolved.declared
+            ? resolved.error
+            : {
+                code: "CONNECTION_NOT_CONFIGURED",
+                message: "No echo Connection is configured for this Organization.",
+              };
+          return { ok: false as const, error };
+        }
+        const connection = resolved.connection;
         let result: EchoInput;
         try {
           result = await ctx.integrations.echo.echo(connection, shapeDigest(census.result), `${id}-echo-digest-v1`);
@@ -434,6 +470,7 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
   revision: smokeSaga.revision,
   description: smokeSaga.description,
   tags: ["platform", "smoke"],
+  requiredIntegrations: [],
   inputSchema: Object.freeze({
     type: "object" as const,
     properties: Object.freeze({}),
@@ -478,7 +515,9 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
         await finishOperation(ctx.db, id, "prepare-input-v1", {});
         // startedMs is captured inside the Operation (replay-memoized), never
         // at the top of run: Date.now() outside step.do fails the contract.
-        return { orgId: row.org_id, startedMs: Date.now() };
+        // Phase 1b (ADR 010): Organization context comes from the immutable
+        // D1 row via buildOrgCtx — never from client input or Workflow params.
+        return { orgCtx: buildOrgCtx(row, "prepare-input-v1"), startedMs: Date.now() };
       });
       const written = await step.do("smoke-write-v1", async () => {
         // D1 write verification: durable probe row, then read it back in-step.
@@ -556,7 +595,7 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
           saga: smokeSaga.name,
           sagaRevision: smokeSaga.revision,
           executionId: id,
-          orgId: verified.result.orgId || prepared.orgId,
+          orgId: verified.result.orgId || prepared.orgCtx.orgId,
           status: "Succeeded",
           operationRows: count?.n ?? output.operationCount,
           reads: 4,

@@ -109,7 +109,10 @@ it("does not resolve another Organization's Connection when this Organization ha
   expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
   await instance.waitForStatus("errored");
   const response = await worker.fetch(request(`/api/executions/${id}`), bindings);
-  expect(await response.json()).toMatchObject({ status: "Failed", error: { code: "CONNECTION_NOT_CONFIGURED" } });
+  expect(await response.json()).toMatchObject({
+    status: "Failed",
+    error: { code: "INTEGRATION_REQUIREMENT_UNSATISFIED" },
+  });
   expect(fetch).not.toHaveBeenCalled();
 });
 
