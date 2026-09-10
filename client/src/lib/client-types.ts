@@ -35,6 +35,18 @@ export interface ExecutionHistoryResponse {
   hasMore: boolean;
 }
 
+/** Catalog entry for GET /api/sagas (read-only Saga discovery metadata). */
+export interface SagaSummary {
+  id: string;
+  name: string;
+  revision: string;
+  description: string;
+}
+
+export interface SagasResponse {
+  sagas: SagaSummary[];
+}
+
 /** Detail shape for GET /api/executions/:id. */
 export interface ExecutionDetail extends ExecutionSummary {
   runtimeStatus: string | null;
