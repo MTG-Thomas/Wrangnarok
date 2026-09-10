@@ -42,6 +42,25 @@ Deployment-level secrets plus org-scoped non-secret Connection mapping:
   execution and dropped (the degenerate inline refresh that works today).
   Cached tokens are secret storage and wait for the tripwire.
 
+### Provider-global scope must be declared per Integration
+
+Deployment-global credentials are legitimate only where the Integration's
+contract explicitly declares provider-global as its normal model — this is
+not a generic implicit fallback. If an Organization-scoped Connection is
+missing, resolution fails closed (`424 INTEGRATION_REQUIREMENT_UNSATISFIED`)
+unless that Integration declares provider-global credentials as normal.
+
+v0 declarations:
+
+| Integration | Credential scope | Rationale |
+| --- | --- | --- |
+| `ninjaone` | provider-global (declared) | MSP-platform M2M app: one credential sees all tenant orgs vendor-side |
+| `echo` | n/a (fixture, no secrets) | Local loopback fixture; `secretFields: []` |
+
+A future Integration whose vendor model is Organization-scoped must use
+per-Organization Connections (tripwire path) and must fail closed until
+they exist — never silently inherit the deployment credential.
+
 ## Scrub and redaction discipline (retained in full)
 
 Unchanged from the prior draft and non-negotiable in v0:
@@ -53,6 +72,23 @@ Unchanged from the prior draft and non-negotiable in v0:
 - No API — admin debug included — echoes decrypted Connection secrets.
 - Workerd tests audit every persisted surface with secret sentinels
   (precedent: `test/ninjaone.test.ts`, `test/ninja-echo-digest.test.ts`).
+
+### Execution-scoped registry and universal output scrubbing (gating deliverable)
+
+Before real credentials or OAuth are production-ready, the redaction
+contract must be enforced by mechanism, not call-site discipline alone
+(per issue #110 analyst reply, accepted):
+
+- An execution-scoped secret registry: secret values materialized during an
+  Execution are registered for that Execution; every egress/persistence path
+  scrubs registered values by substring, not exact-match only. This is the
+  transferable upstream lesson (dynamic registry + deep scrub); Fernet
+  itself is not adopted.
+- Scrubbed egress paths, all of them: console/logs, structured errors,
+  Workflow outputs, D1 Trail/history rows, usage/telemetry payloads, HTTP
+  responses, and thrown exception strings.
+- Tests use secrets embedded as substrings (URLs, headers, vendor error
+  bodies), never exact-value matches alone.
 
 ## Tripwire: envelope encryption as a gated upgrade
 
@@ -116,6 +152,9 @@ acceptance record:
    field is excluded from discovery/history/result serialization by test.
 4. Acceptance stamp (this note, v0 Accepted) + updated
    `docs/upstream-spec.md` secret-management row.
+5. Execution-scoped secret registry + universal output scrubbing implemented
+   with substring-embedded sentinel tests green on every egress path above
+   (gating: real credentials/OAuth stay non-production until this lands).
 
 ## Alternatives considered (ecosystem survey, Sep 2026; verdicts stand)
 
