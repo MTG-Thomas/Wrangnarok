@@ -101,12 +101,11 @@ resurrects a cancelled window.
 Vendor throttling is an expected downstream error, not an engine loss, so
 it is never auto-retried:
 
-- NinjaOne `429` on the organizations call surfaces `NINJA_RATE_LIMITED`
+- NinjaOne `429` on either call surfaces `NINJA_RATE_LIMITED`
   as a structured step result; the Saga fails loud (`Failed`) with no
   retry. The operator re-submits with a fresh key after the vendor window.
-  (The token call has no distinct 429 code today: a throttled token
-  request surfaces `NINJA_AUTH_FAILED`. Closing that gap is a follow-up,
-  not this slice.)
+  (Acceptance review closed the token-call gap: a throttled token request
+  carries the same code with a token-specific message.)
 - The echo fixture has no rate limiting (local fixture, single caller).
 - Automatic `Retry-After` honoring (sleep-until-resume inside the Saga) is
   explicitly deferred: waits driven by vendor headers are persisted retry
