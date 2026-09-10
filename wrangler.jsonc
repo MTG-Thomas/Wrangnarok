@@ -55,7 +55,7 @@
       // workers_dev/routes until promotion is explicitly designed.
       "workers_dev": true,
       "vars": {
-        "ENVIRONMENT": "dev"
+        "ENVIRONMENT": "dev",
         // NOTE: LAB_TOKEN/LAB_ORG_ID/LAB_USER_ID (and NINJA_* when needed)
         // come from `wrangler secret put --env dev` ONLY. Do not add empty
         // placeholders here: empty vars shadow uploaded secrets at runtime.
