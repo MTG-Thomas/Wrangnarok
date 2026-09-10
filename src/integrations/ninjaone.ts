@@ -6,6 +6,7 @@ import {
   NINJA_ORGS_MAX,
   NINJA_ORGS_PATH,
   NINJA_SCOPE,
+  NINJA_TIMEOUT_MS,
   NINJA_TOKEN_PATH,
 } from "../domain";
 import type { NinjaOrgSummary, NinjaOrgsResult } from "../domain";
@@ -17,21 +18,48 @@ export interface NinjaCredentials {
   clientId: string;
   clientSecret: string;
 }
+/** Credential handle as the Saga sees it: presence is NOT guaranteed. The
+ * Action owns the presence check below, so Saga steps never branch on
+ * credentials — they pass the handle through the Integration boundary and
+ * map the resulting Fault like any other downstream error. */
+export interface NinjaSecrets {
+  readonly clientId?: string;
+  readonly clientSecret?: string;
+}
 
-/** Read-only Action: census NinjaOne organizations. Never persists secrets. */
-export async function listOrganizations(
-  connection: NinjaConnection,
-  credentials: NinjaCredentials,
-): Promise<NinjaOrgsResult> {
+/** Read-only Action: census NinjaOne organizations. Never persists secrets.
+ * Credential presence is enforced here, behind the Action boundary: a Saga
+ * step passes its secret handle straight through and maps NINJA_NOT_CONFIGURED
+ * like any other structured downstream error. */
+export async function listOrganizations(connection: NinjaConnection, secrets: NinjaSecrets): Promise<NinjaOrgsResult> {
+  const { clientId, clientSecret } = secrets;
+  if (!clientId || !clientSecret) {
+    throw new Fault(502, "NINJA_NOT_CONFIGURED", "NinjaOne credentials are not configured.");
+  }
   // Token stays a transient local: fetched, used, dropped. It must never
   // reach D1, ExecutionHistory, logs, or Workflow persisted state.
-  const token = await fetchToken(connection, credentials);
-  const response = await fetch(`${connection.endpoint}${NINJA_ORGS_PATH}`, {
-    method: "GET",
-    redirect: "manual",
-    signal: AbortSignal.timeout(5000),
-    headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-  });
+  const token = await fetchToken(connection, { clientId, clientSecret });
+  // Explicit deadline, same posture as echo: a vendor that is slow (abort
+  // fires) or merely late (resolves after the deadline because the transport
+  // ignored the abort) surfaces NINJA_VENDOR_TIMEOUT.
+  const started = Date.now();
+  const timedOut = () => Date.now() - started >= NINJA_TIMEOUT_MS;
+  let response: Response;
+  try {
+    response = await fetch(`${connection.endpoint}${NINJA_ORGS_PATH}`, {
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(NINJA_TIMEOUT_MS),
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+  } catch (error) {
+    throwIfNinjaTimeout(error);
+    throw error;
+  }
+  if (timedOut()) {
+    await response.body?.cancel();
+    throw new Fault(504, "NINJA_VENDOR_TIMEOUT", "NinjaOne exceeded its deadline.");
+  }
   if (response.status >= 300 && response.status < 400) {
     await response.body?.cancel();
     throw new Fault(502, "NINJA_VENDOR_FAILED", "NinjaOne redirected the request.");
@@ -72,18 +100,24 @@ async function fetchToken(connection: NinjaConnection, credentials: NinjaCredent
   // Connection authenticates against its own region with no code change.
   // Scope is pinned read-only; the M2M app carries nothing broader.
   const tokenUrl = new URL(NINJA_TOKEN_PATH, connection.endpoint).toString();
-  const response = await fetch(tokenUrl, {
-    method: "POST",
-    redirect: "manual",
-    signal: AbortSignal.timeout(5000),
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: credentials.clientId,
-      client_secret: credentials.clientSecret,
-      scope: NINJA_SCOPE,
-    }).toString(),
-  });
+  let response: Response;
+  try {
+    response = await fetch(tokenUrl, {
+      method: "POST",
+      redirect: "manual",
+      signal: AbortSignal.timeout(NINJA_TIMEOUT_MS),
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: credentials.clientId,
+        client_secret: credentials.clientSecret,
+        scope: NINJA_SCOPE,
+      }).toString(),
+    });
+  } catch (error) {
+    throwIfNinjaTimeout(error);
+    throw error;
+  }
   if (response.status >= 300 && response.status < 400) {
     await response.body?.cancel();
     throw new Fault(502, "NINJA_AUTH_FAILED", "NinjaOne redirected the token request.");
@@ -107,4 +141,14 @@ async function fetchToken(connection: NinjaConnection, credentials: NinjaCredent
     throw new Fault(502, "NINJA_BAD_RESPONSE", "NinjaOne returned an unexpected token response.");
   }
   return (value as Record<string, unknown>).access_token as string;
+}
+
+/** A slow vendor is an actionable deadline, not a generic vendor failure:
+ * map abort/timeout rejections onto NINJA_VENDOR_TIMEOUT so Sagas can route
+ * them to the explicit timeout checkpoint. Any other transport error
+ * propagates raw and the Saga maps it to NINJA_INTEGRATION_FAILED. */
+function throwIfNinjaTimeout(error: unknown): void {
+  if (error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    throw new Fault(504, "NINJA_VENDOR_TIMEOUT", "NinjaOne exceeded its deadline.");
+  }
 }

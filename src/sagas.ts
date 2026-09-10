@@ -247,16 +247,12 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
         const connection = resolved.connection;
         // Local-only credential posture (documented Rung 1 deviation): the
         // client secret lives in env, never in D1. ADR 005 envelope before
-        // any second Organization.
-        const { clientId, clientSecret } = ctx.secrets;
-        if (!clientId || !clientSecret)
-          return {
-            ok: false as const,
-            error: { code: "NINJA_NOT_CONFIGURED", message: "NinjaOne credentials are not configured." },
-          };
+        // any second Organization. The secret handle passes straight through
+        // the Action boundary — presence is enforced inside listOrganizations,
+        // so this step never branches on credentials.
         let result: NinjaOrgsResult;
         try {
-          result = await ctx.integrations.ninjaone.listOrganizations(connection, { clientId, clientSecret });
+          result = await ctx.integrations.ninjaone.listOrganizations(connection, ctx.secrets);
         } catch (error) {
           const safe =
             error instanceof Fault
@@ -349,7 +345,7 @@ export const digestSagaDef = defineSaga<DigestResult>({
         // D1 row via buildOrgCtx — never from client input or Workflow params.
         return { orgCtx: buildOrgCtx(row, "prepare-input-v1") };
       });
-      const census = await step.do("ninja-list-orgs-v1", async () => {
+      const orgs = await step.do("ninja-list-orgs-v1", async () => {
         await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
         // Phase 1b (ADR 010): exact-org resolution through the OrgCtx.
         // NinjaOne is declared required, so a miss fails loud with 424.
@@ -369,15 +365,12 @@ export const digestSagaDef = defineSaga<DigestResult>({
           return { ok: false as const, error };
         }
         const connection = resolved.connection;
-        const { clientId, clientSecret } = ctx.secrets;
-        if (!clientId || !clientSecret)
-          return {
-            ok: false as const,
-            error: { code: "NINJA_NOT_CONFIGURED", message: "NinjaOne credentials are not configured." },
-          };
+        // Credential use stays behind the Action boundary: the secret handle
+        // passes straight through and listOrganizations enforces presence, so
+        // this step never branches on credentials.
         let result: NinjaOrgsResult;
         try {
-          result = await ctx.integrations.ninjaone.listOrganizations(connection, { clientId, clientSecret });
+          result = await ctx.integrations.ninjaone.listOrganizations(connection, ctx.secrets);
         } catch (error) {
           const safe =
             error instanceof Fault
@@ -388,9 +381,16 @@ export const digestSagaDef = defineSaga<DigestResult>({
         await finishOperation(ctx.db, id, "ninja-list-orgs-v1", result);
         return { ok: true as const, result };
       });
-      if (!census.ok) {
-        expectedFailure = census.error;
-        throw new NonRetryableError(census.error.code);
+      if (!orgs.ok) {
+        expectedFailure = orgs.error;
+        timedOut = orgs.error.code === "NINJA_VENDOR_TIMEOUT";
+        if (timedOut) {
+          // Explicit timeout step, same posture as the echo leg: a slow
+          // NinjaOne vendor surfaces TimedOut, never an inferred failure.
+          const failure: SafeError = orgs.error;
+          await step.do("timeout-mark-v1", () => failExecution(ctx.db, id, failure, "TimedOut"));
+        }
+        throw new NonRetryableError(orgs.error.code);
       }
       const echoed = await step.do("echo-digest-v1", async () => {
         await beginOperation(ctx.db, id, "echo-digest-v1", 2);
@@ -414,7 +414,7 @@ export const digestSagaDef = defineSaga<DigestResult>({
         const connection = resolved.connection;
         let result: EchoInput;
         try {
-          result = await ctx.integrations.echo.echo(connection, shapeDigest(census.result), `${id}-echo-digest-v1`);
+          result = await ctx.integrations.echo.echo(connection, shapeDigest(orgs.result), `${id}-echo-digest-v1`);
         } catch (error) {
           const safe =
             error instanceof Fault
@@ -434,7 +434,7 @@ export const digestSagaDef = defineSaga<DigestResult>({
         }
         throw new NonRetryableError(echoed.error.code);
       }
-      const output: DigestResult = { organizationCount: census.result.organizationCount, echoed: echoed.result };
+      const output: DigestResult = { organizationCount: orgs.result.organizationCount, echoed: echoed.result };
       // Native wait primitive, same posture as echo: infrastructure checkpoint,
       // not a product Operation.
       await step.sleep("settle-wait-v1", "1 second");

@@ -29,7 +29,14 @@ function request(path: string, method = "GET", idempotencyKey = key) {
   });
 }
 const calls: string[] = [];
-function mockVendors(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatus = 200, echoStatus = 200) {
+function mockVendors(
+  token: unknown,
+  orgs: unknown,
+  tokenStatus = 200,
+  orgsStatus = 200,
+  echoStatus = 200,
+  orgsDelayMs = 0,
+) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     calls.push(url);
@@ -40,6 +47,9 @@ function mockVendors(token: unknown, orgs: unknown, tokenStatus = 200, orgsStatu
       });
     }
     if (url === "https://ninja-in-test.invalid/api/v2/organizations") {
+      // Optional slow vendor: the Integration's 5s AbortSignal deadline fires
+      // first and must surface NINJA_VENDOR_TIMEOUT, never a hang.
+      if (orgsDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, orgsDelayMs));
       return new Response(typeof orgs === "string" ? orgs : JSON.stringify(orgs), {
         status: orgsStatus,
         headers: { "Content-Type": "application/json" },
@@ -90,6 +100,7 @@ afterEach(async () => {
 it("runs the NinjaOne census through the echo Integration end to end", async () => {
   const id = await executionId(principal, key);
   await using instance = await introspectWorkflowInstance(bindings.DIGEST_WORKFLOW, id);
+  const started = Date.now();
   const accepted = await worker.fetch(request("/api/executions", "POST"), bindings);
   expect(accepted.status).toBe(202);
   expect(accepted.headers.get("Location")).toBe(`/api/executions/${id}`);
@@ -109,6 +120,9 @@ it("runs the NinjaOne census through the echo Integration end to end", async () 
   // Exactly one outbound call per vendor hop: both vendor steps resolve
   // retries 0 through stepRetryLimit, so success costs token + orgs + echo.
   expect(calls).toHaveLength(3);
+  // The 1-second native step.sleep sits between the echo step and the success
+  // checkpoint, so reaching Succeeded proves wake+continue on this Saga too.
+  expect(Date.now() - started).toBeGreaterThanOrEqual(900);
   // Secrets and tokens never persist: audit every D1 row for both sentinels.
   const tables = await bindings.DB.batch([
     bindings.DB.prepare("SELECT input_json,result_json,error_json FROM executions"),
@@ -151,6 +165,27 @@ it("never auto-retries a failing echo of the digest", async () => {
   expect(calls).toHaveLength(3);
   expect(calls.filter((url) => url.endsWith("/echo"))).toHaveLength(1);
 });
+it("surfaces a slow NinjaOne vendor as TimedOut through the explicit timeout step", async () => {
+  // The mocked orgs endpoint outlives the Integration's 5s deadline: the
+  // abort maps to NINJA_VENDOR_TIMEOUT and the census leg routes it to
+  // timeout-mark-v1, never an inferred failure. The echo hop never runs.
+  mockVendors(
+    { access_token: TOKEN_SENTINEL, expires_in: 3600, token_type: "Bearer" },
+    [{ id: 1, name: "Acme" }],
+    200,
+    200,
+    200,
+    6000,
+  );
+  const id = await executionId(principal, key);
+  await using instance = await introspectWorkflowInstance(bindings.DIGEST_WORKFLOW, id);
+  expect((await worker.fetch(request("/api/executions", "POST"), bindings)).status).toBe(202);
+  await instance.waitForStatus("errored");
+  const response = await worker.fetch(request(`/api/executions/${id}`), bindings);
+  expect(await response.json()).toMatchObject({ status: "TimedOut", error: { code: "NINJA_VENDOR_TIMEOUT" } });
+  expect(calls).toHaveLength(2);
+  expect(calls.some((url) => url.endsWith("/echo"))).toBe(false);
+}, 20000);
 it("cancels a Pending digest execution on its own Workflow binding", async () => {
   // workflowForSaga must resolve the digest binding the same way submit
   // dispatches it (issue #55 class of regression: cancel missing a binding).
