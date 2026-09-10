@@ -33,6 +33,8 @@ export interface ExecutionSummary {
 export interface ExecutionHistoryResponse {
   executions: ExecutionSummary[];
   hasMore: boolean;
+  /** Opaque page marker for the next GET /api/executions call; null when done. */
+  nextCursor: string | null;
 }
 
 /** Catalog entry for GET /api/sagas (read-only Saga discovery metadata). */

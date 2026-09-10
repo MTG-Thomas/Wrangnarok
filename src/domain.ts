@@ -285,3 +285,98 @@ export async function boundedJson(body: ReadableStream<Uint8Array> | null, limit
     throw new Fault(400, "INVALID_JSON", "The body must be valid UTF-8 JSON.");
   }
 }
+
+// --- ExecutionHistory querying (Phase 2, issue #76) ------------------------
+// GET /api/executions is the only route that accepts a query string, and only
+// these keys: status (canonical ExecutionStatus), sagaId (stable Saga UUID),
+// limit (1-50, default 20), cursor (opaque page marker). Anything else is
+// UNSUPPORTED_QUERY — the hardening posture stays deny-by-default.
+export const HISTORY_LIMIT_DEFAULT = 20;
+export const HISTORY_LIMIT_MAX = 50;
+const HISTORY_STATUSES: readonly string[] = [
+  "Pending",
+  "Running",
+  "Succeeded",
+  "Failed",
+  "TimedOut",
+  "Cancelling",
+  "Cancelled",
+];
+export interface HistoryCursor {
+  readonly createdAt: string;
+  readonly id: string;
+}
+export interface HistoryQuery {
+  readonly status?: ExecutionStatus;
+  readonly sagaId?: string;
+  readonly limit: number;
+  readonly cursor?: HistoryCursor;
+}
+/** Opaque page marker: base64url of {createdAt, id}. Clients treat it as an
+ * inscrutable string; the listing query resumes strictly below the tuple in
+ * (created_at DESC, id DESC) order. */
+export function encodeHistoryCursor(cursor: HistoryCursor): string {
+  return btoa(JSON.stringify({ createdAt: cursor.createdAt, id: cursor.id }))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+export function decodeHistoryCursor(value: string): HistoryCursor {
+  let cursor: unknown;
+  try {
+    const padded = value.replaceAll("-", "+").replaceAll("_", "/");
+    cursor = JSON.parse(atob(padded));
+  } catch {
+    throw new Fault(400, "INVALID_CURSOR", "The history cursor is not a valid page marker.");
+  }
+  if (
+    !object(cursor) ||
+    typeof cursor.createdAt !== "string" ||
+    cursor.createdAt.length === 0 ||
+    typeof cursor.id !== "string" ||
+    !EXECUTION_ID.test(cursor.id)
+  ) {
+    throw new Fault(400, "INVALID_CURSOR", "The history cursor is not a valid page marker.");
+  }
+  return { createdAt: cursor.createdAt, id: cursor.id };
+}
+/** Pure parser for the history list query string. Throws Faults with
+ * machine-readable codes; unit-tested without any runtime binding. */
+export function parseHistoryQuery(params: URLSearchParams): HistoryQuery {
+  for (const key of params.keys()) {
+    if (!["status", "sagaId", "limit", "cursor"].includes(key)) {
+      throw new Fault(400, "UNSUPPORTED_QUERY", "Only status, sagaId, limit, and cursor are supported here.");
+    }
+  }
+  let status: ExecutionStatus | undefined;
+  const rawStatus = params.get("status");
+  if (rawStatus !== null) {
+    if (!HISTORY_STATUSES.includes(rawStatus)) {
+      throw new Fault(400, "INVALID_STATUS", "Status must be a canonical Execution status.");
+    }
+    status = rawStatus as ExecutionStatus;
+  }
+  let sagaId: string | undefined;
+  const rawSaga = params.get("sagaId");
+  if (rawSaga !== null) {
+    if (!UUID.test(rawSaga)) {
+      throw new Fault(400, "INVALID_SAGA_ID", "sagaId must be a stable Saga UUID.");
+    }
+    sagaId = rawSaga;
+  }
+  let limit = HISTORY_LIMIT_DEFAULT;
+  const rawLimit = params.get("limit");
+  if (rawLimit !== null) {
+    if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > HISTORY_LIMIT_MAX) {
+      throw new Fault(400, "INVALID_LIMIT", `Limit must be an integer from 1 to ${HISTORY_LIMIT_MAX}.`);
+    }
+    limit = Number(rawLimit);
+  }
+  const rawCursor = params.get("cursor");
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(sagaId === undefined ? {} : { sagaId }),
+    limit,
+    ...(rawCursor === null ? {} : { cursor: decodeHistoryCursor(rawCursor) }),
+  };
+}

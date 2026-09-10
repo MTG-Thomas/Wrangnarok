@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { NonRetryableError } from "cloudflare:workflows";
-import { digestSaga, Fault, executionId, ninjaSaga, RECOVERY_WINDOW_MS, smokeSaga } from "./domain";
-import type { ExecutionStatus, Principal, SafeError, SagaDef } from "./domain";
+import {
+  digestSaga,
+  encodeHistoryCursor,
+  Fault,
+  executionId,
+  ninjaSaga,
+  RECOVERY_WINDOW_MS,
+  smokeSaga,
+} from "./domain";
+import type { ExecutionStatus, HistoryQuery, Principal, SafeError, SagaDef } from "./domain";
 import { buildOrgCtx } from "./saga";
 import type { OrgCtx } from "./saga";
 import type { Bindings } from "./bindings";
@@ -235,5 +243,48 @@ export function summary(row: Omit<ExecutionRow, "input_json" | "result_json" | "
     createdAt: row.created_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+  };
+}
+
+export interface HistoryPage {
+  readonly executions: ReturnType<typeof summary>[];
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
+}
+const HISTORY_COLUMNS =
+  "id,saga_id,saga_name,saga_revision,org_id,user_id,dispatched,status,created_at,started_at,completed_at";
+/** ExecutionHistory listing (Phase 2, issue #76): org/requester-scoped
+ * summaries in (created_at DESC, id DESC) order, with optional status/saga
+ * filters and cursor pagination. Summaries only — input/result never ride
+ * the list. Never claim completeness when more rows exist: hasMore plus a
+ * nextCursor carry the rest. */
+export async function listHistory(db: D1Database, caller: Principal, query: HistoryQuery): Promise<HistoryPage> {
+  const clauses = ["org_id=?", "user_id=?"];
+  const binds: (string | number)[] = [caller.orgId, caller.userId];
+  if (query.status !== undefined) {
+    clauses.push("status=?");
+    binds.push(query.status);
+  }
+  if (query.sagaId !== undefined) {
+    clauses.push("saga_id=?");
+    binds.push(query.sagaId);
+  }
+  if (query.cursor !== undefined) {
+    clauses.push("((created_at < ?) OR (created_at = ? AND id < ?))");
+    binds.push(query.cursor.createdAt, query.cursor.createdAt, query.cursor.id);
+  }
+  const rows = await db
+    .prepare(
+      `SELECT ${HISTORY_COLUMNS} FROM executions WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC,id DESC LIMIT ?`,
+    )
+    .bind(...binds, query.limit + 1)
+    .all<Omit<ExecutionRow, "input_json" | "result_json" | "error_json">>();
+  const page = rows.results.slice(0, query.limit);
+  const hasMore = rows.results.length > query.limit;
+  const last = page[page.length - 1];
+  return {
+    executions: page.map(summary),
+    hasMore,
+    nextCursor: hasMore && last !== undefined ? encodeHistoryCursor({ createdAt: last.created_at, id: last.id }) : null,
   };
 }
