@@ -14,18 +14,21 @@ const payload: SagasResponse = {
       name: "echo",
       revision: "echo-v1",
       description: "MVP slice: prepare input and call the local HTTP echo Integration",
+      requiredIntegrations: ["720b9ebf-9b6a-4eac-bae9-6ed22c970402"],
     },
     {
       id: "2c79a880-f1ac-4183-b324-d05daffc321a",
       name: "ninjaone-orgs",
       revision: "ninjaone-orgs-v1",
       description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
+      requiredIntegrations: ["0606e237-137b-4629-8346-85468e1c2df6"],
     },
     {
       id: "5f3bf136-ba9e-4529-8842-6786270ee80d",
       name: "ninjaone-echo-digest",
       revision: "ninjaone-echo-digest-v1",
       description: "Phase 2: NinjaOne organization census digested through the echo Integration",
+      requiredIntegrations: ["0606e237-137b-4629-8346-85468e1c2df6", "720b9ebf-9b6a-4eac-bae9-6ed22c970402"],
     },
     {
       id: "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
@@ -33,6 +36,7 @@ const payload: SagasResponse = {
       revision: "system.smoke-v1",
       description:
         "Platform smoke: Worker request handling, D1 write/read verification, multi-Operation Workflow, terminal persistence, usage block — no vendor dependency",
+      requiredIntegrations: [],
     },
   ],
 };
@@ -57,7 +61,12 @@ it("renders the Sagas catalog from a mocked /api/sagas payload", async () => {
     expect(html).toContain(saga.description);
     expect(html).toContain(saga.id.slice(0, 12));
     expect(html).toContain(`title="${saga.id}"`);
+    for (const integrationId of saga.requiredIntegrations) {
+      expect(html).toContain(`title="${integrationId}"`);
+    }
   }
+  expect(html).toContain("Requires");
+  expect(html).toContain("none");
   expect(html).toContain("Sagas");
 });
 

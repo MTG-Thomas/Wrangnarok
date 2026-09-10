@@ -33,19 +33,10 @@ import {
   shapeDigest,
   smokeSaga,
 } from "./domain";
-import type {
-  DigestInput,
-  DigestResult,
-  EchoInput,
-  ExecutionParams,
-  NinjaOrgsResult,
-  SafeError,
-  SmokeResult,
-} from "./domain";
-import { assertJsonSerializable, bindSagaStep, buildCatalog, buildOrgCtx, defineSaga } from "./saga";
-import type { CatalogEntry, OrgCtx, SagaDefinition, SagaEventContext } from "./saga";
-import { beginOperation, failExecution, finishOperation, resolveConnection } from "./executions";
-import type { ExecutionRow } from "./executions";
+import type { DigestResult, EchoInput, ExecutionParams, NinjaOrgsResult, SafeError, SmokeResult } from "./domain";
+import { assertJsonSerializable, bindSagaStep, buildCatalog, defineSaga, withOperation } from "./saga";
+import type { CatalogEntry, SagaDefinition, SagaEventContext } from "./saga";
+import { beginOperation, failExecution, finishOperation, prepareExecution, resolveConnection } from "./executions";
 import { buildUsage, logUsage, persistUsage } from "./usage";
 import { echo } from "./integrations/echo";
 import { listOrganizations } from "./integrations/ninjaone";
@@ -76,52 +67,33 @@ export const echoSagaDef = defineSaga<EchoInput>({
     let expectedFailure: SafeError | undefined;
     let timedOut = false;
     try {
-      const prepared = await step.do("prepare-input-v1", async () => {
-        const row = await ctx.db.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
-        if (!row || row.saga_id !== echoSaga.id || row.saga_revision !== echoSaga.revision) {
-          throw new NonRetryableError("Unknown Saga revision.");
-        }
-        if (row.status === "Cancelling" || row.status === "Cancelled") {
-          throw new NonRetryableError("Execution was cancelled.");
-        }
-        const input = parseInput(JSON.parse(row.input_json));
-        // Phase 1b (ADR 010): Organization context comes from the immutable
-        // D1 row via buildOrgCtx — never from client input or Workflow params.
-        const orgCtx: OrgCtx = buildOrgCtx(row, "prepare-input-v1");
-        await ctx.db
-          .prepare(
-            "UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'",
-          )
-          .bind(new Date().toISOString(), id)
-          .run();
-        await beginOperation(ctx.db, id, "prepare-input-v1", 0);
-        await finishOperation(ctx.db, id, "prepare-input-v1", input);
-        return { input, orgCtx };
-      });
+      const prepared = await step.do("prepare-input-v1", () =>
+        prepareExecution(ctx.db, id, echoSaga.id, echoSaga.revision, parseInput),
+      );
       const outcome = await step.do("echo-http-v1", async () => {
         await beginOperation(ctx.db, id, "echo-http-v1", 1);
         // Phase 1b (ADR 010): exact-org Connection resolution through the
-        // OrgCtx. Echo is declared required, so a miss fails loud with 424
-        // as a structured step result (no retry via NonRetryableError downstream).
+        // step's own OrgCtx. Echo is declared required, so a miss fails loud
+        // with 424 as a structured step result (no retry via NonRetryableError
+        // downstream). The outbound key derives from the step ctx, so the
+        // stable operation ID and the downstream Idempotency-Key agree.
+        const stepOrg = withOperation(prepared.orgCtx, "echo-http-v1");
         const resolved = await resolveConnection(
           ctx.db,
-          prepared.orgCtx,
+          stepOrg,
           ECHO_INTEGRATION_ID,
           echoSagaDef.requiredIntegrations,
         );
-        if (!resolved.found) {
-          const error = resolved.declared
-            ? resolved.error
-            : {
-                code: "CONNECTION_NOT_CONFIGURED",
-                message: "No echo Connection is configured for this Organization.",
-              };
-          return { ok: false as const, error };
+        if (!resolved.found && !resolved.declared) {
+          // Unreachable while echo stays declared required: optional access
+          // would resolve to None here instead of failing.
+          throw new NonRetryableError("Unexpected optional Integration access.");
         }
+        if (!resolved.found) return { ok: false as const, error: resolved.error };
         const connection = resolved.connection;
         let result: EchoInput;
         try {
-          result = await ctx.integrations.echo.echo(connection, prepared.input, `${id}-echo-http-v1`);
+          result = await ctx.integrations.echo.echo(connection, prepared.input, `${id}-${stepOrg.operationId}`);
         } catch (error) {
           const safe =
             error instanceof Fault
@@ -203,47 +175,28 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
     }
     let expectedFailure: SafeError | undefined;
     try {
-      const prepared = await step.do("prepare-input-v1", async () => {
-        const row = await ctx.db.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
-        if (!row || row.saga_id !== ninjaSaga.id || row.saga_revision !== ninjaSaga.revision) {
-          throw new NonRetryableError("Unknown Saga revision.");
-        }
-        if (row.status === "Cancelling" || row.status === "Cancelled") {
-          throw new NonRetryableError("Execution was cancelled.");
-        }
-        parseNinjaOrgsInput(JSON.parse(row.input_json));
-        await ctx.db
-          .prepare(
-            "UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'",
-          )
-          .bind(new Date().toISOString(), id)
-          .run();
-        await beginOperation(ctx.db, id, "prepare-input-v1", 0);
-        await finishOperation(ctx.db, id, "prepare-input-v1", {});
-        // Phase 1b (ADR 010): Organization context comes from the immutable
-        // D1 row via buildOrgCtx — never from client input or Workflow params.
-        return { orgCtx: buildOrgCtx(row, "prepare-input-v1") };
-      });
+      const prepared = await step.do("prepare-input-v1", () =>
+        prepareExecution(ctx.db, id, ninjaSaga.id, ninjaSaga.revision, parseNinjaOrgsInput),
+      );
       const outcome = await step.do("ninja-list-orgs-v1", async () => {
         await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
         // Phase 1b (ADR 010): exact-org Connection resolution through the
-        // OrgCtx. NinjaOne is declared required, so a miss fails loud with
-        // 424 as a structured step result (no retry via NonRetryableError).
+        // step's own OrgCtx. NinjaOne is declared required, so a miss fails
+        // loud with 424 as a structured step result (no retry via
+        // NonRetryableError).
+        const stepOrg = withOperation(prepared.orgCtx, "ninja-list-orgs-v1");
         const resolved = await resolveConnection(
           ctx.db,
-          prepared.orgCtx,
+          stepOrg,
           NINJA_INTEGRATION_ID,
           ninjaOrgsSagaDef.requiredIntegrations,
         );
-        if (!resolved.found) {
-          const error = resolved.declared
-            ? resolved.error
-            : {
-                code: "CONNECTION_NOT_CONFIGURED",
-                message: "No NinjaOne Connection is configured for this Organization.",
-              };
-          return { ok: false as const, error };
+        if (!resolved.found && !resolved.declared) {
+          // Unreachable while NinjaOne stays declared required: optional
+          // access would resolve to None here instead of failing.
+          throw new NonRetryableError("Unexpected optional Integration access.");
         }
+        if (!resolved.found) return { ok: false as const, error: resolved.error };
         const connection = resolved.connection;
         // Local-only credential posture (documented Rung 1 deviation): the
         // client secret lives in env, never in D1. ADR 005 envelope before
@@ -328,46 +281,26 @@ export const digestSagaDef = defineSaga<DigestResult>({
     let expectedFailure: SafeError | undefined;
     let timedOut = false;
     try {
-      const prepared = await step.do("prepare-input-v1", async () => {
-        const row = await ctx.db.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
-        if (!row || row.saga_id !== digestSaga.id || row.saga_revision !== digestSaga.revision) {
-          throw new NonRetryableError("Unknown Saga revision.");
-        }
-        if (row.status === "Cancelling" || row.status === "Cancelled") {
-          throw new NonRetryableError("Execution was cancelled.");
-        }
-        const input: DigestInput = parseDigestInput(JSON.parse(row.input_json));
-        await ctx.db
-          .prepare(
-            "UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'",
-          )
-          .bind(new Date().toISOString(), id)
-          .run();
-        await beginOperation(ctx.db, id, "prepare-input-v1", 0);
-        await finishOperation(ctx.db, id, "prepare-input-v1", input);
-        // Phase 1b (ADR 010): Organization context comes from the immutable
-        // D1 row via buildOrgCtx — never from client input or Workflow params.
-        return { orgCtx: buildOrgCtx(row, "prepare-input-v1") };
-      });
+      const prepared = await step.do("prepare-input-v1", () =>
+        prepareExecution(ctx.db, id, digestSaga.id, digestSaga.revision, parseDigestInput),
+      );
       const census = await step.do("ninja-list-orgs-v1", async () => {
         await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
-        // Phase 1b (ADR 010): exact-org resolution through the OrgCtx.
-        // NinjaOne is declared required, so a miss fails loud with 424.
+        // Phase 1b (ADR 010): exact-org resolution through the step's own
+        // OrgCtx. NinjaOne is declared required, so a miss fails loud with 424.
+        const stepOrg = withOperation(prepared.orgCtx, "ninja-list-orgs-v1");
         const resolved = await resolveConnection(
           ctx.db,
-          prepared.orgCtx,
+          stepOrg,
           NINJA_INTEGRATION_ID,
           digestSagaDef.requiredIntegrations,
         );
-        if (!resolved.found) {
-          const error = resolved.declared
-            ? resolved.error
-            : {
-                code: "CONNECTION_NOT_CONFIGURED",
-                message: "No NinjaOne Connection is configured for this Organization.",
-              };
-          return { ok: false as const, error };
+        if (!resolved.found && !resolved.declared) {
+          // Unreachable while NinjaOne stays declared required: optional
+          // access would resolve to None here instead of failing.
+          throw new NonRetryableError("Unexpected optional Integration access.");
         }
+        if (!resolved.found) return { ok: false as const, error: resolved.error };
         const connection = resolved.connection;
         const { clientId, clientSecret } = ctx.secrets;
         if (!clientId || !clientSecret)
@@ -394,27 +327,31 @@ export const digestSagaDef = defineSaga<DigestResult>({
       }
       const echoed = await step.do("echo-digest-v1", async () => {
         await beginOperation(ctx.db, id, "echo-digest-v1", 2);
-        // Phase 1b (ADR 010): exact-org resolution through the OrgCtx. Echo
-        // is declared required, so a miss fails loud with 424.
+        // Phase 1b (ADR 010): exact-org resolution through the step's own
+        // OrgCtx. Echo is declared required, so a miss fails loud with 424.
+        // The outbound key derives from the step ctx, so the stable operation
+        // ID and the downstream Idempotency-Key agree.
+        const stepOrg = withOperation(prepared.orgCtx, "echo-digest-v1");
         const resolved = await resolveConnection(
           ctx.db,
-          prepared.orgCtx,
+          stepOrg,
           ECHO_INTEGRATION_ID,
           digestSagaDef.requiredIntegrations,
         );
-        if (!resolved.found) {
-          const error = resolved.declared
-            ? resolved.error
-            : {
-                code: "CONNECTION_NOT_CONFIGURED",
-                message: "No echo Connection is configured for this Organization.",
-              };
-          return { ok: false as const, error };
+        if (!resolved.found && !resolved.declared) {
+          // Unreachable while echo stays declared required: optional access
+          // would resolve to None here instead of failing.
+          throw new NonRetryableError("Unexpected optional Integration access.");
         }
+        if (!resolved.found) return { ok: false as const, error: resolved.error };
         const connection = resolved.connection;
         let result: EchoInput;
         try {
-          result = await ctx.integrations.echo.echo(connection, shapeDigest(census.result), `${id}-echo-digest-v1`);
+          result = await ctx.integrations.echo.echo(
+            connection,
+            shapeDigest(census.result),
+            `${id}-${stepOrg.operationId}`,
+          );
         } catch (error) {
           const safe =
             error instanceof Fault
@@ -496,29 +433,12 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
     }
     let expectedFailure: SafeError | undefined;
     try {
-      const prepared = await step.do("prepare-input-v1", async () => {
-        const row = await ctx.db.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
-        if (!row || row.saga_id !== smokeSaga.id || row.saga_revision !== smokeSaga.revision) {
-          throw new NonRetryableError("Unknown Saga revision.");
-        }
-        if (row.status === "Cancelling" || row.status === "Cancelled") {
-          throw new NonRetryableError("Execution was cancelled.");
-        }
-        parseSmokeInput(JSON.parse(row.input_json));
-        await ctx.db
-          .prepare(
-            "UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'",
-          )
-          .bind(new Date().toISOString(), id)
-          .run();
-        await beginOperation(ctx.db, id, "prepare-input-v1", 0);
-        await finishOperation(ctx.db, id, "prepare-input-v1", {});
-        // startedMs is captured inside the Operation (replay-memoized), never
-        // at the top of run: Date.now() outside step.do fails the contract.
-        // Phase 1b (ADR 010): Organization context comes from the immutable
-        // D1 row via buildOrgCtx — never from client input or Workflow params.
-        return { orgCtx: buildOrgCtx(row, "prepare-input-v1"), startedMs: Date.now() };
-      });
+      // startedMs is captured inside the shared prepare Operation
+      // (replay-memoized), never at the top of run: wall-clock reads outside
+      // step.do fail the contract.
+      const prepared = await step.do("prepare-input-v1", () =>
+        prepareExecution(ctx.db, id, smokeSaga.id, smokeSaga.revision, parseSmokeInput),
+      );
       const written = await step.do("smoke-write-v1", async () => {
         // D1 write verification: durable probe row, then read it back in-step.
         await beginOperation(ctx.db, id, "smoke-write-v1", 1);

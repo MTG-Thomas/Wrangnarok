@@ -236,12 +236,14 @@ describe("Saga authoring contract (issue #57)", () => {
       expect(def?.description).toBe(stable.description);
       expect(def?.parse).toBe(parse);
     }
-    // Catalog metadata minimum: stable UUID id, name, description, plus the
-    // optional discovery metadata. No operational policy ever appears here.
+    // Catalog metadata minimum: stable UUID id, name, description, declared
+    // requirements, plus the optional discovery metadata. No operational
+    // policy ever appears here.
     for (const entry of SAGA_CATALOG) {
       expect(entry.id).toMatch(/^[a-f0-9-]{36}$/i);
       expect(entry.description.length).toBeGreaterThan(0);
       expect(entry.tags?.length).toBeGreaterThan(0);
+      expect(entry.requiredIntegrations).toEqual(byName.get(entry.name)?.requiredIntegrations);
       expect(entry.inputSchema?.type).toBe("object");
       expect(entry.outputSchema?.type).toBe("object");
       expect(entry).not.toHaveProperty("retries");

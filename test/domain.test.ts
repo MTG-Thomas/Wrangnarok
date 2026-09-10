@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   boundedJson,
   canTransition,
+  canTransitionOperation,
   digestSaga,
   echoSaga,
   executionId,
@@ -73,9 +74,9 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Running", "TimedOut")).toBe(true);
     expect(canTransition("Running", "Cancelling")).toBe(true);
     expect(canTransition("Cancelling", "Cancelled")).toBe(true);
-    // ADR 010 lost-terminal race: a terminal checkpoint that lands while the
-    // row is Cancelling still wins as Failed; the cancel marker no-ops after.
-    expect(canTransition("Cancelling", "Failed")).toBe(true);
+    // ADR 001: once Cancelling is written, cancel wins — a racing terminal
+    // checkpoint is stale and no-ops, so no Failed edge out of Cancelling.
+    expect(canTransition("Cancelling", "Failed")).toBe(false);
     for (const terminal of ["Succeeded", "Failed", "TimedOut", "Cancelled"] as const) {
       for (const next of [
         "Pending",
@@ -95,6 +96,16 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Cancelling", "Cancelling")).toBe(false);
     expect(canTransition("Cancelling", "TimedOut")).toBe(false);
     expect(canTransition("Cancelling", "Running")).toBe(false);
+  });
+  it("restricts operation transitions to Running plus terminal states", () => {
+    expect(canTransitionOperation("Running", "Succeeded")).toBe(true);
+    expect(canTransitionOperation("Running", "Failed")).toBe(true);
+    expect(canTransitionOperation("Running", "Running")).toBe(false);
+    for (const terminal of ["Succeeded", "Failed"] as const) {
+      for (const next of ["Running", "Succeeded", "Failed"] as const) {
+        expect(canTransitionOperation(terminal, next)).toBe(false);
+      }
+    }
   });
   it("shapes a bounded echoable digest from a NinjaOne census", () => {
     expect(

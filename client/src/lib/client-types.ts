@@ -44,6 +44,9 @@ export interface SagaSummary {
   /** Optional discovery metadata (ADR 002): never operational policy. */
   tags?: string[];
   category?: string;
+  /** Stable Integration IDs this Saga requires in its Organization context
+   * (ADR 010 section 3): discovery only, no endpoints or credentials. */
+  requiredIntegrations: string[];
   inputSchema?: unknown;
   outputSchema?: unknown;
 }

@@ -96,6 +96,14 @@ export function buildOrgCtx(row: OrgCtxRow, operationId?: string): OrgCtx {
   });
 }
 
+/** Narrow an OrgCtx to one durable step. Vendor steps resolve Connections
+ * and derive stable outbound operation IDs through their own step ctx, so
+ * the operationId always names the step doing the work — never the prepare
+ * step that built the base ctx. Pure copy; the epoch and identity survive. */
+export function withOperation(org: OrgCtx, operationId: string): OrgCtx {
+  return Object.freeze({ ...org, operationId });
+}
+
 /** Validated event context for one Saga execution. executionId is the
  * deterministic D1/Workflow identity, checked against the native instance ID
  * by the adapter. Organization context is NOT carried here: each Saga builds
@@ -147,7 +155,9 @@ export interface SagaDefinition<TOutput = unknown> {
 }
 
 /** Discovery metadata served by GET /api/sagas and mirrored into D1
- * Execution rows. Metadata only: D1 never drives Saga behavior. */
+ * Execution rows. Metadata only: D1 never drives Saga behavior. The declared
+ * Integration requirement list is discovery (which Connections a Saga needs
+ * in its Organization), not policy: no endpoints, credentials, or counts. */
 export interface CatalogEntry {
   readonly id: string;
   readonly name: string;
@@ -155,6 +165,7 @@ export interface CatalogEntry {
   readonly description: string;
   readonly category?: string;
   readonly tags?: readonly string[];
+  readonly requiredIntegrations: readonly string[];
   readonly inputSchema?: IoSchema;
   readonly outputSchema?: IoSchema;
 }
@@ -274,6 +285,7 @@ export function buildCatalog(defs: readonly SagaDefinition[]): readonly CatalogE
         description: def.description,
         ...(def.category === undefined ? {} : { category: def.category }),
         ...(def.tags === undefined ? {} : { tags: def.tags }),
+        requiredIntegrations: def.requiredIntegrations,
         ...(def.inputSchema === undefined ? {} : { inputSchema: def.inputSchema }),
         ...(def.outputSchema === undefined ? {} : { outputSchema: def.outputSchema }),
       }),
