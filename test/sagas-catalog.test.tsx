@@ -22,6 +22,12 @@ const payload: SagasResponse = {
       description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
     },
     {
+      id: "5f3bf136-ba9e-4529-8842-6786270ee80d",
+      name: "ninjaone-echo-digest",
+      revision: "ninjaone-echo-digest-v1",
+      description: "Phase 2: NinjaOne organization census digested through the echo Integration",
+    },
+    {
       id: "7a1f3c5e-9b2d-4f6a-8c1e-5d3b7a9f1c2e",
       name: "system.smoke",
       revision: "system.smoke-v1",
@@ -38,7 +44,7 @@ afterEach(() => {
 it("renders the Sagas catalog from a mocked /api/sagas payload", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ sagas: payload.sagas }));
   const data = await listSagas();
-  expect(data.sagas).toHaveLength(3);
+  expect(data.sagas).toHaveLength(4);
 
   const html = renderToStaticMarkup(
     <MemoryRouter>

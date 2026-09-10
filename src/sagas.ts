@@ -19,18 +19,29 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import type { Bindings } from "./bindings";
 import {
+  digestSaga,
   echoSaga,
   ECHO_INTEGRATION_ID,
   EXECUTION_ID,
   Fault,
   ninjaSaga,
   NINJA_INTEGRATION_ID,
+  parseDigestInput,
   parseInput,
   parseNinjaOrgsInput,
   parseSmokeInput,
+  shapeDigest,
   smokeSaga,
 } from "./domain";
-import type { EchoInput, ExecutionParams, NinjaOrgsResult, SafeError, SmokeResult } from "./domain";
+import type {
+  DigestInput,
+  DigestResult,
+  EchoInput,
+  ExecutionParams,
+  NinjaOrgsResult,
+  SafeError,
+  SmokeResult,
+} from "./domain";
 import { assertJsonSerializable, bindSagaStep, buildCatalog, defineSaga } from "./saga";
 import type { CatalogEntry, SagaDefinition, SagaEventContext } from "./saga";
 import { beginOperation, failExecution, finishOperation } from "./executions";
@@ -261,6 +272,158 @@ export const ninjaOrgsSagaDef = defineSaga<NinjaOrgsResult>({
   },
 });
 
+/** Stable ninjaone-echo-digest Saga (Phase 2): read-only NinjaOne census
+ * shaped into a bounded digest and echoed through the echo Integration. Both
+ * vendor steps resolve retries 0 via stepRetryLimit; the digest is a pure
+ * transform of the census and never carries secrets or vendor bodies. */
+export const digestSagaDef = defineSaga<DigestResult>({
+  id: digestSaga.id,
+  name: digestSaga.name,
+  revision: digestSaga.revision,
+  description: digestSaga.description,
+  tags: ["ninjaone", "echo", "read-only"],
+  inputSchema: Object.freeze({
+    type: "object" as const,
+    properties: Object.freeze({}),
+    required: Object.freeze([]),
+    additionalProperties: false,
+  }),
+  outputSchema: Object.freeze({
+    type: "object" as const,
+    properties: Object.freeze({
+      organizationCount: Object.freeze({ type: "number" }),
+      echoed: Object.freeze({ type: "object" }),
+    }),
+    required: Object.freeze(["organizationCount", "echoed"]),
+    additionalProperties: false,
+  }),
+  parse: parseDigestInput,
+  run: async (ctx, step): Promise<DigestResult> => {
+    const id = ctx.executionId;
+    if (typeof id !== "string" || !EXECUTION_ID.test(id)) {
+      throw new NonRetryableError("Invalid local Execution invocation.");
+    }
+    let expectedFailure: SafeError | undefined;
+    let timedOut = false;
+    try {
+      const prepared = await step.do("prepare-input-v1", async () => {
+        const row = await ctx.db.prepare("SELECT * FROM executions WHERE id=?").bind(id).first<ExecutionRow>();
+        if (!row || row.saga_id !== digestSaga.id || row.saga_revision !== digestSaga.revision) {
+          throw new NonRetryableError("Unknown Saga revision.");
+        }
+        if (row.status === "Cancelling" || row.status === "Cancelled") {
+          throw new NonRetryableError("Execution was cancelled.");
+        }
+        const input: DigestInput = parseDigestInput(JSON.parse(row.input_json));
+        await ctx.db
+          .prepare(
+            "UPDATE executions SET status='Running',started_at=COALESCE(started_at,?) WHERE id=? AND status='Pending'",
+          )
+          .bind(new Date().toISOString(), id)
+          .run();
+        await beginOperation(ctx.db, id, "prepare-input-v1", 0);
+        await finishOperation(ctx.db, id, "prepare-input-v1", input);
+        return { orgId: row.org_id };
+      });
+      const census = await step.do("ninja-list-orgs-v1", async () => {
+        await beginOperation(ctx.db, id, "ninja-list-orgs-v1", 1);
+        const connection = await ctx.db
+          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
+          .bind(prepared.orgId, NINJA_INTEGRATION_ID)
+          .first<{ endpoint: string }>();
+        if (!connection)
+          return {
+            ok: false as const,
+            error: {
+              code: "CONNECTION_NOT_CONFIGURED",
+              message: "No NinjaOne Connection is configured for this Organization.",
+            },
+          };
+        const { clientId, clientSecret } = ctx.secrets;
+        if (!clientId || !clientSecret)
+          return {
+            ok: false as const,
+            error: { code: "NINJA_NOT_CONFIGURED", message: "NinjaOne credentials are not configured." },
+          };
+        let result: NinjaOrgsResult;
+        try {
+          result = await ctx.integrations.ninjaone.listOrganizations(connection, { clientId, clientSecret });
+        } catch (error) {
+          const safe =
+            error instanceof Fault
+              ? { code: error.code, message: error.message }
+              : { code: "NINJA_INTEGRATION_FAILED", message: "The NinjaOne Integration could not complete." };
+          return { ok: false as const, error: safe };
+        }
+        await finishOperation(ctx.db, id, "ninja-list-orgs-v1", result);
+        return { ok: true as const, result };
+      });
+      if (!census.ok) {
+        expectedFailure = census.error;
+        throw new NonRetryableError(census.error.code);
+      }
+      const echoed = await step.do("echo-digest-v1", async () => {
+        await beginOperation(ctx.db, id, "echo-digest-v1", 2);
+        const connection = await ctx.db
+          .prepare("SELECT endpoint FROM connections WHERE org_id=? AND integration_id=?")
+          .bind(prepared.orgId, ECHO_INTEGRATION_ID)
+          .first<{ endpoint: string }>();
+        if (!connection)
+          return {
+            ok: false as const,
+            error: {
+              code: "CONNECTION_NOT_CONFIGURED",
+              message: "No echo Connection is configured for this Organization.",
+            },
+          };
+        let result: EchoInput;
+        try {
+          result = await ctx.integrations.echo.echo(connection, shapeDigest(census.result), `${id}-echo-digest-v1`);
+        } catch (error) {
+          const safe =
+            error instanceof Fault
+              ? { code: error.code, message: error.message }
+              : { code: "ECHO_INTEGRATION_FAILED", message: "The echo Integration could not complete." };
+          return { ok: false as const, error: safe };
+        }
+        await finishOperation(ctx.db, id, "echo-digest-v1", result);
+        return { ok: true as const, result };
+      });
+      if (!echoed.ok) {
+        expectedFailure = echoed.error;
+        timedOut = echoed.error.code === "ECHO_VENDOR_TIMEOUT";
+        if (timedOut) {
+          const failure: SafeError = echoed.error;
+          await step.do("timeout-mark-v1", () => failExecution(ctx.db, id, failure, "TimedOut"));
+        }
+        throw new NonRetryableError(echoed.error.code);
+      }
+      const output: DigestResult = { organizationCount: census.result.organizationCount, echoed: echoed.result };
+      // Native wait primitive, same posture as echo: infrastructure checkpoint,
+      // not a product Operation.
+      await step.sleep("settle-wait-v1", "1 second");
+      await step.do("persist-success-v1", async () => {
+        await ctx.db
+          .prepare(
+            "UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'",
+          )
+          .bind(new Date().toISOString(), JSON.stringify(output), id)
+          .run();
+      });
+      return output;
+    } catch {
+      const safe: SafeError = expectedFailure ?? {
+        code: "EXECUTION_FAILED",
+        message: "The Execution could not complete. Inspect local runtime diagnostics.",
+      };
+      if (!timedOut) {
+        await step.do("persist-failure-v1", () => failExecution(ctx.db, id, safe));
+      }
+      throw new NonRetryableError(safe.code);
+    }
+  },
+});
+
 /** Stable system.smoke Saga: loopback-free platform smoke. D1-only Operations
  * plus a pure transform — zero external vendor dependency, no Connection
  * lookup, no secrets, no fetch. D1 checkpoint steps only may use retries up to
@@ -418,7 +581,12 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
 
 /** All Saga definitions, in canonical order. Add new Sagas here; the catalog
  * below validates them at Worker startup. */
-export const SAGA_DEFINITIONS: readonly SagaDefinition<unknown>[] = [echoSagaDef, ninjaOrgsSagaDef, smokeSagaDef];
+export const SAGA_DEFINITIONS: readonly SagaDefinition<unknown>[] = [
+  echoSagaDef,
+  ninjaOrgsSagaDef,
+  digestSagaDef,
+  smokeSagaDef,
+];
 
 /** Static Git-owned Catalog (ADR 002): duplicate stable IDs or names throw at
  * module load, which fails Worker boot. D1 mirrors this metadata for foreign
@@ -459,6 +627,12 @@ export class EchoWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> 
 export class NinjaOrgsWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> {
   async run(event: WorkflowEvent<ExecutionParams>, step: WorkflowStep): Promise<NinjaOrgsResult> {
     return executeSaga(this.env, event, step, ninjaOrgsSagaDef);
+  }
+}
+
+export class NinjaEchoDigestWorkflow extends WorkflowEntrypoint<Bindings, ExecutionParams> {
+  async run(event: WorkflowEvent<ExecutionParams>, step: WorkflowStep): Promise<DigestResult> {
+    return executeSaga(this.env, event, step, digestSagaDef);
   }
 }
 
