@@ -25,7 +25,7 @@ Cancelling -> Cancelled | Failed (lost-terminal race: terminal checkpoint wins, 
 Succeeded | Failed | TimedOut | Cancelled -> (none; cancel returns 409 EXECUTION_NOT_CANCELLABLE)
 ```
 
-D1 CHECK sketch (no migration file in this lane; implementation lane authors `0003`):
+D1 CHECK sketch (no migration file in this lane; implementation lane authors the next free number — 0003 is taken by usage_blocks):
 
 ```sql
 -- executions.status CHECK becomes:
