@@ -18,7 +18,7 @@
 // Errors use the shared Fault envelope; codes are listed in src/sdk.ts
 // (SDK_ERROR_CODES) and pinned by test/app-runtime.test.ts.
 import { Fault, hash, object, UUID } from "./domain";
-import type { FieldFailure, Principal } from "./domain";
+import type { Principal } from "./domain";
 import { loadApp } from "./apps";
 
 export const APP_SDK_VERSION = "1" as const;
@@ -1043,10 +1043,4 @@ export async function listAppExecutions(
     .bind(appId, Math.min(Math.max(limit, 1), 50))
     .all<{ execution_id: string; saga_id: string; created_at: string }>();
   return rows.results.map((row) => ({ executionId: row.execution_id, sagaId: row.saga_id, createdAt: row.created_at }));
-}
-
-/** Field failures for the grant/table/file declare paths (422 shapes shared
- * with the app edit path). */
-export function grantFieldFailures(): FieldFailure[] {
-  return [];
 }

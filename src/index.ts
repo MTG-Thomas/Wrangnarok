@@ -441,7 +441,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       const created = await createAppGrant(env.DB, caller, parseAppId(appGrants[1]), await boundedJson(request.body));
       return json({ grant: created }, 201);
     }
-    const appGrantRevoke = /^\/api\/apps\/([0-9a-f-]{36})\/grants\/([0-9a-f-]{36})\/revoke$/.exec(url.pathname);
+    const appGrantRevoke = /^\/api\/apps\/([0-9a-f-]{36})\/grants\/([^/]+)\/revoke$/.exec(url.pathname);
     if (appGrantRevoke?.[1] && appGrantRevoke[2] && request.method === "POST") {
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       return json({
@@ -492,9 +492,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       }
       return json({ row: await insertTableRow(env.DB, caller, app, tableName, body.data) }, 201);
     }
-    const appRowPatch = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows\/([0-9a-f-]{36})$/.exec(
-      url.pathname,
-    );
+    const appRowPatch = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows\/([^/]+)$/.exec(url.pathname);
     if (appRowPatch?.[1] && appRowPatch[2] && appRowPatch[3] && request.method === "PATCH") {
       requireJson(request);
       const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowPatch[1]));
