@@ -31,6 +31,12 @@ export const NAV_ENTRIES: NavEntry[] = [
     phase: "Phase 1 / Phase 4",
   },
   {
+    label: "Admin",
+    to: "/admin",
+    enabled: true,
+    phase: "Phase 3 (#142)",
+  },
+  {
     label: "Integrations",
     enabled: false,
     issue: `${REPO}/issues/18`,

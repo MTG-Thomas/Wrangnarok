@@ -9,8 +9,8 @@
 // Access (e.g. dev), also pass --access-client-id/--access-client-secret
 // (or $CF_ACCESS_CLIENT_ID/$CF_ACCESS_CLIENT_SECRET); without an SSO
 // session or service token the edge challenges machine callers.
-// --org is reserved for future multi-tenancy: organization always comes
-// from the auth context, so passing it fails loudly.
+// Organization always comes from the auth context plus X-Organization-Id
+// scope selection (ADR 015); passing --org fails loudly (legacy guard).
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
@@ -118,6 +118,15 @@ function checkExecutionId(id) {
   return id;
 }
 
+const ORG_ID = /^[0-9a-fA-F-]{36}$/;
+
+function checkOrgId(id) {
+  if (!ORG_ID.test(id ?? "")) {
+    fail("USAGE", "org commands need the exact Organization UUID (no prefixes, no search).");
+  }
+  return id;
+}
+
 function readInput() {
   const raw = arg("input", "{}");
   const text = raw.startsWith("@") ? readFileSync(raw.slice(1), "utf-8") : raw;
@@ -166,7 +175,7 @@ Global flags:
   --token TOKEN         Bearer token (default $WRANGNAROK_TOKEN, else .dev.vars LAB_TOKEN)
   --access-client-id / --access-client-secret (or $CF_ACCESS_CLIENT_ID/_SECRET)
                         Cloudflare Access service token headers for dev URLs
-  --org ID              RESERVED: fails loudly; organization comes from auth context
+  --org ID              LEGACY GUARD: fails loudly; organization comes from auth context + scope selection
   --json                Machine-readable JSON output (default is human-readable)
   --help                This text
 
@@ -178,7 +187,24 @@ Commands:
   history [--status S] [--saga NAME|UUID] [--limit N]
                                           Query Execution summaries (server filters)
   cancel --id HEX                         Cancel one Execution (exact ID only)
+  orgs                                    List visible Organizations
+  org-create --name NAME                  Create an Organization (instance admin)
+  org-disable/--enable --id UUID          Disable/enable an Organization (instance admin)
+  org-delete-preview --id UUID            Preview cascading delete (retained history)
+  org-delete --id UUID                    Delete an Organization (instance admin)
+  members --id UUID                       List Organization members (org admin)
+  invite --id UUID --user ID [--role R] [--kind K]
+                                          Invite a user (role member|admin, kind ordinary|external)
+  member-update --id UUID --user ID [--role R] [--status S] [--kind K]
+                                          Change role/status/kind (org admin)
+  user-disable/--enable --user ID         Disable/enable a user globally (instance admin)
+  org-executions --id UUID [--status S] [--limit N]
+                                          Org-scoped ExecutionHistory (org admin, incl. in-flight)
   selftest                                Offline selftest (stub fetch, no network)
+
+  Bulk user operations are intentionally omitted in this slice: repeat the
+  single-row invite/member-update calls above (see ADR 015). Loop helpers must
+  report per-item status and stop on the first server rejection.
 
 Auth notes: local .dev.vars tokens never leave this machine in logs. Dev
 URLs behind Access challenge machine callers without a service token.
@@ -259,6 +285,99 @@ export async function runCommand(ctx, deps = {}) {
         "execution cancel",
       );
     }
+    case "orgs": {
+      return readJson(await fetchImpl(`${ctx.base}/api/orgs`, { headers: full.headers }), "org list");
+    }
+    case "org-create": {
+      if (!ctx.name) fail("USAGE", "org-create needs --name NAME.");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/orgs`, {
+          method: "POST",
+          headers: full.headers,
+          body: JSON.stringify({ name: ctx.name }),
+        }),
+        "org create",
+      );
+    }
+    case "org-disable":
+    case "org-enable": {
+      const id = checkOrgId(ctx.id);
+      const action = ctx.command === "org-disable" ? "disable" : "enable";
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/orgs/${id}/${action}`, { method: "POST", headers: full.headers }),
+        `org ${action}`,
+      );
+    }
+    case "org-delete-preview": {
+      const id = checkOrgId(ctx.id);
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/orgs/${id}/delete-preview`, { headers: full.headers }),
+        "delete preview",
+      );
+    }
+    case "org-delete": {
+      const id = checkOrgId(ctx.id);
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/orgs/${id}`, { method: "DELETE", headers: full.headers }),
+        "org delete",
+      );
+    }
+    case "members": {
+      const id = checkOrgId(ctx.id);
+      return readJson(await fetchImpl(`${ctx.base}/api/orgs/${id}/members`, { headers: full.headers }), "members");
+    }
+    case "invite": {
+      const id = checkOrgId(ctx.id);
+      if (!ctx.user) fail("USAGE", "invite needs --user ID.");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/orgs/${id}/members`, {
+          method: "POST",
+          headers: full.headers,
+          body: JSON.stringify({ userId: ctx.user, role: ctx.role ?? "member", kind: ctx.kind ?? "ordinary" }),
+        }),
+        "invite",
+      );
+    }
+    case "member-update": {
+      const id = checkOrgId(ctx.id);
+      if (!ctx.user) fail("USAGE", "member-update needs --user ID.");
+      const update = {};
+      if (ctx.role !== undefined) update.role = ctx.role;
+      if (ctx.memberStatus !== undefined) update.status = ctx.memberStatus;
+      if (ctx.kind !== undefined) update.kind = ctx.kind;
+      if (Object.keys(update).length === 0) fail("USAGE", "member-update needs --role/--status/--kind.");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/orgs/${id}/members/${encodeURIComponent(ctx.user)}`, {
+          method: "PATCH",
+          headers: full.headers,
+          body: JSON.stringify(update),
+        }),
+        "member update",
+      );
+    }
+    case "user-disable":
+    case "user-enable": {
+      if (!ctx.user) fail("USAGE", "user-disable/enable needs --user ID.");
+      const action = ctx.command === "user-disable" ? "disable" : "enable";
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/users/${encodeURIComponent(ctx.user)}/${action}`, {
+          method: "POST",
+          headers: full.headers,
+        }),
+        `user ${action}`,
+      );
+    }
+    case "org-executions": {
+      const id = checkOrgId(ctx.id);
+      const params = new URLSearchParams();
+      if (ctx.statusFilter) params.set("status", ctx.statusFilter);
+      if (ctx.limit) params.set("limit", String(ctx.limit));
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/orgs/${id}/executions${suffix}`, { headers: full.headers }),
+        "org executions",
+      );
+    }
     default:
       fail("USAGE", `unknown command ${JSON.stringify(ctx.command ?? "")}. See --help.`);
       return undefined;
@@ -284,6 +403,17 @@ async function main() {
     fail("USAGE", "--limit must be an integer from 1 to 50.");
   }
   const command = parsed.command;
+  const orgCommands = new Set([
+    "org-disable",
+    "org-enable",
+    "org-delete-preview",
+    "org-delete",
+    "members",
+    "invite",
+    "member-update",
+    "org-executions",
+  ]);
+  const userCommands = new Set(["user-disable", "user-enable"]);
   const ctx = {
     command,
     token: authToken(),
@@ -293,13 +423,18 @@ async function main() {
     pollMs: Number(arg("poll-ms", "2000")),
     // Per-command arguments; each command reads only its own.
     saga: command === "submit" ? arg("saga") : undefined,
-    sagaFilter: command === "history" ? arg("saga") : undefined,
-    id: command === "detail" || command === "cancel" ? arg("id") : undefined,
+    sagaFilter: command === "history" || command === "org-executions" ? arg("saga") : undefined,
+    id: command === "detail" || command === "cancel" || orgCommands.has(command) ? arg("id") : undefined,
     key: command === "submit" ? arg("key") : undefined,
     input: command === "submit" ? readInput() : undefined,
-    statusFilter: command === "history" ? arg("status") : undefined,
+    statusFilter: command === "history" || command === "org-executions" ? arg("status") : undefined,
     limit: limit === undefined ? undefined : Number(limit),
     wait: command === "submit" ? !flag("no-wait") : flag("wait"),
+    name: command === "org-create" ? arg("name") : undefined,
+    user: command === "invite" || command === "member-update" || userCommands.has(command) ? arg("user") : undefined,
+    role: command === "invite" || command === "member-update" ? arg("role") : undefined,
+    memberStatus: command === "member-update" ? arg("status") : undefined,
+    kind: command === "invite" || command === "member-update" ? arg("kind") : undefined,
   };
   const result = await runCommand(ctx).catch((error) => {
     if (error instanceof Error && error.message.startsWith("WRANGNAROK_CLI")) throw error;
@@ -307,7 +442,17 @@ async function main() {
   });
   if (command === "sagas") printSagas(result.sagas);
   else if (command === "history") printHistory(result.executions, result.hasMore);
-  else if (parsed.json) console.log(JSON.stringify(result));
+  else if (command === "org-executions" && Array.isArray(result.executions))
+    printHistory(result.executions, result.hasMore);
+  else if (command === "orgs" && Array.isArray(result.orgs)) {
+    if (asJson()) console.log(JSON.stringify(result));
+    else for (const org of result.orgs) console.log(`${org.name}\t${org.id}\t${org.status}`);
+    return;
+  } else if (command === "members" && Array.isArray(result.members)) {
+    if (asJson()) console.log(JSON.stringify(result));
+    else for (const m of result.members) console.log(`${m.userId}\t${m.role}\t${m.status}\t${m.kind}`);
+    return;
+  } else if (parsed.json) console.log(JSON.stringify(result));
   else if (typeof result.status === "string") console.log(`${result.executionId} ${result.status}`);
   else console.log(`${result.executionId} accepted (replayed: ${result.replayed === true})`);
 }
@@ -398,6 +543,37 @@ async function selftest() {
     const result = await runCommand({ ...base, command: "cancel", id }, { fetchImpl: stub.fetch, ...noSleep });
     check("cancel success", result.status === "Cancelled");
     check("cancel exact url", stub.calls[0].url === `http://local.test/api/executions/${id}/cancel`);
+  }
+
+  // org admin surface hits the exact routes with exact IDs.
+  {
+    const orgId = "aaaaaaaa-1111-4111-8111-111111111111";
+    const stub = stubFetch([
+      jsonResponse({ orgs: [{ id: orgId, name: "acme", status: "active" }] }),
+      jsonResponse({ id: orgId, name: "acme", status: "disabled" }),
+      jsonResponse({ members: [{ userId: "sam@example.com", role: "member", status: "invited", kind: "ordinary" }] }),
+      jsonResponse({ userId: "sam@example.com", role: "member", status: "invited", kind: "ordinary" }, 201),
+      jsonResponse({ executions: [], hasMore: false }),
+    ]);
+    const orgs = await runCommand({ ...base, command: "orgs" }, { fetchImpl: stub.fetch, ...noSleep });
+    check("orgs list", orgs.orgs.length === 1 && stub.calls[0].url === "http://local.test/api/orgs");
+    await runCommand({ ...base, command: "org-disable", id: orgId }, { fetchImpl: stub.fetch, ...noSleep });
+    check("org disable", stub.calls[1].url === `http://local.test/api/orgs/${orgId}/disable`);
+    await runCommand({ ...base, command: "members", id: orgId }, { fetchImpl: stub.fetch, ...noSleep });
+    check("members list", stub.calls[2].url === `http://local.test/api/orgs/${orgId}/members`);
+    await runCommand(
+      { ...base, command: "invite", id: orgId, user: "sam@example.com", role: "member", kind: "ordinary" },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("invite posts", stub.calls[3].url === `http://local.test/api/orgs/${orgId}/members`);
+    await runCommand(
+      { ...base, command: "org-executions", id: orgId, statusFilter: "Running", limit: 5 },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check(
+      "org executions query",
+      stub.calls[4].url === `http://local.test/api/orgs/${orgId}/executions?status=Running&limit=5`,
+    );
   }
 
   // server mismatch is loud.

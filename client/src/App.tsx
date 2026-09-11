@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Nav } from "./components/Nav";
+import { AdminOrgs } from "./pages/AdminOrgs";
 import { ExecutionDetailView } from "./pages/ExecutionDetail";
 import { ExecutionHistoryList } from "./pages/ExecutionHistory";
 import { SagasList } from "./pages/Sagas";
@@ -15,6 +16,7 @@ export function App(): React.JSX.Element {
           <Route path="/history" element={<ExecutionHistoryList />} />
           <Route path="/history/:id" element={<ExecutionDetailView />} />
           <Route path="/sagas" element={<SagasList />} />
+          <Route path="/admin" element={<AdminOrgs />} />
           <Route path="*" element={<p>Not found. Try History.</p>} />
         </Routes>
       </main>
