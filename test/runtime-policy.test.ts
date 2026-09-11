@@ -86,6 +86,8 @@ beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration8);
+  await bindings.DB.exec(migration9);
   await bindings.DB.exec(seed);
 });
 afterEach(async () => {
