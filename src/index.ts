@@ -907,6 +907,9 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       const id = parseAppId(appSwap[1]);
       await requireAppVisible(env.DB, ctx, caller, id, "write", "Swapping this App requires a write grant.");
       const otherAppId = parseSwapBody(await boundedJson(request.body));
+      // Both peers mutate: resolve the peer with hidden-reference discipline
+      // (foreign/unknown -> 404) then require its write grant before swapping.
+      await requireAppVisible(env.DB, ctx, caller, otherAppId, "write", "Swapping the other App requires a write grant.");
       const swapped = await swapSlugs(env.DB, caller, parseAppId(appSwap[1]), otherAppId);
       return json({ app: swapped.app, other: swapped.other });
     }

@@ -577,3 +577,48 @@ it("inspects consumers before removing a grant and refuses bad triples", async (
   expect(await call(`/api/orgs/${ORG_A}/roles`, "GET", USER_ORDINARY)).toMatchObject({ status: 403 });
   expect(await call("/api/policy-rules", "POST", USER_ORDINARY, {})).toMatchObject({ status: 403 });
 });
+
+it("requires write grants on both slug-swap peers (issue #143)", async () => {
+  // Same-org Apps A/B; ordinary member gets write on A only.
+  const createdA = await call("/api/apps", "POST", USER_ADMIN, { name: "SwapA", slug: "swap-a" });
+  expect(createdA.status).toBe(201);
+  const appA = (createdA.body.app as { id: string }).id;
+  const createdB = await call("/api/apps", "POST", USER_ADMIN, { name: "SwapB", slug: "swap-b" });
+  expect(createdB.status).toBe(201);
+  const appB = (createdB.body.app as { id: string }).id;
+  const writeA = await makeRole();
+  await call(`/api/orgs/${ORG_A}/roles/${writeA}/grants`, "POST", USER_ADMIN, {
+    resourceKind: "app",
+    resourceId: appA,
+    action: "write",
+  });
+  await call(`/api/orgs/${ORG_A}/roles/${writeA}/assignments`, "POST", USER_ADMIN, { userId: USER_ORDINARY });
+  // Swap naming B as peer: denied, both slugs unchanged.
+  expect(await call(`/api/apps/${appA}/swap`, "POST", USER_ORDINARY, { otherAppId: appB })).toMatchObject({
+    status: 403,
+    body: { error: { code: "GRANT_REQUIRED" } },
+  });
+  const slugA = await bindings.DB.prepare("SELECT slug FROM apps WHERE id = ?").bind(appA).first<{ slug: string }>();
+  const slugB = await bindings.DB.prepare("SELECT slug FROM apps WHERE id = ?").bind(appB).first<{ slug: string }>();
+  expect(slugA?.slug).toBe("swap-a");
+  expect(slugB?.slug).toBe("swap-b");
+  // Foreign/unknown peer 404s, never a grant-shaped confirm.
+  expect(
+    await call(`/api/apps/${appA}/swap`, "POST", USER_ORDINARY, { otherAppId: "00000000-0000-4000-8000-000000000099" }),
+  ).toMatchObject({ status: 404 });
+  // Write on B as well: the swap succeeds.
+  const writeB = await makeRole();
+  await call(`/api/orgs/${ORG_A}/roles/${writeB}/grants`, "POST", USER_ADMIN, {
+    resourceKind: "app",
+    resourceId: appB,
+    action: "write",
+  });
+  await call(`/api/orgs/${ORG_A}/roles/${writeB}/assignments`, "POST", USER_ADMIN, { userId: USER_ORDINARY });
+  expect(await call(`/api/apps/${appA}/swap`, "POST", USER_ORDINARY, { otherAppId: appB })).toMatchObject({
+    status: 200,
+  });
+  const slugA2 = await bindings.DB.prepare("SELECT slug FROM apps WHERE id = ?").bind(appA).first<{ slug: string }>();
+  const slugB2 = await bindings.DB.prepare("SELECT slug FROM apps WHERE id = ?").bind(appB).first<{ slug: string }>();
+  expect(slugA2?.slug).toBe("swap-b");
+  expect(slugB2?.slug).toBe("swap-a");
+});
