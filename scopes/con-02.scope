@@ -7,6 +7,7 @@ src/saga.ts
 src/sagas/shared.ts
 src/sdk.ts
 scripts/wrangnarok.mjs
+scripts/check-bundle-budget.mjs
 migrations/0023_config.sql
 test/config.test.ts
 test/config-unit.test.ts
