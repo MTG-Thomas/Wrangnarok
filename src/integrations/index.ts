@@ -58,7 +58,8 @@ const INTEGRATION_NAME = /^[a-z0-9][a-z0-9.-]*$/i;
 const CONFIG_FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 /** Manifest-style structural exclusion (matches src/solutions.ts): config
  * keys shaped like credentials are never non-secret schema. */
-const CREDENTIAL_LIKE = /(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|client[_-]?secret|auth)/i;
+const CREDENTIAL_LIKE =
+  /(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|client[_-]?secret|auth)/i;
 /** Management writes carry at most a handful of string fields; the D1 text
  * bound stays the backstop, this is the fail-fast front gate. */
 export const CONNECTION_CONFIG_MAX_LENGTH = 512;
@@ -107,7 +108,9 @@ export function defineIntegration(def: IntegrationDefinition): IntegrationDefini
     }
     fieldNames.add(field.name);
     if (field.type !== "string") {
-      throw new Error(`Invalid Integration definition "${def.name}": config field "${field.name}" type must be "string".`);
+      throw new Error(
+        `Invalid Integration definition "${def.name}": config field "${field.name}" type must be "string".`,
+      );
     }
     if (typeof field.required !== "boolean") {
       throw new Error(
@@ -145,7 +148,10 @@ export function defineIntegration(def: IntegrationDefinition): IntegrationDefini
   if (!fieldNames.has("endpoint")) {
     throw new Error(`Invalid Integration definition "${def.name}": configSchema must declare the "endpoint" field.`);
   }
-  if (!Array.isArray(def.requiredSecrets) || def.requiredSecrets.some((name) => typeof name !== "string" || name.length === 0)) {
+  if (
+    !Array.isArray(def.requiredSecrets) ||
+    def.requiredSecrets.some((name) => typeof name !== "string" || name.length === 0)
+  ) {
     throw new Error(
       `Invalid Integration definition "${def.name}": requiredSecrets must be an explicit list (empty when none).`,
     );
@@ -261,10 +267,7 @@ export function integrationByName(name: string): IntegrationDefinition | undefin
  * credential-shaped keys, missing required fields, and overlong values.
  * Throws Fault 400 CONNECTION_SCHEMA_INVALID with per-field details (FORM-01
  * details channel shape: { field, code, message }[]). Pure: no D1, no env. */
-export function validateConnectionConfig(
-  def: IntegrationDefinition,
-  value: unknown,
-): Record<string, string> {
+export function validateConnectionConfig(def: IntegrationDefinition, value: unknown): Record<string, string> {
   const failures: FieldFailure[] = [];
   if (!object(value)) {
     throw new Fault(400, "CONNECTION_SCHEMA_INVALID", "The Connection config must be a JSON object.", [

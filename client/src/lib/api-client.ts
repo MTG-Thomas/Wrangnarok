@@ -14,7 +14,6 @@ import type {
   AppRevision,
   AppsResponse,
   AppSummary,
-  ConnectionResponse,
   ConnectionsResponse,
   ConnectionSummary,
   ConnectionTestResponse,

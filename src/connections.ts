@@ -20,11 +20,20 @@ import type { Principal } from "./domain";
 import { integrationById, validateConnectionConfig } from "./integrations";
 import type { ConnectionView } from "./integrations";
 import { scrubValueWithDeploymentSecrets } from "./secrets";
+import type { NinjaCredentials } from "./bindings";
 
-export interface SecretEnv {
-  readonly NINJA_CLIENT_ID?: string;
-  readonly NINJA_CLIENT_SECRET?: string;
-  readonly [key: string]: string | undefined;
+/** Deployment credential surface read by the management test path (CON-01).
+ * Required-secret values are presence-checked only — never persisted,
+ * logged, or returned. The Worker passes its Bindings straight through
+ * (Bindings extends NinjaCredentials); test doubles pass plain records.
+ * No index signature: Bindings has none, and required-secret env vars are
+ * read through the narrow accessor below. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- marker interface: Bindings must satisfy the management env by construction
+export interface SecretEnv extends NinjaCredentials {}
+
+function secretValue(env: SecretEnv, name: string): string | undefined {
+  const value: unknown = (env as Record<string, unknown>)[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /** D1 Connection row shape (migrations 0001 + 0004 + 0007). Older databases
@@ -121,11 +130,7 @@ export async function listConnections(db: D1Database, caller: Principal): Promis
 
 /** Read one Connection mapping for this Organization. Foreign or unknown
  * mappings answer CONNECTION_NOT_FOUND (404), never a leak. */
-export async function getConnection(
-  db: D1Database,
-  caller: Principal,
-  integrationId: string,
-): Promise<ConnectionView> {
+export async function getConnection(db: D1Database, caller: Principal, integrationId: string): Promise<ConnectionView> {
   if (!UUID.test(integrationId)) throw invalid("UNKNOWN_INTEGRATION", "Unknown Integration id.", 404);
   const def = integrationById(integrationId);
   if (!def) throw invalid("UNKNOWN_INTEGRATION", "Unknown Integration id.", 404);
@@ -135,7 +140,7 @@ export async function getConnection(
 }
 
 export interface ConnectionWrite {
-  readonly config: unknown;
+  readonly config?: unknown;
   readonly displayName?: unknown;
   readonly enabled?: unknown;
 }
@@ -162,11 +167,15 @@ export async function createConnection(
   if (!UUID.test(integrationId)) throw invalid("UNKNOWN_INTEGRATION", "Unknown Integration id.", 404);
   const def = integrationById(integrationId);
   if (!def) throw invalid("UNKNOWN_INTEGRATION", "Unknown Integration id.", 404);
+  if (body.config === undefined) {
+    throw invalid("CONNECTION_SCHEMA_INVALID", "A Connection create needs a config object.");
+  }
   const config = validateConnectionConfig(def, body.config);
   const displayName = parseDisplayName(body.displayName);
   const enabled = parseEnabled(body.enabled) ?? true;
   const existing = await ownedRow(db, caller, integrationId);
-  if (existing) throw invalid("CONNECTION_EXISTS", "A Connection already exists for this Organization and Integration.", 409);
+  if (existing)
+    throw invalid("CONNECTION_EXISTS", "A Connection already exists for this Organization and Integration.", 409);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   await db
@@ -206,13 +215,17 @@ export async function updateConnection(
   // validate the merged object so omitted keys keep current values while
   // unknown keys and credential-shaped input still fail.
   const merged: Record<string, unknown> =
-    body.config === undefined ? { endpoint: row.endpoint } : { endpoint: row.endpoint, ...(body.config as Record<string, unknown>) };
+    body.config === undefined
+      ? { endpoint: row.endpoint }
+      : { endpoint: row.endpoint, ...(body.config as Record<string, unknown>) };
   const config = validateConnectionConfig(def, merged);
   const displayName = body.displayName === undefined ? row.display_name : parseDisplayName(body.displayName);
   const enabled = parseEnabled(body.enabled) ?? (row.enabled ?? 1) === 1;
   const now = new Date().toISOString();
   await db
-    .prepare("UPDATE connections SET endpoint=?,display_name=?,enabled=?,updated_at=? WHERE org_id=? AND integration_id=?")
+    .prepare(
+      "UPDATE connections SET endpoint=?,display_name=?,enabled=?,updated_at=? WHERE org_id=? AND integration_id=?",
+    )
     .bind(config.endpoint as string, displayName, enabled ? 1 : 0, now, caller.orgId, integrationId)
     .run();
   const next = await ownedRow(db, caller, integrationId);
@@ -237,7 +250,10 @@ export async function deleteConnection(db: D1Database, caller: Principal, integr
       409,
     );
   }
-  await db.prepare("DELETE FROM connections WHERE org_id=? AND integration_id=?").bind(caller.orgId, integrationId).run();
+  await db
+    .prepare("DELETE FROM connections WHERE org_id=? AND integration_id=?")
+    .bind(caller.orgId, integrationId)
+    .run();
 }
 
 export type ConnectionTestOutcome =
@@ -267,11 +283,21 @@ export async function testConnection(
   vendor: VendorEnv = {},
 ): Promise<ConnectionTestOutcome> {
   if (!UUID.test(integrationId)) {
-    return { ok: false, checkedAt: new Date().toISOString(), code: "UNKNOWN_INTEGRATION", detail: "Unknown Integration id." };
+    return {
+      ok: false,
+      checkedAt: new Date().toISOString(),
+      code: "UNKNOWN_INTEGRATION",
+      detail: "Unknown Integration id.",
+    };
   }
   const def = integrationById(integrationId);
   if (!def) {
-    return { ok: false, checkedAt: new Date().toISOString(), code: "UNKNOWN_INTEGRATION", detail: "Unknown Integration id." };
+    return {
+      ok: false,
+      checkedAt: new Date().toISOString(),
+      code: "UNKNOWN_INTEGRATION",
+      detail: "Unknown Integration id.",
+    };
   }
   const checkedAt = new Date().toISOString();
   const row = await ownedRow(db, caller, integrationId);
@@ -293,8 +319,7 @@ export async function testConnection(
   }
   for (const name of def.requiredSecrets) {
     const envVar = def.secretEnvVars[name] as string;
-    const value = env[envVar];
-    if (typeof value !== "string" || value.length === 0) {
+    if (secretValue(env, envVar) === undefined) {
       return {
         ok: false,
         checkedAt,

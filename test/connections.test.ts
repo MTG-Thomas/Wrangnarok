@@ -130,7 +130,10 @@ describe("Connection CRUD (CON-01)", () => {
   });
 
   it("refuses duplicates, unknown Integrations, and credential-shaped config", async () => {
-    const first = await worker.fetch(call("/api/connections", "POST", { integrationId: ECHO_INTEGRATION_ID, config: {} }), bindings);
+    const first = await worker.fetch(
+      call("/api/connections", "POST", { integrationId: ECHO_INTEGRATION_ID, config: {} }),
+      bindings,
+    );
     expect(first.status).toBe(201);
     const duplicate = await worker.fetch(
       call("/api/connections", "POST", { integrationId: ECHO_INTEGRATION_ID, config: {} }),
@@ -171,7 +174,13 @@ describe("Connection CRUD (CON-01)", () => {
     await bindings.DB.prepare(
       "INSERT INTO connections(id,org_id,integration_id,endpoint,managed_by) VALUES (?,?,?,?,?)",
     )
-      .bind("00000000-0000-4000-8000-000000000102", ORG, ECHO_INTEGRATION_ID, "http://127.0.0.1:8788/echo", "bundle@1.0.0")
+      .bind(
+        "00000000-0000-4000-8000-000000000102",
+        ORG,
+        ECHO_INTEGRATION_ID,
+        "http://127.0.0.1:8788/echo",
+        "bundle@1.0.0",
+      )
       .run();
     const update = await worker.fetch(
       call(`/api/connections/${ECHO_INTEGRATION_ID}`, "PUT", {
@@ -204,10 +213,15 @@ describe("Connection CRUD (CON-01)", () => {
     );
     expect(foreignWrite.status).toBe(404);
     // The foreign org can still create its own mapping for the same Integration.
-    const own = await worker.fetch(call("/api/connections", "POST", { integrationId: ECHO_INTEGRATION_ID, config: {} }), foreign);
+    const own = await worker.fetch(
+      call("/api/connections", "POST", { integrationId: ECHO_INTEGRATION_ID, config: {} }),
+      foreign,
+    );
     expect(own.status).toBe(201);
     // And the Execution path resolves exact-org only (no global fallback).
-    await bindings.DB.prepare("INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,dispatched,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    await bindings.DB.prepare(
+      "INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,dispatched,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    )
       .bind(
         "f".repeat(64),
         "720b9ebf-9b6a-4eac-bae9-6ed22c970401",
@@ -225,22 +239,19 @@ describe("Connection CRUD (CON-01)", () => {
       .bind("f".repeat(64))
       .first<ExecutionRow>();
     if (!row) throw new Error("missing execution");
-    const resolved = await resolveConnection(
-      bindings.DB,
-      buildOrgCtx(row, "echo-http-v1"),
+    const resolved = await resolveConnection(bindings.DB, buildOrgCtx(row, "echo-http-v1"), ECHO_INTEGRATION_ID, [
       ECHO_INTEGRATION_ID,
-      [ECHO_INTEGRATION_ID],
-    );
+    ]);
     expect(resolved).toMatchObject({ found: true });
   });
 
   it("resolves a disabled mapping as missing-required, never a silent skip", async () => {
-    await bindings.DB.prepare(
-      "INSERT INTO connections(id,org_id,integration_id,endpoint,enabled) VALUES (?,?,?,?,?)",
-    )
+    await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint,enabled) VALUES (?,?,?,?,?)")
       .bind("00000000-0000-4000-8000-000000000104", ORG, ECHO_INTEGRATION_ID, "http://127.0.0.1:8788/echo", 0)
       .run();
-    await bindings.DB.prepare("INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,dispatched,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    await bindings.DB.prepare(
+      "INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,dispatched,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    )
       .bind(
         "e".repeat(64),
         "720b9ebf-9b6a-4eac-bae9-6ed22c970401",
@@ -261,7 +272,11 @@ describe("Connection CRUD (CON-01)", () => {
     const loud = await resolveConnection(bindings.DB, buildOrgCtx(row, "echo-http-v1"), ECHO_INTEGRATION_ID, [
       ECHO_INTEGRATION_ID,
     ]);
-    expect(loud).toMatchObject({ found: false, declared: true, error: { code: "INTEGRATION_REQUIREMENT_UNSATISFIED" } });
+    expect(loud).toMatchObject({
+      found: false,
+      declared: true,
+      error: { code: "INTEGRATION_REQUIREMENT_UNSATISFIED" },
+    });
     const silent = await resolveConnection(bindings.DB, buildOrgCtx(row, "echo-http-v1"), ECHO_INTEGRATION_ID, []);
     expect(silent).toEqual({ found: false, declared: false });
   });
@@ -284,7 +299,9 @@ describe("Connection health (CON-01)", () => {
     expect(ninjaTest.status).toBe(200);
     expect(await ninjaTest.json()).toMatchObject({ test: { ok: true } });
     // The probe carries a fixed sentinel, never the deployment credential.
-    const posted = vi.mocked(fetch).mock.calls.map((args) => String(args[1] instanceof Request ? args[1].url : args[0]));
+    const posted = vi
+      .mocked(fetch)
+      .mock.calls.map((args) => String(args[1] instanceof Request ? args[1].url : args[0]));
     expect(posted.some((url) => url.endsWith("/oauth/token"))).toBe(true);
     const bodies = vi.mocked(fetch).mock.calls.map((args) => JSON.stringify(args[1] ?? ""));
     expect(bodies.join(" ")).not.toContain(SECRET_SENTINEL);
@@ -306,17 +323,22 @@ describe("Connection health (CON-01)", () => {
     await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
       .bind("00000000-0000-4000-8000-000000000108", ORG, NINJA_INTEGRATION_ID, "https://probe.ninja.invalid/api")
       .run();
-    const halfCredentialed = await worker.fetch(
-      call(`/api/connections/${NINJA_INTEGRATION_ID}/test`, "POST", {}),
-      { ...bindings, NINJA_CLIENT_SECRET: "" },
-    );
+    const halfCredentialed = await worker.fetch(call(`/api/connections/${NINJA_INTEGRATION_ID}/test`, "POST", {}), {
+      ...bindings,
+      NINJA_CLIENT_SECRET: "",
+    });
     expect(halfCredentialed.status).toBe(502);
     expect(await halfCredentialed.json()).toMatchObject({ test: { ok: false, code: "SECRET_NOT_CONFIGURED" } });
   });
 
   it("rejects unauthorized test callers", async () => {
     expect(
-      (await worker.fetch(new Request(`http://local.test/api/connections/${ECHO_INTEGRATION_ID}/test`, { method: "POST" }), bindings)).status,
+      (
+        await worker.fetch(
+          new Request(`http://local.test/api/connections/${ECHO_INTEGRATION_ID}/test`, { method: "POST" }),
+          bindings,
+        )
+      ).status,
     ).toBe(401);
   });
 });

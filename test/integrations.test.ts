@@ -20,9 +20,7 @@ const BASE = {
   name: "probe",
   description: "Contract probe Integration.",
   secretFields: [] as string[],
-  configSchema: [
-    { name: "endpoint", type: "string" as const, required: true, description: "Probe endpoint." },
-  ],
+  configSchema: [{ name: "endpoint", type: "string" as const, required: true, description: "Probe endpoint." }],
   requiredSecrets: [] as string[],
   secretEnvVars: {},
   health: { testHint: "Probe the endpoint.", remediation: "Check the endpoint and retry." },
