@@ -19,6 +19,18 @@ export interface NavEntry {
 export const NAV_ENTRIES: NavEntry[] = [
   { label: "History", to: "/history", enabled: true, phase: "Phase 4 (#17)" },
   {
+    label: "Audit trail",
+    to: "/audit",
+    enabled: true,
+    phase: "Phase 4 (#172)",
+  },
+  {
+    label: "Notifications",
+    to: "/notifications",
+    enabled: true,
+    phase: "Phase 4 (#172)",
+  },
+  {
     label: "Dashboard",
     enabled: false,
     issue: `${REPO}/issues/15`,
