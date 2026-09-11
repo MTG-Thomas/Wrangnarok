@@ -39,12 +39,26 @@ import { join } from "node:path";
 // SDK descriptor additions) stacks on the CON-01 surface with the same
 // deliberate feature headroom, not dependency bloat: package.json is
 // unchanged versus main. Combined measures ~266 KiB.
-// 2026-09-11 (FILE-02 stacked over FILE-01, issue #158): 335 KiB. The
-// generated-artifacts surface (19 routes plus the artifacts domain) stacks
-// with the same deliberate feature headroom, not dependency bloat:
-// package.json is unchanged versus main. Combined measures ~326 KiB on CI
-// (local dry-run measured lower; the CI number governs).
-const BUDGET_BYTES = 335 * 1024;
+// 2026-09-11 (APP-02, issue #160): 310 KiB. The app-runtime surface (20
+// routes plus the app-runtime domain: grants, visible Tables with bounded
+// reads, versioned files with single-use tokens, scoped invoke, handshake)
+// adds ~42 KiB of hand-written feature code with no new dependencies —
+// measured 158740 bytes pre-merge after a shrink pass (shared rejectQuery
+// guard, compacted SDK descriptor), stacked here on the FILE-01 surface.
+// Same deliberate feature headroom as the earlier raises, not dependency
+// bloat: package.json is unchanged versus main.
+// 2026-09-11 (CON-02, issue #147): 340 KiB. The scoped-config surface
+// (src/config.ts: typed validation, secret-reference provisioning,
+// org-only resolution, managed-row reconciliation; 4 operator routes plus
+// the ctx.config Saga handle and SDK descriptor entries) stacks on the
+// APP-02 surface and measures ~334 KiB combined. Same deliberate feature
+// headroom as the earlier raises, not dependency bloat: package.json is
+// unchanged versus main.
+const BUDGET_BYTES = 340 * 1024;
+// 2026-09-11 (FILE-02 stacked over CON-02, issue #158): TBD KiB pending
+// measure. The generated-artifacts surface (19 routes plus the artifacts
+// domain) stacks with the same deliberate feature headroom, not dependency
+// bloat: package.json is unchanged versus main.
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

@@ -356,6 +356,12 @@ it("answers vendor challenges with plaintext and no Execution", async () => {
 });
 
 it("rate-limits a second delivery in the same minute window with 429", async () => {
+  // Freeze wall-clock so both deliveries land in the same minute bucket:
+  // without this the pair can straddle a real minute boundary and the
+  // second delivery would legitimately pass (202) in a fresh window.
+  // Restored by the suite afterEach (vi.restoreAllMocks).
+  const frozenNow = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(frozenNow);
   const created = await worker.fetch(
     authed("/api/endpoints", "POST", {
       name: "throttled",

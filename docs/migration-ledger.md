@@ -22,6 +22,7 @@ must update every importing test in the same commit.
 | 0010   | 0010_solutions_activation.sql   | SOL-01  | bundle_active pointer, managed rows, immutability triggers (renumbered from colliding 0005 on 2026-09-11) |
 | 0021   | 0021_endpoints.sql              | TRG-02  | webhook endpoints (renumbered from colliding 0009 on 2026-09-11; was 0009_endpoints.sql from #210) |
 | 0019   | 0019_files.sql                  | FILE-01 | managed file locations, policies, capabilities (renumbered from colliding 0007 on 2026-09-11; was 0007_files.sql from #203) |
+| 0023   | 0023_config.sql                 | CON-02  | scoped config + secret references (issue #147) |
 
 ## Resolved collisions
 

@@ -43,6 +43,31 @@ import {
   unbindAttachment,
   uploadArtifactVersion,
 } from "./artifacts";
+import {
+  APP_SDK_VERSION,
+  createAppGrant,
+  declareAppFile,
+  declareAppTable,
+  deleteAppFile,
+  deleteTableRow,
+  describeAppHandshake,
+  insertTableRow,
+  issueFileToken,
+  listAppExecutions,
+  listAppGrants,
+  listDeclaredTables,
+  listRuntimeFiles,
+  listRuntimeTables,
+  loadRuntimeApp,
+  parseTableQuery as parseAppTableQuery,
+  patchTableRow,
+  readTableRows,
+  recordAppExecution,
+  redeemFileDownload,
+  redeemFileUpload,
+  requireAppGrant,
+  revokeAppGrant,
+} from "./app-runtime";
 import { previewEnvironment, previewLocal } from "./dev";
 import {
   boundedJson,
@@ -59,6 +84,7 @@ import {
   parseHelloInput,
   parseHistoryQuery,
   parseInput,
+  parseKey,
   parseNinjaOrgsInput,
   parseSmokeInput,
   parseSubmission,
@@ -88,6 +114,7 @@ import {
 } from "./endpoints";
 import type { EndpointRow } from "./endpoints";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
+import { deleteConfig, listConfigs, parseUpdateConfigInput, setConfig, updateConfig } from "./config";
 import {
   consumeUploadToken,
   createLocation,
@@ -200,6 +227,12 @@ function requireJson(request: Request): void {
   )
     throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
 }
+/** Guard for query-less routes: anything after `?` is UNSUPPORTED_QUERY,
+ * matching the /api/executions submit gate. Shared by the app runtime routes
+ * below so the deny-by-default rule stays one line per route. */
+function rejectQuery(url: URL): void {
+  if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+}
 /** Bearer token from the Authorization header, or null. Endpoint deliveries
  * accept it as the api-key transport alongside X-Endpoint-Key. */
 function bearerToken(request: Request): string | null {
@@ -208,7 +241,7 @@ function bearerToken(request: Request): string | null {
   const match = /^Bearer (.+)$/.exec(header);
   return match?.[1] ?? null;
 }
-/** Public TRG-02 deliveries (issue #138, ADR 018): vendor-facing webhook and
+/** Public TRG-02 deliveries (issue #138, ADR 019): vendor-facing webhook and
  * endpoint receivers. Authenticated by credential (per-endpoint key or HMAC
  * secret), never by the operator session — so they run BEFORE the
  * authenticated /api/* gate below. Name resolution is global by name (names
@@ -304,7 +337,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   // Assets and needs no auth; only /api/* is authenticated JSON.
   if (!url.pathname.startsWith("/api/")) {
     // Public vendor receivers live outside /api/* precisely so they do not
-    // require the operator session (ADR 018): /hooks/:name for webhooks.
+    // require the operator session (ADR 019): /hooks/:name for webhooks.
     if (url.pathname.startsWith("/hooks/")) {
       try {
         const delivered = await handlePublicDelivery(request, env);
@@ -372,6 +405,13 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     // ?name=/?mime=, list ?limit=, binding ?scope=/?refId=); each route
     // validates its keys below.
     const artifactQuery = url.pathname === "/api/artifacts" || url.pathname.startsWith("/api/artifacts/");
+    // APP-02 runtime query keys (ADR 019): the Table page read and the
+    // version-aware file delete take query strings through their own
+    // allowlisted parsers, like the table query/count routes above.
+    const appTableRowsRead =
+      request.method === "GET" && /^\/api\/apps\/[0-9a-f-]{36}\/runtime\/tables\/[^/]+\/rows$/.test(url.pathname);
+    const appRuntimeFileDelete =
+      request.method === "DELETE" && /^\/api\/apps\/[0-9a-f-]{36}\/runtime\/files\/.+$/.test(url.pathname);
     const fileList = url.pathname === "/api/files" && request.method === "GET";
     const fileBytes = url.pathname === "/api/files/content" && (request.method === "GET" || request.method === "PUT");
     if (
@@ -379,6 +419,8 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       !(historyList && request.method === "GET") &&
       !tableQueryList &&
       !artifactQuery &&
+      !appTableRowsRead &&
+      !appRuntimeFileDelete &&
       !fileList &&
       !fileBytes
     )
@@ -778,7 +820,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     // explicit matcher per route, mirroring the executions/cancel style
     // above: boring and greppable beats a shared capture.
     if (url.pathname === "/api/apps" && request.method === "GET") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       return json({ apps: await listApps(env.DB, caller) });
     }
     if (url.pathname === "/api/apps" && request.method === "POST") {
@@ -789,7 +831,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const appBuilds = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
     if (appBuilds?.[1] && (request.method === "GET" || request.method === "POST")) {
       const id = parseAppId(appBuilds[1]);
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       if (request.method === "GET") return json({ jobs: await listJobs(env.DB, caller, id) });
       return json({ job: await startBuild(env.DB, caller, id) }, 202);
     }
@@ -1004,6 +1046,187 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         },
         201,
       );
+    }
+    // Browser App SDK runtime (APP-02, ADR 019): scoped Tables/files/invoke
+    // over the installed app context. Author routes trust the Organization
+    // caller (same policy as the app lifecycle); runtime routes trust the
+    // same caller PLUS a live (non-revoked) grant row per call
+    // (requireAppGrant), so revocation is immediate and discovered-but-
+    // ungranted refs fail. Hidden Tables stay 404 on the runtime paths.
+    // One explicit matcher per route, mirroring the executions style above.
+    const appGrants = /^\/api\/apps\/([0-9a-f-]{36})\/grants$/.exec(url.pathname);
+    if (appGrants?.[1] && request.method === "GET") {
+      rejectQuery(url);
+      return json({ grants: await listAppGrants(env.DB, caller, parseAppId(appGrants[1])) });
+    }
+    if (appGrants?.[1] && request.method === "POST") {
+      requireJson(request);
+      const created = await createAppGrant(env.DB, caller, parseAppId(appGrants[1]), await boundedJson(request.body));
+      return json({ grant: created }, 201);
+    }
+    const appGrantRevoke = /^\/api\/apps\/([0-9a-f-]{36})\/grants\/([^/]+)\/revoke$/.exec(url.pathname);
+    if (appGrantRevoke?.[1] && appGrantRevoke[2] && request.method === "POST") {
+      rejectQuery(url);
+      return json({
+        grant: await revokeAppGrant(env.DB, caller, parseAppId(appGrantRevoke[1]), appGrantRevoke[2]),
+      });
+    }
+    const appTables = /^\/api\/apps\/([0-9a-f-]{36})\/tables$/.exec(url.pathname);
+    if (appTables?.[1] && request.method === "GET") {
+      rejectQuery(url);
+      return json({ tables: await listDeclaredTables(env.DB, caller, parseAppId(appTables[1])) });
+    }
+    if (appTables?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appTables[1]));
+      return json({ table: await declareAppTable(env.DB, caller, app, await boundedJson(request.body)) }, 201);
+    }
+    const appHandshake = /^\/api\/apps\/([0-9a-f-]{36})\/sdk$/.exec(url.pathname);
+    if (appHandshake?.[1] && request.method === "GET") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appHandshake[1]));
+      const response = json(describeAppHandshake({ id: app.id, name: app.name, slug: app.slug, status: app.status }));
+      response.headers.set("X-App-SDK-Version", APP_SDK_VERSION);
+      return response;
+    }
+    const appRuntimeTables = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables$/.exec(url.pathname);
+    if (appRuntimeTables?.[1] && request.method === "GET") {
+      rejectQuery(url);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRuntimeTables[1]));
+      return json({ tables: await listRuntimeTables(env.DB, app.id) });
+    }
+    const appRowsRead = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows$/.exec(url.pathname);
+    if (appRowsRead?.[1] && appRowsRead[2] && request.method === "GET") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowsRead[1]));
+      const tableName = decodeURIComponent(appRowsRead[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "read");
+      return json(await readTableRows(env.DB, app, tableName, parseAppTableQuery(url.searchParams)));
+    }
+    const appRowWrite = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows$/.exec(url.pathname);
+    if (appRowWrite?.[1] && appRowWrite[2] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowWrite[1]));
+      const tableName = decodeURIComponent(appRowWrite[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "write");
+      // Body cap sits above the max row envelope (row bytes plus the data
+      // wrapper); the row byte bound itself is enforced in insertTableRow.
+      const body = await boundedJson(request.body, 8192);
+      if (!object(body) || !("data" in body)) {
+        throw new Fault(400, "INVALID_TABLE_ROW", "Table row writes need a data object.");
+      }
+      return json({ row: await insertTableRow(env.DB, caller, app, tableName, body.data) }, 201);
+    }
+    const appRowPatch = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows\/([^/]+)$/.exec(url.pathname);
+    if (appRowPatch?.[1] && appRowPatch[2] && appRowPatch[3] && request.method === "PATCH") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowPatch[1]));
+      const tableName = decodeURIComponent(appRowPatch[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "write");
+      const body = await boundedJson(request.body, 8192);
+      if (!object(body) || !("data" in body)) {
+        throw new Fault(400, "INVALID_TABLE_ROW", "Table row writes need a data object.");
+      }
+      return json({ row: await patchTableRow(env.DB, app, tableName, appRowPatch[3], body.data) });
+    }
+    if (appRowPatch?.[1] && appRowPatch[2] && appRowPatch[3] && request.method === "DELETE") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowPatch[1]));
+      const tableName = decodeURIComponent(appRowPatch[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "write");
+      return json(await deleteTableRow(env.DB, app, tableName, appRowPatch[3]));
+    }
+    const appInvoke = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/invoke$/.exec(url.pathname);
+    if (appInvoke?.[1] && request.method === "POST") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appInvoke[1]));
+      const key = parseKey(request.headers.get("Idempotency-Key"));
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      const body = await boundedJson(request.body);
+      if (!object(body) || typeof body.sagaId !== "string") {
+        throw new Fault(400, "INVALID_SUBMISSION", "Provide a granted Saga ID and its input only.");
+      }
+      if (Object.keys(body).some((entry) => !["sagaId", "input"].includes(entry))) {
+        throw new Fault(400, "INVALID_SUBMISSION", "Provide a granted Saga ID and its input only.");
+      }
+      // Grant-before-parse: the Saga ref is authorized before the input is
+      // validated, so ungranted Sagas fail 403 without leaking which known
+      // Saga IDs would parse.
+      await requireAppGrant(env.DB, app.id, "saga", body.sagaId, "invoke");
+      const { saga, input } = parseSubmission({ sagaId: body.sagaId, input: body.input });
+      const accepted = await submit(env, caller, key, saga, input);
+      await recordAppExecution(env.DB, caller, app.id, accepted.executionId, saga.id);
+      return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
+    }
+    const appExecutions = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/executions$/.exec(url.pathname);
+    if (appExecutions?.[1] && request.method === "GET") {
+      rejectQuery(url);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appExecutions[1]));
+      return json({ executions: await listAppExecutions(env.DB, app.id, 20) });
+    }
+    const appFilesList = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files$/.exec(url.pathname);
+    if (appFilesList?.[1] && request.method === "GET") {
+      rejectQuery(url);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFilesList[1]));
+      return json({ files: await listRuntimeFiles(env.DB, app.id) });
+    }
+    const appFileDeclare = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/declare$/.exec(url.pathname);
+    if (appFileDeclare?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileDeclare[1]));
+      const body = await boundedJson(request.body);
+      if (!object(body) || typeof body.name !== "string") {
+        throw new Fault(400, "INVALID_APP_FILE", "A file declaration needs a name.");
+      }
+      await requireAppGrant(env.DB, app.id, "file", body.name, "write");
+      return json({ file: await declareAppFile(env.DB, caller, app, body) }, 201);
+    }
+    const appFileTokens = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/tokens$/.exec(url.pathname);
+    if (appFileTokens?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileTokens[1]));
+      const body = await boundedJson(request.body);
+      if (!object(body) || typeof body.name !== "string" || (body.scope !== "upload" && body.scope !== "download")) {
+        throw new Fault(400, "INVALID_APP_FILE", "File tokens need a name and an upload or download scope.");
+      }
+      const permission = body.scope === "upload" ? "write" : "read";
+      await requireAppGrant(env.DB, app.id, "file", body.name, permission);
+      return json(await issueFileToken(env.DB, app.id, body.name, body.scope), 201);
+    }
+    const appFileUpload = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/upload$/.exec(url.pathname);
+    if (appFileUpload?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileUpload[1]));
+      const token = request.headers.get("X-File-Token");
+      // Body cap sits above the max file envelope (base64 bytes plus
+      // verification metadata); the file byte bound is enforced at redeem.
+      const body = await boundedJson(request.body, 65536);
+      if (!object(body) || !("content" in body)) {
+        throw new Fault(400, "INVALID_APP_FILE", "File upload needs content, contentType, size, and sha256.");
+      }
+      return json({ file: await redeemFileUpload(env.DB, app.id, token ?? "", body) }, 201);
+    }
+    const appFileDownload = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/download$/.exec(url.pathname);
+    if (appFileDownload?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileDownload[1]));
+      const token = request.headers.get("X-File-Token");
+      return json(await redeemFileDownload(env.DB, app.id, token ?? ""));
+    }
+    const appFileDelete = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/(.+)$/.exec(url.pathname);
+    if (appFileDelete?.[1] && appFileDelete[2] && request.method === "DELETE") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileDelete[1]));
+      const fileName = decodeURIComponent(appFileDelete[2]);
+      await requireAppGrant(env.DB, app.id, "file", fileName, "write");
+      const rawExpected = url.searchParams.get("expectedVersion");
+      if ([...url.searchParams.keys()].some((key) => key !== "expectedVersion")) {
+        throw new Fault(400, "UNSUPPORTED_QUERY", "Only expectedVersion is supported here.");
+      }
+      const expectedVersion = rawExpected === null ? undefined : Number(rawExpected);
+      if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1)) {
+        throw new Fault(400, "INVALID_APP_FILE", "expectedVersion must be a positive integer file version.");
+      }
+      return json(await deleteAppFile(env.DB, app, fileName, expectedVersion));
     }
     // Connection management (CON-01, issue #146): portable Integration
     // definitions plus per-Organization non-secret mappings through one
@@ -1306,6 +1529,53 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
       await deleteTable(env.DB, caller, table);
       return json({ deleted: true });
+    }
+    // Scoped configuration (CON-02, ADR 020): typed key/value rows for the
+    // caller's own Organization. Secret rows answer "[SECRET]" on every read
+    // surface and provision only references — values resolve transiently at
+    // the Integration Action boundary and never persist, log, or return.
+    // One explicit matcher per route, mirroring the tables style: boring and
+    // greppable beats a shared capture.
+    if (url.pathname === "/api/config" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ configs: await listConfigs(env.DB, caller) });
+    }
+    if (url.pathname === "/api/config" && request.method === "POST") {
+      requireJson(request);
+      const body: unknown = await boundedJson(request.body);
+      if (!object(body))
+        throw new Fault(400, "INVALID_CONFIG", "Config writes need { key, type, value?, description? }.");
+      const record = body as Record<string, unknown>;
+      return json(
+        {
+          config: await setConfig(
+            env.DB,
+            caller,
+            { key: record.key, type: record.type, value: record.value, description: record.description },
+            env as unknown as Record<string, string | undefined>,
+          ),
+        },
+        201,
+      );
+    }
+    const configOne = /^\/api\/config\/([0-9a-fA-F-]{36})$/.exec(url.pathname);
+    if (configOne?.[1]) {
+      if (request.method === "PUT") {
+        requireJson(request);
+        return json({
+          config: await updateConfig(
+            env.DB,
+            caller,
+            configOne[1],
+            parseUpdateConfigInput(await boundedJson(request.body)),
+            env as unknown as Record<string, string | undefined>,
+          ),
+        });
+      }
+      if (request.method === "DELETE") {
+        await deleteConfig(env.DB, caller, configOne[1]);
+        return json({ deleted: true });
+      }
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).

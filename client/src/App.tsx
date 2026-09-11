@@ -4,6 +4,7 @@ import { Nav } from "./components/Nav";
 import { AdminOrgs } from "./pages/AdminOrgs";
 import { ApplicationDetailView, ApplicationsList } from "./pages/Applications";
 import { ArtifactDetailView, ArtifactsList } from "./pages/Artifacts";
+import { ConfigsList } from "./pages/Configs";
 import { ConnectionsList } from "./pages/Connections";
 import { ExecutionDetailView } from "./pages/ExecutionDetail";
 import { ExecutionHistoryList } from "./pages/ExecutionHistory";
@@ -20,6 +21,7 @@ export function App(): React.JSX.Element {
           <Route path="/history" element={<ExecutionHistoryList />} />
           <Route path="/history/:id" element={<ExecutionDetailView />} />
           <Route path="/sagas" element={<SagasList />} />
+          <Route path="/configs" element={<ConfigsList />} />
           <Route path="/admin" element={<AdminOrgs />} />
           <Route path="/apps" element={<ApplicationsList />} />
           <Route path="/apps/:id" element={<ApplicationDetailView />} />
