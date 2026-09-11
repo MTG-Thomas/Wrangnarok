@@ -8,7 +8,7 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
+Total: 47 capability rows — 17 Partial, 28 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
@@ -39,7 +39,7 @@ Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
 | FILE-01 | Deliver managed file locations with policy-checked upload, download and mutation | 4 | Missing | AUTH-02, SEC-01 | new |
 | FILE-02 | Manage generated artifacts and attachment lifecycles with retention | 4+6 | Missing | FILE-01, AUTH-02 | new |
 | APP-01 | Deploy authored applications with explicit lifecycle, ownership and recovery | 4+5 | Partial | AUTH-02, DEV-02, SOL-01 | #159 |
-| APP-02 | Provide the browser App SDK with scoped workflows, Tables, files and live updates | 4 | Missing | APP-01, TABLE-02, FILE-01, OBS-02 | new |
+| APP-02 | Provide the browser App SDK with scoped workflows, Tables, files and live updates | 4 | Partial | APP-01, TABLE-02, FILE-01, OBS-02 | #160 |
 | SOL-01 | Close the existing bundle reconciliation and activation contract gaps | 5 | Partial | — | new |
 | SOL-02 | Install and manage complete reusable Solutions across Organizations | 5 | Partial | SOL-01, AUTH-02, CON-02, TABLE-02, FORM-02, APP-01, AI-02, TRG-03 | new |
 | SOL-03 | Export, capture and import portable Solution source without tenant state | 5 | Missing | SOL-01, MIG-01, SEC-01 | new |
@@ -742,9 +742,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## APP-02: Provide the browser App SDK with scoped workflows, Tables, files and live updates
 
-Phase 4; **Missing**; existing issue: new
+Phase 4; **Partial**; existing issue: #160
 
-Local status: The private control-plane API client is not a public SDK/runtime for authored apps.
+Local status: ADR 018 accepts the scoped runtime contract. Authored apps run invoke/result, filtered Table read/write/live poll, and signed file upload/download against the real local Worker through `client/src/lib/app-runtime.ts` (imperative) and `app-provider.tsx` (provider + hooks). Authorization is deny-by-absence grant rows checked per call: hidden Tables stay 404 on runtime paths, revoked grants fail immediately (including token redeem), and runtime file lists show read-granted files only. Live updates are bounded revision polling (no WebSocket/Durable Object/Queue); the handshake tripwire (`APP_SDK_VERSION` + `GET /api/apps/:id/sdk`) fails drift loud with `APP_SDK_MISMATCH`. Browser-safe APIs carry install/org/app context, loading/error state, method-shaped retry (GET bounded, mutations never blind), bounded one-401 refresh, reconnect re-list, and the flat-hook vs nested-imperative Table shape. Forms/config hooks stay in FORM-02/CON-02; batch/rich query stays in TABLE-02; artifact lifecycles stay in FILE-02; log streaming stays in OBS-02.
 
 Depends: APP-01, TABLE-02, FILE-01, OBS-02
 

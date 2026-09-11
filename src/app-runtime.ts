@@ -16,7 +16,7 @@
 // OBS-02; no WebSocket, Durable Object, or Queue here).
 //
 // Errors use the shared Fault envelope; codes are listed in src/sdk.ts
-// (SDK_ERROR_CODES) and pinned by test/app-sdk.test.ts.
+// (SDK_ERROR_CODES) and pinned by test/app-runtime.test.ts.
 import { Fault, hash, object, UUID } from "./domain";
 import type { FieldFailure, Principal } from "./domain";
 import { loadApp } from "./apps";
@@ -146,7 +146,9 @@ export async function createAppGrant(
 export async function listAppGrants(db: D1Database, caller: Principal, appId: string): Promise<AppGrant[]> {
   const app = await loadRuntimeApp(db, caller, appId);
   const rows = await db
-    .prepare("SELECT id, kind, ref, permission, revoked, created_at FROM app_grants WHERE app_id=? ORDER BY created_at ASC, id ASC")
+    .prepare(
+      "SELECT id, kind, ref, permission, revoked, created_at FROM app_grants WHERE app_id=? ORDER BY created_at ASC, id ASC",
+    )
     .bind(app.id)
     .all<{ id: string; kind: string; ref: string; permission: string; revoked: number; created_at: string }>();
   return rows.results.map((row) => ({
@@ -198,7 +200,8 @@ export async function requireAppGrant(
     .bind(appId, kind, ref, permission)
     .first<{ revoked: number }>();
   if (!row || row.revoked === 1) {
-    const code = kind === "saga" ? "APP_SAGA_FORBIDDEN" : kind === "table" ? "APP_TABLE_FORBIDDEN" : "APP_FILE_FORBIDDEN";
+    const code =
+      kind === "saga" ? "APP_SAGA_FORBIDDEN" : kind === "table" ? "APP_TABLE_FORBIDDEN" : "APP_FILE_FORBIDDEN";
     throw invalid(code, "This app is not granted access to the requested resource.", 403);
   }
 }
@@ -215,7 +218,10 @@ export function parseTableBody(body: unknown): { name: string; columns: string[]
     }
     for (const entry of body.columns) {
       if (typeof entry !== "string" || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(entry)) {
-        throw invalid("INVALID_APP_TABLE", "Column names must start with a letter and hold letters, digits, or underscores.");
+        throw invalid(
+          "INVALID_APP_TABLE",
+          "Column names must start with a letter and hold letters, digits, or underscores.",
+        );
       }
     }
     columns = [...body.columns];
@@ -239,9 +245,18 @@ export async function declareAppTable(
   const parsed = parseTableBody(body);
   const now = new Date().toISOString();
   const existing = await db
-    .prepare("SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? AND name=?")
+    .prepare(
+      "SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? AND name=?",
+    )
     .bind(app.id, parsed.name)
-    .first<{ id: string; name: string; visibility: string; columns_json: string; revision: number; created_at: string }>();
+    .first<{
+      id: string;
+      name: string;
+      visibility: string;
+      columns_json: string;
+      revision: number;
+      created_at: string;
+    }>();
   if (existing) {
     await db
       .prepare("UPDATE app_tables SET visibility=?, columns_json=? WHERE id=?")
@@ -270,12 +285,28 @@ async function loadTableForApp(
   db: D1Database,
   appId: string,
   name: string,
-): Promise<{ id: string; name: string; visibility: string; columns_json: string; revision: number; created_at: string } | null> {
+): Promise<{
+  id: string;
+  name: string;
+  visibility: string;
+  columns_json: string;
+  revision: number;
+  created_at: string;
+} | null> {
   if (!APP_TABLE_NAME.test(name)) throw invalid("INVALID_APP_TABLE", "Table names must be lowercase slugs.", 400);
   const row = await db
-    .prepare("SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? AND name=?")
+    .prepare(
+      "SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? AND name=?",
+    )
     .bind(appId, name)
-    .first<{ id: string; name: string; visibility: string; columns_json: string; revision: number; created_at: string }>();
+    .first<{
+      id: string;
+      name: string;
+      visibility: string;
+      columns_json: string;
+      revision: number;
+      created_at: string;
+    }>();
   return row ?? null;
 }
 
@@ -283,29 +314,52 @@ async function loadTableForApp(
  * trusted author view (listDeclaredTables) shows both with visibility flags. */
 export async function listRuntimeTables(db: D1Database, appId: string): Promise<AppTableDef[]> {
   const rows = await db
-    .prepare("SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? AND visibility='visible' ORDER BY name ASC")
+    .prepare(
+      "SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? AND visibility='visible' ORDER BY name ASC",
+    )
     .bind(appId)
-    .all<{ id: string; name: string; visibility: string; columns_json: string; revision: number; created_at: string }>();
-  return rows.results.map((row) => ({
-    id: row.id,
-    name: row.name,
-    visibility: row.visibility as "visible" | "hidden",
-    columns: JSON.parse(row.columns_json) as string[],
-    revision: row.revision,
-    createdAt: row.created_at,
-  }));
+    .all<{
+      id: string;
+      name: string;
+      visibility: string;
+      columns_json: string;
+      revision: number;
+      created_at: string;
+    }>();
+  const grants = await db
+    .prepare(
+      "SELECT ref FROM app_grants WHERE app_id=? AND kind='table' AND permission IN ('read', 'write') AND revoked=0",
+    )
+    .bind(appId)
+    .all<{ ref: string }>();
+  const allowed = new Set(grants.results.map((entry) => entry.ref));
+  return rows.results
+    .filter((row) => allowed.has(row.name))
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      visibility: row.visibility as "visible" | "hidden",
+      columns: JSON.parse(row.columns_json) as string[],
+      revision: row.revision,
+      createdAt: row.created_at,
+    }));
 }
 
-export async function listDeclaredTables(
-  db: D1Database,
-  caller: Principal,
-  appId: string,
-): Promise<AppTableDef[]> {
+export async function listDeclaredTables(db: D1Database, caller: Principal, appId: string): Promise<AppTableDef[]> {
   const app = await loadRuntimeApp(db, caller, appId);
   const rows = await db
-    .prepare("SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? ORDER BY name ASC")
+    .prepare(
+      "SELECT id, name, visibility, columns_json, revision, created_at FROM app_tables WHERE app_id=? ORDER BY name ASC",
+    )
     .bind(app.id)
-    .all<{ id: string; name: string; visibility: string; columns_json: string; revision: number; created_at: string }>();
+    .all<{
+      id: string;
+      name: string;
+      visibility: string;
+      columns_json: string;
+      revision: number;
+      created_at: string;
+    }>();
   return rows.results.map((row) => ({
     id: row.id,
     name: row.name,
@@ -324,6 +378,12 @@ export interface TableQuery {
 }
 
 export function parseTableQuery(params: URLSearchParams): TableQuery {
+  // Deny-by-default query keys: only the documented read keys ride along.
+  for (const key of params.keys()) {
+    if (!["filter", "limit", "cursor", "sinceRevision"].includes(key)) {
+      throw invalid("UNSUPPORTED_QUERY", "Only filter, limit, cursor, and sinceRevision are supported here.");
+    }
+  }
   const filter: Record<string, string | number | boolean> = {};
   const rawFilter = params.get("filter");
   if (rawFilter !== null) {
@@ -333,7 +393,8 @@ export function parseTableQuery(params: URLSearchParams): TableQuery {
     } catch {
       throw invalid("INVALID_TABLE_QUERY", "Table filter must be a JSON object of equality clauses.");
     }
-    if (!object(parsed)) throw invalid("INVALID_TABLE_QUERY", "Table filter must be a JSON object of equality clauses.");
+    if (!object(parsed))
+      throw invalid("INVALID_TABLE_QUERY", "Table filter must be a JSON object of equality clauses.");
     // Query-only filters (TABLE-02 follow-up): exact-match equality on
     // top-level fields only. Nested JSON filters, ranges, sorts, and counts
     // are explicit follow-ups (APP_TABLE_QUERY_UNSUPPORTED), never silently
@@ -343,7 +404,11 @@ export function parseTableQuery(params: URLSearchParams): TableQuery {
         throw invalid("INVALID_TABLE_QUERY", `Filter field ${JSON.stringify(key)} is not a column name.`);
       }
       if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
-        throw invalid("APP_TABLE_QUERY_UNSUPPORTED", "Table filters support exact-match strings, numbers, and booleans only.", 422);
+        throw invalid(
+          "APP_TABLE_QUERY_UNSUPPORTED",
+          "Table filters support exact-match strings, numbers, and booleans only.",
+          422,
+        );
       }
       filter[key] = value;
     }
@@ -396,15 +461,28 @@ export async function readTableRows(
   if (!table || table.visibility !== "visible") {
     throw invalid("APP_TABLE_NOT_FOUND", "Table not found.", 404);
   }
+  // Bounded-poll shortcut: a poller that already holds the authoritative
+  // revision learns nothing changed without paying for the row scan.
+  if (query.sinceRevision !== null && query.sinceRevision >= table.revision) {
+    return { rows: [], hasMore: false, nextCursor: null, tableRevision: table.revision };
+  }
   const rows = await db
-    .prepare("SELECT id, data_json, table_revision, created_at, updated_at FROM app_rows WHERE table_id=? ORDER BY created_at DESC, id DESC LIMIT 500")
+    .prepare(
+      "SELECT id, data_json, table_revision, created_at, updated_at FROM app_rows WHERE table_id=? ORDER BY created_at DESC, id DESC LIMIT 500",
+    )
     .bind(table.id)
     .all<{ id: string; data_json: string; table_revision: number; created_at: string; updated_at: string }>();
   const matched: AppTableRow[] = [];
   for (const row of rows.results) {
     const data = JSON.parse(row.data_json) as Record<string, unknown>;
     if (!matchFilter(data, query.filter)) continue;
-    matched.push({ id: row.id, data, tableRevision: row.table_revision, createdAt: row.created_at, updatedAt: row.updated_at });
+    matched.push({
+      id: row.id,
+      data,
+      tableRevision: row.table_revision,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
   }
   let start = 0;
   if (query.cursor) {
@@ -460,14 +538,20 @@ export async function insertTableRow(
     .bind(table.id)
     .first<{ n: number }>();
   if ((count?.n ?? 0) >= APP_TABLE_MAX_ROWS) {
-    throw invalid("APP_TABLE_FULL", `Table ${JSON.stringify(tableName)} holds at most ${APP_TABLE_MAX_ROWS} rows in this slice.`, 409);
+    throw invalid(
+      "APP_TABLE_FULL",
+      `Table ${JSON.stringify(tableName)} holds at most ${APP_TABLE_MAX_ROWS} rows in this slice.`,
+      409,
+    );
   }
   const now = new Date().toISOString();
   const id = crypto.randomUUID().toLowerCase();
   const nextRevision = table.revision + 1;
   const dataJson = JSON.stringify(checked);
   await db
-    .prepare("INSERT INTO app_rows(id, table_id, app_id, org_id, data_json, table_revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .prepare(
+      "INSERT INTO app_rows(id, table_id, app_id, org_id, data_json, table_revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
     .bind(id, table.id, app.id, caller.orgId, dataJson, nextRevision, now, now)
     .run();
   await db.prepare("UPDATE app_tables SET revision=? WHERE id=?").bind(nextRevision, table.id).run();
@@ -503,7 +587,13 @@ export async function patchTableRow(
     .bind(JSON.stringify(checked), nextRevision, now, existing.id)
     .run();
   await db.prepare("UPDATE app_tables SET revision=? WHERE id=?").bind(nextRevision, table.id).run();
-  return { id: existing.id, data: checked, tableRevision: nextRevision, createdAt: existing.created_at, updatedAt: now };
+  return {
+    id: existing.id,
+    data: checked,
+    tableRevision: nextRevision,
+    createdAt: existing.created_at,
+    updatedAt: now,
+  };
 }
 
 /** Scoped row delete by exact row UUID. Counts toward the Table revision so
@@ -553,9 +643,21 @@ export async function declareAppFile(
 ): Promise<AppFileMeta> {
   const parsed = parseFileDeclare(body);
   const existing = await db
-    .prepare("SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE app_id=? AND name=?")
+    .prepare(
+      "SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE app_id=? AND name=?",
+    )
     .bind(app.id, parsed.name)
-    .first<{ id: string; name: string; content_type: string; size: number; sha256: string; version: number; status: string; created_at: string; updated_at: string }>();
+    .first<{
+      id: string;
+      name: string;
+      content_type: string;
+      size: number;
+      sha256: string;
+      version: number;
+      status: string;
+      created_at: string;
+      updated_at: string;
+    }>();
   if (existing) {
     return {
       id: existing.id,
@@ -572,17 +674,41 @@ export async function declareAppFile(
   const now = new Date().toISOString();
   const id = crypto.randomUUID().toLowerCase();
   await db
-    .prepare("INSERT INTO app_files(id, app_id, org_id, name, content_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .prepare(
+      "INSERT INTO app_files(id, app_id, org_id, name, content_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
     .bind(id, app.id, caller.orgId, parsed.name, parsed.contentType, now, now)
     .run();
-  return { id, name: parsed.name, contentType: parsed.contentType, size: 0, sha256: "", version: 1, status: "pending", createdAt: now, updatedAt: now };
+  return {
+    id,
+    name: parsed.name,
+    contentType: parsed.contentType,
+    size: 0,
+    sha256: "",
+    version: 1,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 export async function listAppFiles(db: D1Database, appId: string): Promise<AppFileMeta[]> {
   const rows = await db
-    .prepare("SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE app_id=? ORDER BY name ASC")
+    .prepare(
+      "SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE app_id=? ORDER BY name ASC",
+    )
     .bind(appId)
-    .all<{ id: string; name: string; content_type: string; size: number; sha256: string; version: number; status: string; created_at: string; updated_at: string }>();
+    .all<{
+      id: string;
+      name: string;
+      content_type: string;
+      size: number;
+      sha256: string;
+      version: number;
+      status: string;
+      created_at: string;
+      updated_at: string;
+    }>();
   return rows.results.map((row) => ({
     id: row.id,
     name: row.name,
@@ -596,18 +722,78 @@ export async function listAppFiles(db: D1Database, appId: string): Promise<AppFi
   }));
 }
 
+/** Runtime file listing: only files carrying an active read grant for this
+ * app are visible. Write-only files (upload targets) stay unlisted until a
+ * read grant arrives, mirroring hidden Tables on the read path. */
+export async function listRuntimeFiles(db: D1Database, appId: string): Promise<AppFileMeta[]> {
+  const files = await listAppFiles(db, appId);
+  const grants = await db
+    .prepare("SELECT ref FROM app_grants WHERE app_id=? AND kind='file' AND permission='read' AND revoked=0")
+    .bind(appId)
+    .all<{ ref: string }>();
+  const allowed = new Set(grants.results.map((row) => row.ref));
+  return files.filter((file) => allowed.has(file.name));
+}
+
+export interface AppHandshakeApp {
+  readonly id: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly status: string;
+}
+
+export interface AppHandshake {
+  readonly sdk: "wrangnarok.app-runtime";
+  readonly version: typeof APP_SDK_VERSION;
+  readonly app: AppHandshakeApp;
+}
+
+/** Compatibility handshake descriptor (APP-02 acceptance): the browser SDK
+ * asserts name and version before its first scoped call, so a stale bundled
+ * SDK against a newer Worker (or vice versa) fails loud with APP_SDK_MISMATCH
+ * instead of misreading a changed shape. */
+export function describeAppHandshake(app: { id: string; name: string; slug: string; status: string }): AppHandshake {
+  return {
+    sdk: "wrangnarok.app-runtime",
+    version: APP_SDK_VERSION,
+    app: { id: app.id, name: app.name, slug: app.slug, status: app.status },
+  };
+}
+
 async function loadFileForApp(
   db: D1Database,
   appId: string,
   name: string,
-): Promise<{ id: string; name: string; content_type: string; size: number; sha256: string; version: number; status: string; created_at: string; updated_at: string } | null> {
+): Promise<{
+  id: string;
+  name: string;
+  content_type: string;
+  size: number;
+  sha256: string;
+  version: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+} | null> {
   if (name.includes("..") || !APP_FILE_NAME.test(name)) {
     throw invalid("INVALID_APP_FILE", "File names must be relative paths.", 400);
   }
   const row = await db
-    .prepare("SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE app_id=? AND name=?")
+    .prepare(
+      "SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE app_id=? AND name=?",
+    )
     .bind(appId, name)
-    .first<{ id: string; name: string; content_type: string; size: number; sha256: string; version: number; status: string; created_at: string; updated_at: string }>();
+    .first<{
+      id: string;
+      name: string;
+      content_type: string;
+      size: number;
+      sha256: string;
+      version: number;
+      status: string;
+      created_at: string;
+      updated_at: string;
+    }>();
   return row ?? null;
 }
 
@@ -628,7 +814,9 @@ export async function issueFileToken(
   const nowMs = Date.now();
   const expiresAt = new Date(nowMs + APP_FILE_TOKEN_TTL_MS).toISOString();
   await db
-    .prepare("INSERT INTO app_file_tokens(token_hash, file_id, app_id, scope, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .prepare(
+      "INSERT INTO app_file_tokens(token_hash, file_id, app_id, scope, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
     .bind(tokenHash, file.id, appId, scope, expiresAt, new Date(nowMs).toISOString())
     .run();
   return { token: raw, expiresAt };
@@ -661,7 +849,12 @@ export async function redeemFileUpload(
   }
   if (!object(body)) throw invalid("INVALID_APP_FILE", "File upload needs content, contentType, size, and sha256.");
   const { content, contentType, size, sha256, expectedVersion } = body as Record<string, unknown>;
-  if (typeof content !== "string" || typeof contentType !== "string" || typeof size !== "number" || typeof sha256 !== "string") {
+  if (
+    typeof content !== "string" ||
+    typeof contentType !== "string" ||
+    typeof size !== "number" ||
+    typeof sha256 !== "string"
+  ) {
     throw invalid("INVALID_APP_FILE", "File upload needs content, contentType, size, and sha256.");
   }
   let bytes: Uint8Array;
@@ -677,7 +870,8 @@ export async function redeemFileUpload(
   if (bytes.byteLength > APP_FILE_MAX_BYTES) {
     throw invalid("APP_FILE_TOO_LARGE", `Files must fit ${APP_FILE_MAX_BYTES} bytes in this slice.`, 413);
   }
-  const digestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const copy = Uint8Array.from(bytes);
+  const digestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", copy.buffer));
   const digest = Array.from(digestBytes, (b) => b.toString(16).padStart(2, "0")).join("");
   if (digest !== sha256) {
     throw invalid("APP_FILE_METADATA_MISMATCH", "Declared file sha256 does not match the uploaded bytes.", 422);
@@ -687,19 +881,45 @@ export async function redeemFileUpload(
     .bind(tokenRow.file_id, appId)
     .first<{ id: string; name: string; version: number; status: string; created_at: string }>();
   if (!file) throw invalid("APP_FILE_NOT_FOUND", "File not found.", 404);
+  // Deny-by-absence at redeem time, not issue time: a grant revoked after
+  // the token was issued fails closed here, so outstanding tokens confer no
+  // access on their own.
+  await requireAppGrant(db, appId, "file", file.name, "write");
   if (expectedVersion !== undefined && expectedVersion !== file.version) {
     throw invalid("APP_FILE_VERSION_CONFLICT", "The file changed under this upload; re-list and retry.", 409);
   }
   const now = new Date().toISOString();
   await db
-    .prepare("UPDATE app_files SET content_type=?, size=?, sha256=?, content_base64=?, version=?, status='ready', updated_at=? WHERE id=?")
-    .bind(contentType.slice(0, 128), size, sha256, content, file.version + (file.status === "ready" ? 1 : 0), now, file.id)
+    .prepare(
+      "UPDATE app_files SET content_type=?, size=?, sha256=?, content_base64=?, version=?, status='ready', updated_at=? WHERE id=?",
+    )
+    .bind(
+      contentType.slice(0, 128),
+      size,
+      sha256,
+      content,
+      file.version + (file.status === "ready" ? 1 : 0),
+      now,
+      file.id,
+    )
     .run();
   await db.prepare("DELETE FROM app_file_tokens WHERE token_hash=?").bind(tokenHash).run();
   const updated = await db
-    .prepare("SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE id=?")
+    .prepare(
+      "SELECT id, name, content_type, size, sha256, version, status, created_at, updated_at FROM app_files WHERE id=?",
+    )
     .bind(file.id)
-    .first<{ id: string; name: string; content_type: string; size: number; sha256: string; version: number; status: string; created_at: string; updated_at: string }>();
+    .first<{
+      id: string;
+      name: string;
+      content_type: string;
+      size: number;
+      sha256: string;
+      version: number;
+      status: string;
+      created_at: string;
+      updated_at: string;
+    }>();
   if (!updated) throw invalid("APP_FILE_NOT_FOUND", "File not found.", 404);
   return {
     id: updated.id,
@@ -737,10 +957,26 @@ export async function redeemFileDownload(
     throw invalid("APP_FILE_TOKEN_EXPIRED", "The file download token has expired.", 401);
   }
   const file = await db
-    .prepare("SELECT id, name, content_type, size, sha256, content_base64, version, status, created_at, updated_at FROM app_files WHERE id=? AND app_id=?")
+    .prepare(
+      "SELECT id, name, content_type, size, sha256, content_base64, version, status, created_at, updated_at FROM app_files WHERE id=? AND app_id=?",
+    )
     .bind(tokenRow.file_id, appId)
-    .first<{ id: string; name: string; content_type: string; size: number; sha256: string; content_base64: string; version: number; status: string; created_at: string; updated_at: string }>();
+    .first<{
+      id: string;
+      name: string;
+      content_type: string;
+      size: number;
+      sha256: string;
+      content_base64: string;
+      version: number;
+      status: string;
+      created_at: string;
+      updated_at: string;
+    }>();
   if (!file) throw invalid("APP_FILE_NOT_FOUND", "File not found.", 404);
+  // Deny-by-absence at redeem time, not issue time (mirrors upload): a grant
+  // revoked after the token was issued fails closed here.
+  await requireAppGrant(db, appId, "file", file.name, "read");
   if (file.status !== "ready") throw invalid("APP_FILE_NOT_READY", "The file has no uploaded bytes yet.", 409);
   await db.prepare("DELETE FROM app_file_tokens WHERE token_hash=?").bind(tokenHash).run();
   return {
@@ -788,7 +1024,9 @@ export async function recordAppExecution(
   sagaId: string,
 ): Promise<void> {
   await db
-    .prepare("INSERT INTO app_executions(app_id, execution_id, org_id, saga_id, created_at) VALUES (?, ?, ?, ?, ?)")
+    .prepare(
+      "INSERT INTO app_executions(app_id, execution_id, org_id, saga_id, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(app_id, execution_id) DO NOTHING",
+    )
     .bind(appId, executionId, caller.orgId, sagaId, new Date().toISOString())
     .run();
 }
@@ -799,7 +1037,9 @@ export async function listAppExecutions(
   limit: number,
 ): Promise<readonly { executionId: string; sagaId: string; createdAt: string }[]> {
   const rows = await db
-    .prepare("SELECT execution_id, saga_id, created_at FROM app_executions WHERE app_id=? ORDER BY created_at DESC, execution_id DESC LIMIT ?")
+    .prepare(
+      "SELECT execution_id, saga_id, created_at FROM app_executions WHERE app_id=? ORDER BY created_at DESC, execution_id DESC LIMIT ?",
+    )
     .bind(appId, Math.min(Math.max(limit, 1), 50))
     .all<{ execution_id: string; saga_id: string; created_at: string }>();
   return rows.results.map((row) => ({ executionId: row.execution_id, sagaId: row.saga_id, createdAt: row.created_at }));

@@ -17,6 +17,31 @@ import {
   swapSlugs,
   validateApp,
 } from "./apps";
+import {
+  APP_SDK_VERSION,
+  createAppGrant,
+  declareAppFile,
+  declareAppTable,
+  deleteAppFile,
+  deleteTableRow,
+  describeAppHandshake,
+  insertTableRow,
+  issueFileToken,
+  listAppExecutions,
+  listAppGrants,
+  listDeclaredTables,
+  listRuntimeFiles,
+  listRuntimeTables,
+  loadRuntimeApp,
+  parseTableQuery,
+  patchTableRow,
+  readTableRows,
+  recordAppExecution,
+  redeemFileDownload,
+  redeemFileUpload,
+  requireAppGrant,
+  revokeAppGrant,
+} from "./app-runtime";
 import { previewEnvironment, previewLocal } from "./dev";
 import {
   boundedJson,
@@ -27,6 +52,7 @@ import {
   Fault,
   helloSaga,
   ninjaSaga,
+  object,
   parseDigestInput,
   parseHelloInput,
   parseHistoryQuery,
@@ -92,10 +118,15 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   }
   try {
     const caller = await authenticate(request, env);
-    // Query strings are deny-by-default: only the history list route takes
-    // them, and only its allowlisted keys (anything else is UNSUPPORTED_QUERY).
+    // Query strings are deny-by-default: only the history list route, the
+    // app runtime Table page read, and the version-aware file delete take
+    // them, and only their allowlisted keys (anything else is UNSUPPORTED_QUERY).
     const historyList = url.pathname === "/api/executions" && request.method === "GET";
-    if (url.search && !historyList)
+    const appTableRowsRead =
+      request.method === "GET" && /^\/api\/apps\/[0-9a-f-]{36}\/runtime\/tables\/[^/]+\/rows$/.test(url.pathname);
+    const appRuntimeFileDelete =
+      request.method === "DELETE" && /^\/api\/apps\/[0-9a-f-]{36}\/runtime\/files\/.+$/.test(url.pathname);
+    if (url.search && !(historyList || appTableRowsRead || appRuntimeFileDelete))
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (url.pathname === "/api/sagas" && request.method === "GET")
       // Static Git-owned Catalog (ADR 002): discovery metadata only.
@@ -392,6 +423,189 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (appOne?.[1] && request.method === "DELETE") {
       await deleteApp(env.DB, caller, parseAppId(appOne[1]));
       return json({ deleted: true });
+    }
+    // Browser App SDK runtime (APP-02, ADR 018): scoped Tables/files/invoke
+    // over the installed app context. Author routes trust the Organization
+    // caller (same policy as the app lifecycle); runtime routes trust the
+    // same caller PLUS a live (non-revoked) grant row per call
+    // (requireAppGrant), so revocation is immediate and discovered-but-
+    // ungranted refs fail. Hidden Tables stay 404 on the runtime paths.
+    // One explicit matcher per route, mirroring the executions style above.
+    const appGrants = /^\/api\/apps\/([0-9a-f-]{36})\/grants$/.exec(url.pathname);
+    if (appGrants?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ grants: await listAppGrants(env.DB, caller, parseAppId(appGrants[1])) });
+    }
+    if (appGrants?.[1] && request.method === "POST") {
+      requireJson(request);
+      const created = await createAppGrant(env.DB, caller, parseAppId(appGrants[1]), await boundedJson(request.body));
+      return json({ grant: created }, 201);
+    }
+    const appGrantRevoke = /^\/api\/apps\/([0-9a-f-]{36})\/grants\/([0-9a-f-]{36})\/revoke$/.exec(url.pathname);
+    if (appGrantRevoke?.[1] && appGrantRevoke[2] && request.method === "POST") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({
+        grant: await revokeAppGrant(env.DB, caller, parseAppId(appGrantRevoke[1]), appGrantRevoke[2]),
+      });
+    }
+    const appTables = /^\/api\/apps\/([0-9a-f-]{36})\/tables$/.exec(url.pathname);
+    if (appTables?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ tables: await listDeclaredTables(env.DB, caller, parseAppId(appTables[1])) });
+    }
+    if (appTables?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appTables[1]));
+      return json({ table: await declareAppTable(env.DB, caller, app, await boundedJson(request.body)) }, 201);
+    }
+    const appHandshake = /^\/api\/apps\/([0-9a-f-]{36})\/sdk$/.exec(url.pathname);
+    if (appHandshake?.[1] && request.method === "GET") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appHandshake[1]));
+      const response = json(describeAppHandshake({ id: app.id, name: app.name, slug: app.slug, status: app.status }));
+      response.headers.set("X-App-SDK-Version", APP_SDK_VERSION);
+      return response;
+    }
+    const appRuntimeTables = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables$/.exec(url.pathname);
+    if (appRuntimeTables?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRuntimeTables[1]));
+      return json({ tables: await listRuntimeTables(env.DB, app.id) });
+    }
+    const appRowsRead = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows$/.exec(url.pathname);
+    if (appRowsRead?.[1] && appRowsRead[2] && request.method === "GET") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowsRead[1]));
+      const tableName = decodeURIComponent(appRowsRead[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "read");
+      return json(await readTableRows(env.DB, app, tableName, parseTableQuery(url.searchParams)));
+    }
+    const appRowWrite = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows$/.exec(url.pathname);
+    if (appRowWrite?.[1] && appRowWrite[2] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowWrite[1]));
+      const tableName = decodeURIComponent(appRowWrite[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "write");
+      // Body cap sits above the max row envelope (row bytes plus the data
+      // wrapper); the row byte bound itself is enforced in insertTableRow.
+      const body = await boundedJson(request.body, 8192);
+      if (!object(body) || !("data" in body)) {
+        throw new Fault(400, "INVALID_TABLE_ROW", "Table row writes need a data object.");
+      }
+      return json({ row: await insertTableRow(env.DB, caller, app, tableName, body.data) }, 201);
+    }
+    const appRowPatch = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables\/([^/]+)\/rows\/([0-9a-f-]{36})$/.exec(
+      url.pathname,
+    );
+    if (appRowPatch?.[1] && appRowPatch[2] && appRowPatch[3] && request.method === "PATCH") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowPatch[1]));
+      const tableName = decodeURIComponent(appRowPatch[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "write");
+      const body = await boundedJson(request.body, 8192);
+      if (!object(body) || !("data" in body)) {
+        throw new Fault(400, "INVALID_TABLE_ROW", "Table row writes need a data object.");
+      }
+      return json({ row: await patchTableRow(env.DB, app, tableName, appRowPatch[3], body.data) });
+    }
+    if (appRowPatch?.[1] && appRowPatch[2] && appRowPatch[3] && request.method === "DELETE") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRowPatch[1]));
+      const tableName = decodeURIComponent(appRowPatch[2]);
+      await requireAppGrant(env.DB, app.id, "table", tableName, "write");
+      return json(await deleteTableRow(env.DB, app, tableName, appRowPatch[3]));
+    }
+    const appInvoke = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/invoke$/.exec(url.pathname);
+    if (appInvoke?.[1] && request.method === "POST") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appInvoke[1]));
+      const key = parseKey(request.headers.get("Idempotency-Key"));
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      const body = await boundedJson(request.body);
+      if (!object(body) || typeof body.sagaId !== "string") {
+        throw new Fault(400, "INVALID_SUBMISSION", "Provide a granted Saga ID and its input only.");
+      }
+      if (Object.keys(body).some((entry) => !["sagaId", "input"].includes(entry))) {
+        throw new Fault(400, "INVALID_SUBMISSION", "Provide a granted Saga ID and its input only.");
+      }
+      // Grant-before-parse: the Saga ref is authorized before the input is
+      // validated, so ungranted Sagas fail 403 without leaking which known
+      // Saga IDs would parse.
+      await requireAppGrant(env.DB, app.id, "saga", body.sagaId, "invoke");
+      const { saga, input } = parseSubmission({ sagaId: body.sagaId, input: body.input });
+      const accepted = await submit(env, caller, key, saga, input);
+      await recordAppExecution(env.DB, caller, app.id, accepted.executionId, saga.id);
+      return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
+    }
+    const appExecutions = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/executions$/.exec(url.pathname);
+    if (appExecutions?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appExecutions[1]));
+      return json({ executions: await listAppExecutions(env.DB, app.id, 20) });
+    }
+    const appFilesList = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files$/.exec(url.pathname);
+    if (appFilesList?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFilesList[1]));
+      return json({ files: await listRuntimeFiles(env.DB, app.id) });
+    }
+    const appFileDeclare = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/declare$/.exec(url.pathname);
+    if (appFileDeclare?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileDeclare[1]));
+      const body = await boundedJson(request.body);
+      if (!object(body) || typeof body.name !== "string") {
+        throw new Fault(400, "INVALID_APP_FILE", "A file declaration needs a name.");
+      }
+      await requireAppGrant(env.DB, app.id, "file", body.name, "write");
+      return json({ file: await declareAppFile(env.DB, caller, app, body) }, 201);
+    }
+    const appFileTokens = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/tokens$/.exec(url.pathname);
+    if (appFileTokens?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileTokens[1]));
+      const body = await boundedJson(request.body);
+      if (!object(body) || typeof body.name !== "string" || (body.scope !== "upload" && body.scope !== "download")) {
+        throw new Fault(400, "INVALID_APP_FILE", "File tokens need a name and an upload or download scope.");
+      }
+      const permission = body.scope === "upload" ? "write" : "read";
+      await requireAppGrant(env.DB, app.id, "file", body.name, permission);
+      return json(await issueFileToken(env.DB, app.id, body.name, body.scope), 201);
+    }
+    const appFileUpload = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/upload$/.exec(url.pathname);
+    if (appFileUpload?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileUpload[1]));
+      const token = request.headers.get("X-File-Token");
+      // Body cap sits above the max file envelope (base64 bytes plus
+      // verification metadata); the file byte bound is enforced at redeem.
+      const body = await boundedJson(request.body, 65536);
+      if (!object(body) || !("content" in body)) {
+        throw new Fault(400, "INVALID_APP_FILE", "File upload needs content, contentType, size, and sha256.");
+      }
+      return json({ file: await redeemFileUpload(env.DB, app.id, token ?? "", body) }, 201);
+    }
+    const appFileDownload = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/download$/.exec(url.pathname);
+    if (appFileDownload?.[1] && request.method === "POST") {
+      requireJson(request);
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileDownload[1]));
+      const token = request.headers.get("X-File-Token");
+      return json(await redeemFileDownload(env.DB, app.id, token ?? ""));
+    }
+    const appFileDelete = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files\/(.+)$/.exec(url.pathname);
+    if (appFileDelete?.[1] && appFileDelete[2] && request.method === "DELETE") {
+      const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFileDelete[1]));
+      const fileName = decodeURIComponent(appFileDelete[2]);
+      await requireAppGrant(env.DB, app.id, "file", fileName, "write");
+      const rawExpected = url.searchParams.get("expectedVersion");
+      if ([...url.searchParams.keys()].some((key) => key !== "expectedVersion")) {
+        throw new Fault(400, "UNSUPPORTED_QUERY", "Only expectedVersion is supported here.");
+      }
+      const expectedVersion = rawExpected === null ? undefined : Number(rawExpected);
+      if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1)) {
+        throw new Fault(400, "INVALID_APP_FILE", "expectedVersion must be a positive integer file version.");
+      }
+      return json(await deleteAppFile(env.DB, app, fileName, expectedVersion));
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).
