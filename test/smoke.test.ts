@@ -9,6 +9,19 @@ import { USAGE_VERSION } from "../src/usage";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0003_usage_blocks.sql?raw";
 const bindings = env as unknown as Bindings;
+// Per-run Free-tier budgets (docs/upstream-spec.md#free-tier-rule-measurable).
+// The smoke path is deterministic, so budgets sit close to observed actuals
+// (reads 4, writes 8, rows 4, steps 4, instances 1): any growth trips the
+// gate and forces a deliberate bump with its reason recorded. These pin the
+// saga's self-reported counters, not Cloudflare metered billing — deployed
+// metering is still required before claiming production accuracy.
+const FREE_TIER_PER_RUN_BUDGETS = {
+  d1Reads: 10,
+  d1Writes: 20,
+  d1OperationRows: 10,
+  workflowInstances: 1,
+  workflowSteps: 10,
+} as const;
 // Disposable smoke Organization per ADR 004: never production tenant data.
 const smokePrincipal = { orgId: SMOKE_ORG_ID, userId: SMOKE_USER_ID };
 const smokeBindings = { ...bindings, LAB_ORG_ID: SMOKE_ORG_ID, LAB_USER_ID: SMOKE_USER_ID };
@@ -97,6 +110,14 @@ it("runs the loopback-free system.smoke saga end to end with a usage block", asy
       orgId: SMOKE_ORG_ID,
       workflows: { instancesStarted: 1, stepsExecuted: 4 },
     });
+    // Free-tier habit: the run must fit its per-run budgets (see above).
+    const d1 = usage.d1 as { operationRows: number; reads: number; writes: number };
+    const workflows = usage.workflows as { instancesStarted: number; stepsExecuted: number };
+    expect(d1.reads).toBeLessThanOrEqual(FREE_TIER_PER_RUN_BUDGETS.d1Reads);
+    expect(d1.writes).toBeLessThanOrEqual(FREE_TIER_PER_RUN_BUDGETS.d1Writes);
+    expect(d1.operationRows).toBeLessThanOrEqual(FREE_TIER_PER_RUN_BUDGETS.d1OperationRows);
+    expect(workflows.instancesStarted).toBe(FREE_TIER_PER_RUN_BUDGETS.workflowInstances);
+    expect(workflows.stepsExecuted).toBeLessThanOrEqual(FREE_TIER_PER_RUN_BUDGETS.workflowSteps);
     const stored = await bindings.DB.prepare("SELECT usage_json FROM usage_blocks WHERE execution_id=?")
       .bind(id)
       .first<{ usage_json: string }>();
