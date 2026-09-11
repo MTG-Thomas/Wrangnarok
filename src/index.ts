@@ -89,6 +89,31 @@ import {
 import type { EndpointRow } from "./endpoints";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import {
+  consumeUploadToken,
+  createLocation,
+  deleteFile,
+  deleteLocation,
+  finalizeUpload,
+  grantPolicy,
+  issueDownloadBatch,
+  issueUploadBatch,
+  listFiles,
+  listLocations,
+  listPolicies,
+  loadLocation,
+  objectKey,
+  parseBatchEntries,
+  parseFileListQuery,
+  parseFilePath,
+  parseFinalizeBody,
+  parseLocationName,
+  readBoundedBytes,
+  resolveBearerRead,
+  resolveDownloadToken,
+  revokePolicy,
+  testAccess,
+} from "./files";
+import {
   createConnection,
   deleteConnection,
   getConnection,
@@ -98,6 +123,7 @@ import {
   updateConnection,
 } from "./connections";
 import { describeIntegrations } from "./integrations";
+
 import {
   canManageOrg,
   createOrg,
@@ -341,9 +367,10 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const isOrgPath =
       url.pathname === "/api/orgs" || url.pathname.startsWith("/api/orgs/") || url.pathname.startsWith("/api/users/");
     const isOrgHistory = /^\/api\/orgs\/[0-9a-fA-F-]{36}\/executions$/.test(url.pathname) && request.method === "GET";
-    // Query strings are deny-by-default: only the history list routes and
-    // the table query/count routes take them, each through its own
-    // allowlisted parser (anything else is UNSUPPORTED_QUERY).
+    // Query strings are deny-by-default: only the history list routes,
+    // the table query/count routes, and the file structural list and byte
+    // routes take them, each through its own allowlisted parser (anything
+    // else is UNSUPPORTED_QUERY).
     const historyList = url.pathname === "/api/executions" || isOrgHistory;
     const tableQueryList =
       request.method === "GET" && /^\/api\/tables\/[a-z0-9][a-z0-9-]{0,63}\/(rows|count)$/.test(url.pathname);
@@ -354,12 +381,16 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       request.method === "GET" && /^\/api\/apps\/[0-9a-f-]{36}\/runtime\/tables\/[^/]+\/rows$/.test(url.pathname);
     const appRuntimeFileDelete =
       request.method === "DELETE" && /^\/api\/apps\/[0-9a-f-]{36}\/runtime\/files\/.+$/.test(url.pathname);
+    const fileList = url.pathname === "/api/files" && request.method === "GET";
+    const fileBytes = url.pathname === "/api/files/content" && (request.method === "GET" || request.method === "PUT");
     if (
       url.search &&
       !(historyList && request.method === "GET") &&
       !tableQueryList &&
       !appTableRowsRead &&
-      !appRuntimeFileDelete
+      !appRuntimeFileDelete &&
+      !fileList &&
+      !fileBytes
     )
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (isOrgPath) {
@@ -596,6 +627,159 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
           env,
         ),
       );
+    }
+    // Managed file locations (FILE-01, ADR 018): declared locations,
+    // policy-checked proxy access, finalize-after-upload verification, and
+    // versioned mutation. One explicit matcher per route, mirroring the
+    // executions/apps style: boring and greppable beats a shared capture.
+    // Query strings stay deny-by-default: only GET /api/files takes them,
+    // and only its allowlisted keys (location/prefix/limit/cursor).
+    // Capability tokens arrive as ?token= on the byte routes only; every
+    // other file route reads the standard Authorization header.
+    if (url.pathname === "/api/file-locations" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ locations: await listLocations(env.DB, caller) });
+    }
+    if (url.pathname === "/api/file-locations" && request.method === "POST") {
+      requireJson(request);
+      return json({ location: await createLocation(env.DB, caller, await boundedJson(request.body)) }, 201);
+    }
+    const locationOne = /^\/api\/file-locations\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (locationOne?.[1] && request.method === "GET") {
+      const found = await loadLocation(env.DB, caller.orgId, locationOne[1]);
+      if (!found) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const policies = await listPolicies(env.DB, caller, locationOne[1]);
+      return json({ location: found, policies });
+    }
+    if (locationOne?.[1] && request.method === "DELETE") {
+      await deleteLocation(env.DB, caller, locationOne[1]);
+      return json({ deleted: true });
+    }
+    if (url.pathname === "/api/files/uploads" && request.method === "POST") {
+      requireJson(request);
+      const issued = await issueUploadBatch(env.DB, caller, parseBatchEntries(await boundedJson(request.body)));
+      const denied = issued.some((entry) => !entry.allowed);
+      return json(
+        {
+          entries: issued.map((entry) =>
+            entry.allowed
+              ? { path: entry.path, allowed: true, token: entry.token, expiresAt: entry.expiresAt }
+              : { path: entry.path, allowed: false, code: entry.code, message: entry.message },
+          ),
+        },
+        denied ? 207 : 200,
+      );
+    }
+    if (url.pathname === "/api/files/downloads" && request.method === "POST") {
+      requireJson(request);
+      const issued = await issueDownloadBatch(env.DB, caller, parseBatchEntries(await boundedJson(request.body)));
+      const denied = issued.some((entry) => !entry.allowed);
+      return json(
+        {
+          entries: issued.map((entry) =>
+            entry.allowed
+              ? { path: entry.path, allowed: true, token: entry.token, expiresAt: entry.expiresAt }
+              : { path: entry.path, allowed: false, code: entry.code, message: entry.message },
+          ),
+        },
+        denied ? 207 : 200,
+      );
+    }
+    if (url.pathname === "/api/files/content" && request.method === "PUT") {
+      // Upload bytes to a staging key: the token is single-use-consumed and
+      // the body is bounded at the location limit + 1 (413 past the cap).
+      // Bearer uploads are not accepted: writes always go through an issued
+      // slot so the finalize step can verify what was stored.
+      const token = url.searchParams.get("token");
+      const extra = [...url.searchParams.keys()].filter((key) => key !== "token");
+      if (token === null || extra.length > 0)
+        throw new Fault(400, "UNSUPPORTED_QUERY", "Uploads need exactly ?token= from an issued slot.");
+      const consumed = await consumeUploadToken(env.DB, token);
+      const declared = await loadLocation(env.DB, consumed.orgId, consumed.location);
+      if (!declared) throw new Fault(404, "NOT_FOUND", "Not found.");
+      if (!request.body) throw new Fault(400, "EMPTY_UPLOAD", "The upload body must not be empty.");
+      const contentType = request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() || "";
+      if (declared.contentTypes.length > 0 && !declared.contentTypes.includes(contentType)) {
+        throw new Fault(415, "CONTENT_TYPE_REJECTED", `Content type "${contentType}" is not allowed in this location.`);
+      }
+      const bytes = await readBoundedBytes(request.body, declared.maxBytes + 1);
+      await env.FILES.put(consumed.staging, bytes, { httpMetadata: { contentType: contentType || undefined } });
+      return json({ staged: true, size: bytes.byteLength });
+    }
+    if (url.pathname === "/api/files/content" && request.method === "GET") {
+      // Download bytes: capability token (?token=) or Bearer-shape read,
+      // resolved through the existence-first read tier. Only ready rows are
+      // readable; every denied read answers 404 (non-disclosure).
+      const getToken = url.searchParams.get("token");
+      if (getToken !== null) {
+        const extra = [...url.searchParams.keys()].filter((key) => key !== "token");
+        if (extra.length > 0)
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only token is supported with capability downloads.");
+      } else {
+        for (const key of url.searchParams.keys()) {
+          if (key !== "location" && key !== "path")
+            throw new Fault(400, "UNSUPPORTED_QUERY", "Only location and path are supported here.");
+        }
+      }
+      const token = getToken;
+      const resolved =
+        token !== null
+          ? await resolveDownloadToken(env.DB, token)
+          : await resolveBearerRead(
+              env.DB,
+              caller,
+              parseLocationName(url.searchParams.get("location") ?? ""),
+              parseFilePath(url.searchParams.get("path") ?? ""),
+            );
+      const row = await env.DB.prepare(
+        "SELECT size,content_type,sha256,version FROM files WHERE org_id=? AND location=? AND path=? AND status='ready'",
+      )
+        .bind(resolved.sourceOrgId, resolved.location, resolved.path)
+        .first<{ size: number; content_type: string; sha256: string; version: number }>();
+      if (!row) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const stored = await env.FILES.get(objectKey(resolved.sourceOrgId, resolved.location, resolved.path));
+      if (!stored) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return new Response(stored.body, {
+        status: 200,
+        headers: {
+          "Content-Type": row.content_type,
+          "Content-Length": String(row.size),
+          ETag: `"${row.sha256}"`,
+          "X-File-Version": String(row.version),
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    if (url.pathname === "/api/files/finalize" && request.method === "POST") {
+      requireJson(request);
+      return json({
+        file: await finalizeUpload(env.DB, env.FILES, caller, parseFinalizeBody(await boundedJson(request.body))),
+      });
+    }
+    if (url.pathname === "/api/files" && request.method === "GET") {
+      // Organization-scoped structural listing (never shared rows).
+      if (!url.search) throw new Fault(400, "INVALID_LOCATION", "Listing needs a location.");
+      const listed = await listFiles(env.DB, caller, parseFileListQuery(url.searchParams));
+      return json({ files: listed.files, nextCursor: listed.nextCursor });
+    }
+    if (url.pathname === "/api/files" && request.method === "DELETE") {
+      requireJson(request);
+      await deleteFile(env.DB, env.FILES, caller, await boundedJson(request.body));
+      return json({ deleted: true });
+    }
+    if (url.pathname === "/api/file-policies" && request.method === "POST") {
+      requireJson(request);
+      return json({ policy: await grantPolicy(env.DB, caller, await boundedJson(request.body)) }, 201);
+    }
+    if (url.pathname === "/api/file-policies" && request.method === "DELETE") {
+      requireJson(request);
+      await revokePolicy(env.DB, caller, await boundedJson(request.body));
+      return json({ revoked: true });
+    }
+    if (url.pathname === "/api/file-policies/test" && request.method === "POST") {
+      requireJson(request);
+      return json({ access: await testAccess(env.DB, caller, await boundedJson(request.body)) });
     }
     // Authored Applications (APP-01, ADR 017): independent-app lifecycle
     // (create/edit/validate/build/inspect/swap/delete) plus authorized
