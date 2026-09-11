@@ -3,13 +3,13 @@
 Authored apps run in the browser against scoped Worker routes through the
 typed client in `client/src/lib/app-runtime.ts` (imperative) and
 `client/src/lib/app-provider.tsx` (provider + hooks). Design authority is
-ADR 018; this page is operator and migration notes.
+ADR 019; this page is operator and migration notes.
 
 ## Wire map (upstream V2 baseline `3543c7eb`)
 
 | Upstream (`client/src/lib/app-sdk/*`) | Wrangnarök | Notes |
 | --- | --- | --- |
-| `index.v2.ts` package surface | `client/src/lib/app-runtime.ts` + `app-provider.tsx` | Same export shape (provider, workflow hooks, table hook/files hook, subscription); no bundled npm package (ADR 018 exception 2). |
+| `index.v2.ts` package surface | `client/src/lib/app-runtime.ts` + `app-provider.tsx` | Same export shape (provider, workflow hooks, table hook/files hook, subscription); no bundled npm package (ADR 019 exception 2). |
 | `wire-surface.ts` + `sdk-contract.test.ts` tripwire | `GET /api/apps/:id/sdk` handshake + `APP_SDK_VERSION` | Version tripwire, not file-hash tripwire. Client asserts before first scoped call; drift is `APP_SDK_MISMATCH`. |
 | `provider.tsx` `BifrostProvider` | `AppRuntimeProvider` | Authed fetch, install/org/app context, theme, logout, bounded one-401 refresh. No `globalThis` platform bridge. |
 | `use-workflow` run/status/result | `invokeSaga` + `pollExecution` + `useAppInvoke` | POST invoke (caller `Idempotency-Key`) then terminal poll. No WebSocket. |

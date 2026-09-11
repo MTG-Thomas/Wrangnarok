@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Browser App SDK client (APP-02, issue #160; ADR 018): retry rules,
+// Browser App SDK client (APP-02, issue #160; ADR 019): retry rules,
 // handshake tripwire, subscriptions, theme, logout, and hook shapes.
 //
 // Pure client tests with stub fetch: no Worker, no D1. The live Worker proof

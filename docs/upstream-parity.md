@@ -15,7 +15,7 @@ Total: 47 capability rows — 20 Partial, 25 Missing, 2 Gated.
 | RUN-01 | Persist and enforce per-Saga runtime policy without changing source identity | 2 | Partial | AUTH-02 | new |
 | RUN-02 | Invoke child Sagas with explicit context, completion and failure semantics | 2 | Missing | AUTH-02, RUN-01 | new |
 | TRG-01 | Run one-off and recurring schedules with durable due-time and cancellation semantics | 2 | Missing | AUTH-02, RUN-01 | new |
-| TRG-02 | Expose authenticated webhook and custom HTTP execution endpoints | 2 | Missing | AUTH-03, CON-01 | new |
+| TRG-02 | Expose authenticated webhook and custom HTTP execution endpoints | 2 | Partial | AUTH-01 | #138 |
 | TRG-03 | Deliver topic and built-in events through scoped subscriptions with replay visibility | 4 | Missing | TRG-01, TRG-02, AUTH-02 | new |
 | DEV-01 | Provide a complete typed TypeScript author and automation SDK | 1+4 | Partial | — | new |
 | DEV-02 | Preview, sync and deploy author source with explicit dependency compatibility | 5 | Partial | DEV-01, SOL-01 | new |
@@ -137,11 +137,11 @@ Related Wrangnarok issues: #76
 
 ## TRG-02: Expose authenticated webhook and custom HTTP execution endpoints
 
-Phase 2; **Missing**; existing issue: new
+Phase 2; **Partial**; existing issue: #138
 
-Local status: Only the internal POST /api/executions submit API exists; it is not a vendor webhook or a configured workflow endpoint.
+Local status: Scoped api-key endpoints (`POST /api/endpoints/:name`) and HMAC webhook endpoints (`POST /hooks/:name`) bind a name to a deployed Saga (ADR 019, migration 0009). Deliveries verify per-endpoint keys (expiry, disable/rotate revocation) or HMAC signatures against deployment-store secrets, answer echo-param vendor challenges in plaintext, rate-limit per endpoint, and submit through the standard protocol with derived `wep-` keys (202 receipt, 200 replay, 409 mismatch). Operator create/list/read/update/rotate/history ride the AUTH-01 membership gate. Upstream sync-mode inline results stay deferred to RUN-03; per-tenant webhook secrets stay deployment-scoped per ADR 005 v0 (SEC-02 tripwire).
 
-Depends: AUTH-03, CON-01
+Depends: AUTH-01
 
 Acceptance:
 
@@ -767,7 +767,7 @@ Upstream evidence (paths relative to upstream repo root):
 
 Phase 4; **Partial**; existing issue: #160
 
-Local status: ADR 018 accepts the scoped runtime contract. Authored apps run invoke/result, filtered Table read/write/live poll, and signed file upload/download against the real local Worker through `client/src/lib/app-runtime.ts` (imperative) and `app-provider.tsx` (provider + hooks). Authorization is deny-by-absence grant rows checked per call: hidden Tables stay 404 on runtime paths, revoked grants fail immediately (including token redeem), and runtime file lists show read-granted files only. Live updates are bounded revision polling (no WebSocket/Durable Object/Queue); the handshake tripwire (`APP_SDK_VERSION` + `GET /api/apps/:id/sdk`) fails drift loud with `APP_SDK_MISMATCH`. Browser-safe APIs carry install/org/app context, loading/error state, method-shaped retry (GET bounded, mutations never blind), bounded one-401 refresh, reconnect re-list, and the flat-hook vs nested-imperative Table shape. Forms/config hooks stay in FORM-02/CON-02; batch/rich query stays in TABLE-02; artifact lifecycles stay in FILE-02; log streaming stays in OBS-02.
+Local status: ADR 019 accepts the scoped runtime contract. Authored apps run invoke/result, filtered Table read/write/live poll, and signed file upload/download against the real local Worker through `client/src/lib/app-runtime.ts` (imperative) and `app-provider.tsx` (provider + hooks). Authorization is deny-by-absence grant rows checked per call: hidden Tables stay 404 on runtime paths, revoked grants fail immediately (including token redeem), and runtime file lists show read-granted files only. Live updates are bounded revision polling (no WebSocket/Durable Object/Queue); the handshake tripwire (`APP_SDK_VERSION` + `GET /api/apps/:id/sdk`) fails drift loud with `APP_SDK_MISMATCH`. Browser-safe APIs carry install/org/app context, loading/error state, method-shaped retry (GET bounded, mutations never blind), bounded one-401 refresh, reconnect re-list, and the flat-hook vs nested-imperative Table shape. Forms/config hooks stay in FORM-02/CON-02; batch/rich query stays in TABLE-02; artifact lifecycles stay in FILE-02; log streaming stays in OBS-02.
 
 Depends: APP-01, TABLE-02, FILE-01, OBS-02
 

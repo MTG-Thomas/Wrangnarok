@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Browser App SDK runtime (APP-02, issue #160; ADR 018).
+// Browser App SDK runtime (APP-02, issue #160; ADR 019).
 //
 // Scoped runtime for authored apps: an installed app (identified by its
 // Organization-scoped app UUID) invokes granted Sagas, reads/writes granted

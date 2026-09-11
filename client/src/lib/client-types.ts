@@ -140,7 +140,7 @@ export interface AppDetail extends AppSummary {
   activeDeployment: AppDeployment | null;
 }
 
-/** Browser App SDK runtime wire shapes (APP-02, ADR 018). Mirrors
+/** Browser App SDK runtime wire shapes (APP-02, ADR 019). Mirrors
  * src/app-runtime.ts; guards in lib/app-runtime.ts fail loud on drift. */
 
 /** Scoped capability grant (author view; revoked rows stay listed). */

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Browser App SDK provider and hooks (APP-02, issue #160; ADR 018).
+// Browser App SDK provider and hooks (APP-02, issue #160; ADR 019).
 //
 // Maps the actual upstream V2 exports (client/src/lib/app-sdk/provider.tsx,
 // use-table.ts, use-files.ts, use-workflow-hooks.ts at baseline 3543c7eb):

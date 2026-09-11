@@ -1,4 +1,4 @@
-# ADR 018: Browser App SDK runtime — scoped workflows, Tables, files, live updates
+# ADR 019: Browser App SDK runtime — scoped workflows, Tables, files, live updates
 
 - **Status:** Accepted (2026-09-11; gates APP-02 per issue #160)
 - **Date:** 2026-09-11

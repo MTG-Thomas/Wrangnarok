@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Browser App SDK runtime (APP-02, issue #160; ADR 018): scoped workflows,
+// Browser App SDK runtime (APP-02, issue #160; ADR 019): scoped workflows,
 // Tables, files and live updates proven against the real local Worker.
 //
 // Runs in real workerd via @cloudflare/vitest-plugin; D1/Workflow bindings
