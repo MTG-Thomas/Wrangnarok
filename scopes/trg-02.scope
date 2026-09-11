@@ -1,8 +1,16 @@
 # TRG-02 lane scope (issue #138): authenticated webhook and custom HTTP endpoints.
-# Minimal slice only. Adjust at PR time to cover the branch diff exactly.
+# Merged as #210 with migrations/0009_endpoints.sql (collides with
+# 0009_tables.sql — see docs/migration-ledger.md collision note).
 src/endpoints.ts
+src/bindings.ts
+src/domain.ts
 src/index.ts
 src/sdk.ts
-migrations/0007_endpoints.sql
+migrations/0009_endpoints.sql
+test/endpoints.test.ts
+test/endpoint-branches.test.ts
+docs/architecture/018-endpoint-triggers.md
+docs/upstream-parity.md
+scripts/check-bundle-budget.mjs
 scopes/trg-02.scope
 package.json

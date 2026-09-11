@@ -19,7 +19,18 @@ must update every importing test in the same commit.
 | 0007   | 0007_org_membership.sql         | AUTH-01 | organizations, membership            |
 | 0008   | 0008_executions_org_fk.sql      | AUTH-01 | executions org foreign key           |
 | 0009   | 0009_tables.sql                 | TABLE-02| managed tables                       |
+| 0009   | 0009_endpoints.sql              | TRG-02  | webhook endpoints (COLLIDES with 0009_tables — steward follow-up: renumber one side; see below) |
 | 0010   | 0010_solutions_activation.sql   | SOL-01  | bundle_active pointer, managed rows, immutability triggers (renumbered from colliding 0005 on 2026-09-11) |
+
+## Known collisions (steward action queued)
+
+- 0009_tables.sql (TABLE-02 #205) vs 0009_endpoints.sql (TRG-02 #210): both
+  landed on main with number 0009. Next steward chore renumbers the endpoints
+  file to 0021 (reserved below, now free since TRG-02 merged) and updates the
+  endpoint test imports in the same commit. Until then, `wrangler d1
+  migrations apply` order between the two 0009 files is filename-then-fullname
+  order, and both are additive CREATE TABLE IF NOT EXISTS, so local/dev
+  application stays safe.
 
 ## Reserved (assigned, not yet merged — do not reuse)
 
@@ -35,7 +46,7 @@ must update every importing test in the same commit.
 | 0018   | OPS-01  | #172  | ops audit                    |
 | 0019   | FILE-01 | #157  | managed files                |
 | 0020   | FILE-02 | #158  | artifacts                    |
-| 0021   | TRG-02  | #138  | webhook endpoints            |
+| 0021   | (steward) | —   | renumber target for 0009_endpoints.sql collision fix |
 | 0022   | APP-02  | #160  | app runtime                  |
 
 Rule: a lane renames its migration file to the reserved number, updates its

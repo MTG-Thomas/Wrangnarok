@@ -64,19 +64,29 @@ if (args[0] === "--self-check") {
     console.log("lane-scope: WARNING — no scopes/*.scope in this branch; scope enforcement advisory (see #193).");
     process.exit(0);
   }
-  let failed = false;
+  // Pass when ANY scope file in the branch covers the full diff (that is
+  // the lane's own scope). Other lanes' scope files may be present as data
+  // without covering this branch's changes.
+  const covering = [];
+  const uncoveredReports = [];
   for (const scopeFile of scopeFiles) {
     const allowed = readAllowed(scopeFile);
     const bad = diff.filter((f) => !isAllowed(f, allowed));
     if (bad.length) {
-      console.error(`lane-scope: ${scopeFile} does not cover branch diff:`);
-      for (const f of bad) console.error(`  ${f}`);
-      failed = true;
+      uncoveredReports.push({ scopeFile, bad });
     } else {
+      covering.push(scopeFile);
       console.log(`lane-scope: clean (${scopeFile} covers ${diff.length} files)`);
     }
   }
-  process.exit(failed ? 1 : 0);
+  if (covering.length === 0) {
+    for (const { scopeFile, bad } of uncoveredReports) {
+      console.error(`lane-scope: ${scopeFile} does not cover branch diff:`);
+      for (const f of bad) console.error(`  ${f}`);
+    }
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 const scopeFile = args.find((a) => !a.startsWith("-"));
