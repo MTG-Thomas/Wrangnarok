@@ -326,6 +326,13 @@ describe("policy rule branches", () => {
     const seen = await policyConsumers(bindings.DB, ORG_A, "saga", echoSaga.id, "execute");
     expect(seen.consumers.filter((entry) => entry.via === "rule")).toHaveLength(2);
     expect(seen.consumers.filter((entry) => entry.via === "role")).toHaveLength(1);
+    // Revoked assignments stay visible with their status, like the role
+    // consumer surface.
+    await revokeAssignment(bindings.DB, ORG_A, role.id, USER_EXTERNAL);
+    const after = await policyConsumers(bindings.DB, ORG_A, "saga", echoSaga.id, "execute");
+    expect(
+      after.consumers.filter((entry) => entry.via === "role" && entry.assignmentStatus === "revoked"),
+    ).toHaveLength(1);
     await expect(policyConsumers(bindings.DB, ORG_A, "table", "x", "read")).rejects.toMatchObject({
       code: "INVALID_GRANT",
     });
@@ -375,6 +382,14 @@ describe("grant evaluation branches", () => {
       .bind(otherOrg, USER_EXTERNAL, "member", "active", "external", stamp, stamp)
       .run();
     expect(await can(bindings.DB, EXTERNAL_CTX, { ...check, orgId: otherOrg })).toBe(false);
+    // An admin membership in the target org authorizes even when the
+    // caller's selected org says otherwise: the direct target row wins.
+    await bindings.DB.prepare(
+      "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+    )
+      .bind(otherOrg, USER_ORDINARY, "admin", "active", "ordinary", stamp, stamp)
+      .run();
+    expect(await can(bindings.DB, MEMBER_CTX, { ...check, orgId: otherOrg })).toBe(true);
     // Kind rule reaches externals as a class; user rule reaches one caller.
     await createPolicyRule(bindings.DB, ORG_A, "saga", echoSaga.id, "execute", "kind", "external");
     expect(await can(bindings.DB, EXTERNAL_CTX, check)).toBe(true);
@@ -513,6 +528,15 @@ describe("grant evaluation branches", () => {
       ),
     ).rejects.toThrow();
   });
+
+  it("maps a missing grants table on the grant write path", async () => {
+    const role = await createRole(bindings.DB, ORG_A, "runners");
+    await bindings.DB.exec("DROP TABLE role_grants;");
+    // The role row still resolves; only the grant INSERT fails closed.
+    await expect(addGrant(bindings.DB, ORG_A, role.id, "saga", echoSaga.id, "execute")).rejects.toMatchObject({
+      code: "ROLE_STORE_NOT_MIGRATED",
+    });
+  });
 });
 
 describe("role route validation branches", () => {
@@ -628,6 +652,8 @@ describe("role route validation branches", () => {
   });
 
   it("fences global policy rules to instance admins", async () => {
+    expect(await call(`/api/orgs/${ORG_A}/roles`, "GET", USER_ADMIN)).toMatchObject({ status: 200 });
+    expect(await call(`/api/orgs/${ORG_A}/policy-rules`, "GET", USER_ADMIN)).toMatchObject({ status: 200 });
     expect(await call("/api/policy-rules", "GET", USER_ORDINARY)).toMatchObject({
       status: 403,
       body: { error: { code: "ADMIN_ONLY" } },
