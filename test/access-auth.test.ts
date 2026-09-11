@@ -7,8 +7,8 @@ import type { Bindings } from "../src/bindings";
 import { clearAccessCertCache, verifyAccess } from "../src/access";
 import { Fault } from "../src/domain";
 import migration1 from "../migrations/0001_initial.sql?raw";
-import migration6 from "../migrations/0006_org_membership.sql?raw";
-import migration7 from "../migrations/0007_executions_org_fk.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
+import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const TEAM = "https://team.cloudflareaccess.com";
@@ -120,8 +120,8 @@ it("serves the catalog on a valid assertion without LAB configured", async () =>
   const db = (env as unknown as Bindings).DB;
   await db.exec(migration1);
   await db.exec(seed);
-  await db.exec(migration6);
   await db.exec(migration7);
+  await db.exec(migration8);
   const stamp = new Date().toISOString();
   await db
     .prepare(

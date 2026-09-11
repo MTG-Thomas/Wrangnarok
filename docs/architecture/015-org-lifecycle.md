@@ -87,7 +87,7 @@ lifecycle semantics onto D1 (Worker + Workflows + D1 only; no new primitive).
 - **ExecutionHistory is always retained** (`retained: ["executions", "operations"]`): Execution and Operation rows
   are never deleted by the org-delete path. Once the org row is gone they are unreachable through the API (every
   read is org-gated) but remain for audit/restore. Retention is structural, not just policy: migration
-  `0007_executions_org_fk.sql` drops the `executions.org_id` foreign key (table rebuild, same pattern as 0002) so
+  `0008_executions_org_fk.sql` drops the `executions.org_id` foreign key (table rebuild, same pattern as 0002) so
   the delete is not blocked by a dangling reference. `operations.execution_id` keeps its foreign key — operations
   are never orphaned because their execution row is never deleted.
 - Deletion refuses while managed Connections or bundle install records exist (`DELETE_BLOCKED`): the owning bundle
@@ -114,17 +114,18 @@ is ready. This is recorded here per the acceptance requirement.
 - No per-Organization Connection credentials: still ADR-005, still gated (SEC-02).
 - No resource-level claims/roles beyond member/admin: AUTH-02.
 - No change to service paths: Workflow steps, cron, and D1-local flows never traverse membership.
-- No new Cloudflare primitive: Worker + D1 only (migrations `0006_org_membership.sql` and
-  `0007_executions_org_fk.sql`; renumbered from 0005/0006 after DEV-01 #185 claimed `0005_forms.sql`).
+- No new Cloudflare primitive: Worker + D1 only (migrations `0007_org_membership.sql` and
+  `0008_executions_org_fk.sql`; renumbered from 0005/0006 after DEV-01 #185 claimed `0005_forms.sql`
+  and APP-01 #189 claimed `0006_apps.sql`).
 
 ## Consequences
 
 - Admin provisions Organizations and memberships through the new admin UI (`/admin`) and noninteractive APIs
   (`/api/orgs`, `/api/users`), or the CLI (`scripts/wrangnarok.mjs orgs/members`): no redeploy, no env edit.
-- The ADR-014 allowlist becomes a bootstrap fallback: with migration 0006 applied, verified Access identities must
+- The ADR-014 allowlist becomes a bootstrap fallback: with migration 0007 applied, verified Access identities must
   hold a live membership (or instance admin) or they fail closed. LAB fixture callers in local/CI are auto-seeded
   into the fixture org so the existing suite keeps passing unmodified. The fixture bootstrap (`ensureLabFixture`)
-  also creates the migration-0006 tables when a hand-built test database predates them; anything that is not the
+  also creates the migration-0007 tables when a hand-built test database predates them; anything that is not the
   LAB fixture identity still fails closed with `ORG_STORE_NOT_MIGRATED` on such databases.
 - Free-tier fit: three small D1 tables plus per-request point reads inside the existing request budget; no new
   billable primitive.

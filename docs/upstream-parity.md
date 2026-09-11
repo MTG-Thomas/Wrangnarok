@@ -38,7 +38,7 @@ Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
 | EMBED-01 | Publish and embed forms/apps with revocable external capabilities | 4 | Missing | FORM-02, APP-01, AUTH-03, AUTH-02 | new |
 | FILE-01 | Deliver managed file locations with policy-checked upload, download and mutation | 4 | Missing | AUTH-02, SEC-01 | new |
 | FILE-02 | Manage generated artifacts and attachment lifecycles with retention | 4+6 | Missing | FILE-01, AUTH-02 | new |
-| APP-01 | Deploy authored applications with explicit lifecycle, ownership and recovery | 4+5 | Missing | AUTH-02, DEV-02, SOL-01 | new |
+| APP-01 | Deploy authored applications with explicit lifecycle, ownership and recovery | 4+5 | Partial | AUTH-02, DEV-02, SOL-01 | #159 |
 | APP-02 | Provide the browser App SDK with scoped workflows, Tables, files and live updates | 4 | Missing | APP-01, TABLE-02, FILE-01, OBS-02 | new |
 | SOL-01 | Close the existing bundle reconciliation and activation contract gaps | 5 | Partial | — | new |
 | SOL-02 | Install and manage complete reusable Solutions across Organizations | 5 | Partial | SOL-01, AUTH-02, CON-02, TABLE-02, FORM-02, APP-01, AI-02, TRG-03 | new |
@@ -716,9 +716,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## APP-01: Deploy authored applications with explicit lifecycle, ownership and recovery
 
-Phase 4+5; **Missing**; existing issue: new
+Phase 4+5; **Partial**; existing issue: #159
 
-Local status: The Wrangnarok control-plane React UI is implemented, but users cannot create/deploy their own Bifrost-style applications.
+Local status: ADR 017 accepts the lifecycle/ownership/recovery/build-security contract. Independent apps ship end to end on Worker + D1: create, edit source declarations, validate (422 + field failures), build through a validate-gated async deploy job, inspect jobs, slug-swap recovery, delete, and authorized active-deployment asset serving (same-Organization, no-store + ETag). Solution-owned rows reject live mutation with MANAGED_RESOURCE; legacy V1 draft/publish is documented, never implemented; no retained-history rollback UI (redeploy or parked-app swap only); failed builds preserve the prior active deployment. Validation and the v1 build are shape-only: no author code is executed and no packages are installed (follow-up ADR with venue/isolation/cost gate required before any execution). The Applications UI (/apps, /apps/:id) drives the same routes. Remaining: Solution-owned app reconciliation through bundle install (SOL-02), the browser App SDK runtime (APP-02), multi-route apps, custom domains, and build logs beyond the safe job error.
 
 Depends: AUTH-02, DEV-02, SOL-01
 

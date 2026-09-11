@@ -25,8 +25,8 @@ import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration3 from "../migrations/0003_usage_blocks.sql?raw";
 import migration4 from "../migrations/0004_solutions_install.sql?raw";
 import migration5 from "../migrations/0005_forms.sql?raw";
-import migration6 from "../migrations/0006_org_membership.sql?raw";
-import migration7 from "../migrations/0007_executions_org_fk.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
+import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -105,8 +105,8 @@ beforeEach(async () => {
   await bindings.DB.exec(migration4);
   await bindings.DB.exec(seed);
   await bindings.DB.exec(migration5);
-  await bindings.DB.exec(migration6);
   await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration8);
   // Fixture caller bootstraps to admin of org A inside authenticate; the
   // ordinary identity holds org-A membership too (member), so collection
   // routes gate cleanly. External/stranger stay strangers until invited.
@@ -392,8 +392,8 @@ it("keeps in-flight jobs visible to org admins after a member is revoked", async
   expect(await call(`/api/orgs/${orgB}/executions`, "GET", USER_EXTERNAL)).toMatchObject({ status: 403 });
 });
 
-it("fails closed without migration 0006 and refuses cross-org elevation", async () => {
-  // Drop every table to simulate a pre-0006 database, then rebuild only
+it("fails closed without migration 0007 and refuses cross-org elevation", async () => {
+  // Drop every table to simulate a pre-0007 database, then rebuild only
   // through 0001+seed: the gate answers 503, never open. (D1 has no
   // migration-down; DROP is the local equivalent. This test is last, so no
   // rebuild is needed afterward.)
@@ -410,7 +410,7 @@ it("fails closed without migration 0006 and refuses cross-org elevation", async 
     status: 503,
     body: { error: { code: "ORG_STORE_NOT_MIGRATED" } },
   });
-  await bindings.DB.exec(migration6);
+  await bindings.DB.exec(migration7);
   // Re-bootstrap users the DROP removed: fixture admin regains org A via
   // auth bootstrap, strangers stay known-but-powerless.
   for (const user of [USER_ORDINARY, USER_EXTERNAL, USER_STRANGER]) {

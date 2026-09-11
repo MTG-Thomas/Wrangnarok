@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
+import {
+  appDetail,
+  createApp,
+  deleteApp,
+  editAppSource,
+  jobDetail,
+  listApps,
+  listJobs,
+  parseAppBody,
+  parseAppId,
+  parseSwapBody,
+  serveAsset,
+  startBuild,
+  swapSlugs,
+  validateApp,
+} from "./apps";
 import { previewEnvironment, previewLocal } from "./dev";
 import {
   boundedJson,
@@ -68,6 +84,15 @@ function routeOf(request: Request): string {
   const pathname = new URL(request.url).pathname;
   if (!pathname.startsWith("/api/")) return "static";
   return `${request.method} ${pathname}`;
+}
+/** Guard for JSON write routes: unencoded application/json only, matching
+ * the /api/executions submit gate. Shared by the app write routes below. */
+function requireJson(request: Request): void {
+  if (
+    request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+    request.headers.has("Content-Encoding")
+  )
+    throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
 }
 export default {
   async fetch(request: Request, env: Bindings): Promise<Response> {
@@ -199,7 +224,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       return json({ form: name, ...accepted }, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
     }
     if (url.pathname === "/api/dev/preview" && request.method === "POST") {
-      // DEV-02 no-registration local preview (ADR 016): read-only by
+      // DEV-02 no-registration local preview (ADR 017): read-only by
       // construction. Runs the authoritative server parse against the static
       // Git-owned Catalog with no D1 writes and no Workflow dispatch. The
       // environment section is off by default; opting in only SELECTs
@@ -363,6 +388,71 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
           env,
         ),
       );
+    }
+    // Authored Applications (APP-01, ADR 017): independent-app lifecycle
+    // (create/edit/validate/build/inspect/swap/delete) plus authorized
+    // active-deployment asset serving. Solution-owned rows reject live
+    // mutation with MANAGED_RESOURCE; foreign-Organization rows 404. One
+    // explicit matcher per route, mirroring the executions/cancel style
+    // above: boring and greppable beats a shared capture.
+    if (url.pathname === "/api/apps" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ apps: await listApps(env.DB, caller) });
+    }
+    if (url.pathname === "/api/apps" && request.method === "POST") {
+      requireJson(request);
+      const { name, slug } = parseAppBody(await boundedJson(request.body));
+      return json({ app: await createApp(env.DB, caller, name, slug) }, 201);
+    }
+    const appBuilds = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
+    if (appBuilds?.[1] && (request.method === "GET" || request.method === "POST")) {
+      const id = parseAppId(appBuilds[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      if (request.method === "GET") return json({ jobs: await listJobs(env.DB, caller, id) });
+      return json({ job: await startBuild(env.DB, caller, id) }, 202);
+    }
+    const appJob = /^\/api\/apps\/([0-9a-f-]{36})\/builds\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (appJob?.[1] && appJob[2] && request.method === "GET") {
+      return json({ job: await jobDetail(env.DB, caller, parseAppId(appJob[1]), appJob[2]) });
+    }
+    const appValidate = /^\/api\/apps\/([0-9a-f-]{36})\/validate$/.exec(url.pathname);
+    if (appValidate?.[1] && request.method === "POST") {
+      return json({ revision: await validateApp(env.DB, caller, parseAppId(appValidate[1])) });
+    }
+    const appSource = /^\/api\/apps\/([0-9a-f-]{36})\/source$/.exec(url.pathname);
+    if (appSource?.[1] && request.method === "PUT") {
+      requireJson(request);
+      return json({
+        revision: await editAppSource(env.DB, caller, parseAppId(appSource[1]), await boundedJson(request.body)),
+      });
+    }
+    const appSwap = /^\/api\/apps\/([0-9a-f-]{36})\/swap$/.exec(url.pathname);
+    if (appSwap?.[1] && request.method === "POST") {
+      requireJson(request);
+      const otherAppId = parseSwapBody(await boundedJson(request.body));
+      const swapped = await swapSlugs(env.DB, caller, parseAppId(appSwap[1]), otherAppId);
+      return json({ app: swapped.app, other: swapped.other });
+    }
+    const appAsset = /^\/api\/apps\/([0-9a-f-]{36})\/assets\/(.+)$/.exec(url.pathname);
+    if (appAsset?.[1] && appAsset[2] && request.method === "GET") {
+      const served = await serveAsset(env.DB, caller, parseAppId(appAsset[1]), appAsset[2]);
+      return new Response(served.content, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+          ETag: `"${served.contentHash}"`,
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const appOne = /^\/api\/apps\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (appOne?.[1] && request.method === "GET") {
+      return json({ app: await appDetail(env.DB, caller, parseAppId(appOne[1])) });
+    }
+    if (appOne?.[1] && request.method === "DELETE") {
+      await deleteApp(env.DB, caller, parseAppId(appOne[1]));
+      return json({ deleted: true });
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).

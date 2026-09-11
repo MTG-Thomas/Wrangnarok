@@ -144,7 +144,7 @@ async function getOrg(db: D1Database, orgId: string): Promise<OrgRow | null> {
     return await db.prepare("SELECT * FROM organizations WHERE id=?").bind(orgId).first<OrgRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0007.");
     }
     throw error;
   }
@@ -174,7 +174,7 @@ export async function resolveCaller(
     // column. Reading through the failure answers 503 with the migration
     // code instead of leaking driver text.
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0007.");
     }
     throw error;
   }
@@ -191,7 +191,7 @@ export async function resolveCaller(
     user = await db.prepare("SELECT * FROM users WHERE user_id=?").bind(principal.userId).first<UserRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0007.");
     }
     throw error;
   }
@@ -221,7 +221,7 @@ export async function resolveCaller(
       .first<MembershipRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0007.");
     }
     throw error;
   }
@@ -279,7 +279,7 @@ export async function resolveUser(db: D1Database, env: AdminEnv, principal: Prin
     user = await db.prepare("SELECT * FROM users WHERE user_id=?").bind(principal.userId).first<UserRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0007.");
     }
     throw error;
   }
@@ -352,7 +352,7 @@ export async function listOrgs(db: D1Database, ctx: CallerCtx): Promise<OrgSumma
     return rows.results.map(toOrgSummary);
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0007.");
     }
     throw error;
   }
@@ -544,12 +544,12 @@ export async function setUserStatus(
 export async function ensureLabFixture(db: D1Database, orgId: string, userId: string): Promise<void> {
   const org = parseOrgId(orgId);
   const user = parseUserId(userId);
-  // Bootstrap the migration-0006 tables when a hand-built database predates
+  // Bootstrap the migration-0007 tables when a hand-built database predates
   // them (older-migration test databases, or none at all). The organizations
   // CREATE carries the migrated shape (0001 columns plus the 0006 additions)
   // so a missing table starts migrated; the ALTERs then only fill gaps on
   // pre-0006 tables and fail harmlessly everywhere else. Column lists mirror
-  // migrations/0001_initial.sql plus migrations/0006_org_membership.sql. Each
+  // migrations/0001_initial.sql plus migrations/0007_org_membership.sql. Each
   // statement is independent: ALTERs fail on already-migrated databases,
   // CREATEs are IF NOT EXISTS, and D1 applies exec batches statement by
   // statement, so failures must never abort the survivors.
