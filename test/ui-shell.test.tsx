@@ -52,7 +52,7 @@ it("renders ExecutionHistory rows from a mocked /api/* payload (no input/results
   expect(html).toContain("Succeeded");
   expect(html).toContain(executionId.slice(0, 12));
   expect(html).toContain(`/history/${executionId}`);
-  expect(html).toContain("More results available.");
+  expect(html).toContain("More results available server-side.");
   const row = JSON.stringify(data.executions[0]);
   expect(row).not.toContain("input");
   expect(row).not.toContain("result");

@@ -74,19 +74,39 @@ function isDetailResponse(value: unknown): value is ExecutionDetail {
 
 /** Server-side history filters (allowlisted query keys; anything else is UNSUPPORTED_QUERY). */
 export interface HistoryListQuery {
-  status?: ExecutionStatus;
+  /** One status or a comma-separated multi-status set (mirrors upstream). */
+  status?: ExecutionStatus | ExecutionStatus[];
   sagaId?: string;
+  /** Exact Saga name (upstream workflowName parity). */
+  sagaName?: string;
+  /** Inclusive ISO lower bound on created_at (YYYY-MM-DD accepted). */
+  startDate?: string;
+  /** Inclusive-day / exact-datetime upper bound on created_at. */
+  endDate?: string;
+  limit?: number;
+  /** Opaque page marker from a previous response. */
+  cursor?: string;
+}
+
+function statusParam(status: ExecutionStatus | ExecutionStatus[]): string {
+  return (Array.isArray(status) ? status : [status]).join(",");
 }
 
 /**
  * GET /api/executions — ExecutionHistory list (summaries + hasMore + nextCursor).
- * Status/Saga filters run server-side; search/date-range stay client-side
- * (see lib/history-view.ts).
+ * Status/Saga/date-range filters run server-side; free-text search stays
+ * client-side over each loaded slice (see lib/history-view.ts), and is never
+ * presented as a server total.
  */
 export async function fetchExecutionHistory(query: HistoryListQuery = {}): Promise<ExecutionHistoryResponse> {
   const params = new URLSearchParams();
-  if (query.status) params.set("status", query.status);
+  if (query.status) params.set("status", statusParam(query.status));
   if (query.sagaId) params.set("sagaId", query.sagaId);
+  if (query.sagaName) params.set("sagaName", query.sagaName);
+  if (query.startDate) params.set("startDate", query.startDate);
+  if (query.endDate) params.set("endDate", query.endDate);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.cursor) params.set("cursor", query.cursor);
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
   const data = await get(`/api/executions${suffix}`);
   if (!isHistoryResponse(data)) throw new Error("Unexpected history response shape.");
@@ -106,4 +126,28 @@ export async function fetchExecutionDetail(id: string): Promise<ExecutionDetail>
   const data = await get(`/api/executions/${id}`);
   if (!isDetailResponse(data)) throw new Error("Unexpected detail response shape.");
   return data;
+}
+
+/** Terminal Execution statuses: polling stops here (mirrors upstream's terminal set). */
+export const TERMINAL_STATUSES: readonly ExecutionStatus[] = ["Succeeded", "Failed", "TimedOut", "Cancelled"];
+
+export function isTerminalStatus(status: string): boolean {
+  return (TERMINAL_STATUSES as readonly string[]).includes(status);
+}
+
+/** POST /api/executions/:id/cancel — owner-only cancellation. */
+export async function cancelExecution(
+  id: string,
+): Promise<{ executionId: string; status: string; cancelled: boolean }> {
+  if (!/^[a-f0-9]{64}$/.test(id)) throw new Error("Unexpected Execution ID shape.");
+  const token = getToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(`/api/executions/${id}/cancel`, { method: "POST", headers });
+  if (!response.ok) throw await parseApiError(response);
+  const data = (await response.json()) as { executionId?: unknown; status?: unknown; cancelled?: unknown };
+  if (typeof data.executionId !== "string" || typeof data.status !== "string" || typeof data.cancelled !== "boolean") {
+    throw new Error("Unexpected cancel response shape.");
+  }
+  return { executionId: data.executionId, status: data.status, cancelled: data.cancelled };
 }

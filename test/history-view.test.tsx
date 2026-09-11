@@ -157,7 +157,7 @@ describe("fetchExecutionHistory server query", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends only the allowlisted status/sagaId keys", async () => {
+  it("sends the allowlisted status/sagaId/sagaName/date/limit/cursor keys", async () => {
     const seen: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation((async (input: unknown) => {
       seen.push(String(input));
@@ -165,11 +165,21 @@ describe("fetchExecutionHistory server query", () => {
     }) as typeof fetch);
     await fetchExecutionHistory();
     await fetchExecutionHistory({ status: "Failed" });
-    await fetchExecutionHistory({ status: "Failed", sagaId: "2c79a880-f1ac-4183-b324-d05daffc321a" });
+    await fetchExecutionHistory({ status: ["Failed", "TimedOut"] });
+    await fetchExecutionHistory({
+      status: "Failed",
+      sagaId: "2c79a880-f1ac-4183-b324-d05daffc321a",
+      sagaName: "ninjaone-orgs",
+      startDate: "2026-09-01",
+      endDate: "2026-09-10",
+      limit: 5,
+      cursor: "cursor-2",
+    });
     expect(seen).toEqual([
       "/api/executions",
       "/api/executions?status=Failed",
-      "/api/executions?status=Failed&sagaId=2c79a880-f1ac-4183-b324-d05daffc321a",
+      "/api/executions?status=Failed%2CTimedOut",
+      "/api/executions?status=Failed&sagaId=2c79a880-f1ac-4183-b324-d05daffc321a&sagaName=ninjaone-orgs&startDate=2026-09-01&endDate=2026-09-10&limit=5&cursor=cursor-2",
     ]);
   });
 });
@@ -198,13 +208,13 @@ describe("ExecutionHistory page structure", () => {
     );
   }
 
-  it("renders the header summary with counts", () => {
+  it("renders the header summary with loaded-slice counts", () => {
     const page = html();
     expect(page).toContain("history-summary");
-    expect(page).toContain("2 Executions");
+    expect(page).toContain("2 Executions loaded");
     expect(page).toContain("1 Succeeded");
     expect(page).toContain("1 Failed");
-    expect(page).toContain("more available");
+    expect(page).toContain("more available server-side");
   });
 
   it("renders the Bifrost-style filter bar and status pills", () => {
@@ -214,6 +224,8 @@ describe("ExecutionHistory page structure", () => {
     expect(page).toContain("ninjaone-orgs");
     expect(page).toContain("Local time");
     expect(page).toContain("From");
+    expect(page).toContain("(server)");
+    expect(page).toContain("(loaded pages only)");
     expect(page).toContain(">All<span");
     for (const status of ["Pending", "Running", "Succeeded", "Failed", "TimedOut", "Cancelling", "Cancelled"]) {
       expect(page).toContain(status);

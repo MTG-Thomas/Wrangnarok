@@ -4,10 +4,11 @@
 // Wrangnarök shapes and vocabulary only: Saga (not Workflow), Execution
 // (not run), no Agents surface.
 //
-// Filtering is client-side over the loaded summary page on purpose: the
-// Worker history API rejects query strings (ADR 001, 400 UNSUPPORTED_QUERY),
-// so server-side filters would need an ADR-level contract change. The summary
-// line states the scope honestly when hasMore is true.
+// Filtering is split by surface on purpose: the Worker history API serves
+// status (single or multi), exact Saga name, and ISO date bounds (ADR 001,
+// 400 UNSUPPORTED_QUERY outside the allowlist), so those filters run
+// server-side while free-text search stays client-side over each loaded
+// slice. The summary line states the scope honestly when hasMore is true.
 import type { ExecutionSummary } from "./client-types";
 
 /** Every Execution status the Worker can persist (ADR 001 CHECK). */
