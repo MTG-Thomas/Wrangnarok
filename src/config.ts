@@ -49,7 +49,7 @@ function checkKey(key: unknown): string {
   return key;
 }
 
-function checkType(type: unknown): ConfigType {
+export function checkType(type: unknown): ConfigType {
   if (typeof type !== "string" || !(CONFIG_TYPES as readonly string[]).includes(type)) {
     throw invalid("INVALID_CONFIG_TYPE", "Config type must be string, int, bool, json, or secret.");
   }

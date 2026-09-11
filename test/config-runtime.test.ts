@@ -10,7 +10,7 @@ import { NonRetryableError } from "cloudflare:workflows";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Bindings } from "../src/bindings";
 import { helloSaga } from "../src/domain";
-import type { SagaEventContext, SagaStep } from "../src/saga";
+import type { SagaEventContext } from "../src/saga";
 import { setConfig } from "../src/config";
 import { executeSaga } from "../src/sagas/shared";
 import { defineSaga } from "../src/saga";
@@ -26,11 +26,6 @@ const OTHER_ORG = "00000000-0000-4000-8000-000000000009";
 const OWNER = "00000000-0000-4000-8000-000000000002";
 const ID = "ab".repeat(32);
 const SECRET_VALUE = "config-runtime-secret-sentinel-001";
-
-const inlineStep: SagaStep = {
-  do: async <T>(_name: string, fn: () => Promise<T>): Promise<T> => fn(),
-  sleep: async () => {},
-};
 
 const readingSaga = defineSaga<{ timeout: unknown; fallback: unknown }>({
   id: helloSaga.id,
