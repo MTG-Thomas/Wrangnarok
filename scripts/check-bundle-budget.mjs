@@ -8,21 +8,41 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// 2026-09-11 (TABLE-02 query/count/batch slice, issue #154): 180 KiB. The
-// author-Tables surface (16 routes plus the tables domain: declarations,
-// per-action grants, bounded keyset queries, scoped counts, all-or-denied
-// batches) plus the SDK contract entries stacks on the AUTH-01 surface with
-// the same deliberate feature headroom, not dependency bloat: package.json
-// is unchanged versus main. Combined measures ~174 KiB.
-// 2026-09-11 (OPS-01, issue #172): 195 KiB. The audit/notifications slice
+// 2026-09-10: the bundle is ~62 KiB; 100 KiB leaves room for real features
+// while catching an accidental heavy dependency. Raise deliberately (with
+// the reason recorded), never to make a red run green.
+// 2026-09-11 (AUTH-01, issue #142): 145 KiB. The Organization and user
+// lifecycle surface (src/orgs.ts: membership gate on every /api/* request,
+// 9 admin routes plus the org history list, cascading-delete preview, LAB
+// fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
+// shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
+// 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
+// 2026-09-11 (TRG-02, issue #138): 210 KiB. The endpoint/webhook Trigger
+// surface (src/endpoints.ts: key/HMAC verification, rate limits, challenge,
+// delivery protocol, operator management; 3 public plus 6 management routes
+// in src/index.ts) stacks on the TABLE-02 surface with the same deliberate
+// feature headroom, not dependency bloat: package.json is unchanged versus
+// main. Combined measures ~203 KiB.
+// 2026-09-11 (CON-01, issue #146): 230 KiB. The Connection management surface
+// (7 routes: integrations discovery, connections CRUD, read-only test; plus
+// src/connections.ts, config-schema validation, SDK descriptor entries)
+// stacks on the TRG-02 surface above and measures ~226 KiB combined with the
+// same deliberate feature headroom, not dependency bloat: package.json is
+// unchanged versus main.
+// 2026-09-11 (FILE-01, issue #157): 275 KiB. The managed-files surface (14
+// routes plus the files domain: locations, policies, capabilities,
+// finalize verification, versioned mutation, structural listing, plus the
+// SDK descriptor additions) stacks on the CON-01 surface with the same
+// deliberate feature headroom, not dependency bloat: package.json is
+// unchanged versus main. Combined measures ~266 KiB.
+// 2026-09-11 (OPS-01, issue #172): 290 KiB. The audit/notifications slice
 // (src/ops.ts: audit + notification domain, keyset pagination, reconcile;
 // 4 read routes plus audit emission on 5 app routes and the cancel route;
-// SDK audit/notification surface) stacks on the TABLE-02 surface with the
+// SDK audit/notification surface) stacks on the FILE-01 surface with the
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged. Remeasure after merge; shrink the raise if the combined bundle
-// lands lower. Combined measures ~194 KiB (198216 bytes with 6.5 KiB of
-// headroom under this budget).
-const BUDGET_BYTES = 195 * 1024;
+// lands lower. Combined measures ~286 KiB.
+const BUDGET_BYTES = 290 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

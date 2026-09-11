@@ -28,17 +28,39 @@ import {
   helloSaga,
   ninjaSaga,
   object,
+  parseCallerKey,
   parseDigestInput,
   parseHelloInput,
   parseHistoryQuery,
   parseInput,
-  parseKey,
   parseNinjaOrgsInput,
   parseSmokeInput,
   parseSubmission,
   smokeSaga,
 } from "./domain";
 import type { Principal, TerminateOutcome } from "./domain";
+import {
+  authenticateEndpointKey,
+  authenticateWebhook,
+  checkEndpointRateLimit,
+  createEndpoint,
+  endpointSummary,
+  executeEndpointDelivery,
+  findChallengeEndpoint,
+  listEndpointEvents,
+  listEndpoints,
+  loadEndpoint,
+  loadEndpointsByName,
+  parseEndpointName,
+  parseVendorEventId,
+  parseWebhookSecrets,
+  readWebhookBody,
+  resolveEndpointSagaId,
+  rotateEndpointCredential,
+  updateEndpoint,
+  vendorChallenge,
+} from "./endpoints";
+import type { EndpointRow } from "./endpoints";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import {
   createNotification,
@@ -51,6 +73,42 @@ import {
   recordAudit,
   visibleNotification,
 } from "./ops";
+import {
+  consumeUploadToken,
+  createLocation,
+  deleteFile,
+  deleteLocation,
+  finalizeUpload,
+  grantPolicy,
+  issueDownloadBatch,
+  issueUploadBatch,
+  listFiles,
+  listLocations,
+  listPolicies,
+  loadLocation,
+  objectKey,
+  parseBatchEntries,
+  parseFileListQuery,
+  parseFilePath,
+  parseFinalizeBody,
+  parseLocationName,
+  readBoundedBytes,
+  resolveBearerRead,
+  resolveDownloadToken,
+  revokePolicy,
+  testAccess,
+} from "./files";
+import {
+  createConnection,
+  deleteConnection,
+  getConnection,
+  listConnections,
+  scrubConnectionPayload,
+  testConnection,
+  updateConnection,
+} from "./connections";
+import { describeIntegrations } from "./integrations";
+
 import {
   canManageOrg,
   createOrg,
@@ -98,7 +156,7 @@ import {
   TABLE_NAME,
   updateRow,
 } from "./tables";
-import { SAGA_CATALOG } from "./sagas";
+import { SAGA_CATALOG, SAGA_DEFINITIONS } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import { deploymentSecretsFromEnv, scrubValueWithDeploymentSecrets } from "./secrets";
@@ -127,6 +185,90 @@ function requireJson(request: Request): void {
   )
     throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
 }
+/** Bearer token from the Authorization header, or null. Endpoint deliveries
+ * accept it as the api-key transport alongside X-Endpoint-Key. */
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("Authorization");
+  if (!header) return null;
+  const match = /^Bearer (.+)$/.exec(header);
+  return match?.[1] ?? null;
+}
+/** Public TRG-02 deliveries (issue #138, ADR 018): vendor-facing webhook and
+ * endpoint receivers. Authenticated by credential (per-endpoint key or HMAC
+ * secret), never by the operator session — so they run BEFORE the
+ * authenticated /api/* gate below. Name resolution is global by name (names
+ * are not secret); the credential disambiguates across Organizations. */
+async function handlePublicDelivery(request: Request, env: Bindings): Promise<Response | null> {
+  const url = new URL(request.url);
+  const delivery = /^\/(api\/endpoints|hooks)\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+  if (!delivery?.[1] || !delivery[2] || request.method !== "POST") return null;
+  const expected = delivery[1] === "api/endpoints" ? "api-key" : "webhook";
+  const name = parseEndpointName(delivery[2]);
+  // Query strings stay deny-by-default here except the vendor challenge
+  // handshake (?challenge=<token> on echo-param webhook endpoints). Any
+  // other query answers UNSUPPORTED_QUERY like the rest of the API.
+  const queryKeys = [...url.searchParams.keys()];
+  if (queryKeys.some((entry) => entry !== "challenge")) {
+    throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+  }
+  const rows = await loadEndpointsByName(env.DB, name).catch(() => [] as EndpointRow[]);
+  if (rows.length === 0) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+  const challengeRow = findChallengeEndpoint(rows.filter((row) => row.kind === "webhook"));
+  const challenge = challengeRow ? vendorChallenge(challengeRow, url) : null;
+  if (challenge !== null) {
+    return new Response(challenge, {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+  if (url.search) {
+    throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+  }
+  // Read the wire body exactly once: api-key deliveries parse it as JSON;
+  // webhook deliveries keep the raw bytes for HMAC and parse from them.
+  if (
+    request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+    request.headers.has("Content-Encoding")
+  )
+    throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+  const { raw, parsed } = await readWebhookBody(request.body);
+  const headers = request.headers;
+  const secrets = parseWebhookSecrets(env.ENDPOINT_WEBHOOK_SECRETS);
+  const authed =
+    expected === "api-key"
+      ? await authenticateEndpointKey(
+          rows.filter((row) => row.kind === "api-key"),
+          request.headers.get("X-Endpoint-Key") ?? bearerToken(request),
+        )
+      : await authenticateWebhook(
+          rows.filter((row) => row.kind === "webhook"),
+          raw,
+          headers.get("X-Webhook-Signature"),
+          secrets,
+        );
+  await checkEndpointRateLimit(env.DB, authed.endpoint);
+  const eventId = parseVendorEventId(headers, parsed);
+  resolveEndpointSagaId(authed.endpoint, SAGA_CATALOG);
+  const saga = SAGA_DEFINITIONS.find((entry) => entry.id === authed.endpoint.saga_id);
+  if (!saga) throw new Fault(500, "ENDPOINT_MISCONFIGURED", "This endpoint is not configured correctly.");
+  const accepted = await executeEndpointDelivery(env.DB, submit, env, authed.principal, authed.endpoint, {
+    saga: { id: saga.id, name: saga.name, revision: saga.revision, description: saga.description, parse: saga.parse },
+    eventId,
+    payload: parsed,
+  });
+  const responseHeaders: Record<string, string> = { Location: accepted.statusUrl };
+  if (accepted.eventReplayed) responseHeaders["X-Endpoint-Replayed"] = "true";
+  return json(
+    {
+      executionId: accepted.executionId,
+      replayed: accepted.replayed,
+      eventReplayed: accepted.eventReplayed,
+      statusUrl: accepted.statusUrl,
+    },
+    accepted.replayed ? 200 : 202,
+    responseHeaders,
+  );
+}
 export default {
   async fetch(request: Request, env: Bindings): Promise<Response> {
     const started = Date.now();
@@ -146,10 +288,32 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   // Single-Worker full-stack app (ADR 008): the browser UI ships as Static
   // Assets and needs no auth; only /api/* is authenticated JSON.
   if (!url.pathname.startsWith("/api/")) {
+    // Public vendor receivers live outside /api/* precisely so they do not
+    // require the operator session (ADR 018): /hooks/:name for webhooks.
+    if (url.pathname.startsWith("/hooks/")) {
+      try {
+        const delivered = await handlePublicDelivery(request, env);
+        if (delivered) return delivered;
+      } catch (error) {
+        const fault =
+          error instanceof Fault ? error : new Fault(500, "INTERNAL_ERROR", "The request could not be completed.");
+        return json({ error: { code: fault.code, message: fault.message } }, fault.status);
+      }
+    }
     if (env.ASSETS) return env.ASSETS.fetch(request);
     return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
   }
   try {
+    // Public credential-authenticated endpoint deliveries share the /api/*
+    // prefix (POST /api/endpoints/:name) but carry no operator session, so
+    // they run after the public /hooks/* path but before the membership
+    // gate below: vendor credentials, never the operator session.
+    const apiDelivery = /^\/api\/endpoints\/[a-z0-9][a-z0-9-]{0,63}$/.exec(url.pathname);
+    if (apiDelivery && request.method === "POST") {
+      const delivered = await handlePublicDelivery(request, env);
+      if (delivered) return delivered;
+      return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+    }
     const identity = await authenticate(request, env);
     // AUTH-01 membership gate (ADR 015): every /api/* request resolves the
     // caller against D1. The effective org is the path target for org admin
@@ -182,17 +346,27 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const isOrgPath =
       url.pathname === "/api/orgs" || url.pathname.startsWith("/api/orgs/") || url.pathname.startsWith("/api/users/");
     const isOrgHistory = /^\/api\/orgs\/[0-9a-fA-F-]{36}\/executions$/.test(url.pathname) && request.method === "GET";
-    // Query strings are deny-by-default: only the history list routes and
-    // the table query/count routes take them, each through its own
-    // allowlisted parser (anything else is UNSUPPORTED_QUERY).
+    // Query strings are deny-by-default: only the history list routes,
+    // the table query/count routes, and the file structural list and byte
+    // routes take them, each through its own allowlisted parser (anything
+    // else is UNSUPPORTED_QUERY).
     const historyList = url.pathname === "/api/executions" || isOrgHistory;
     const tableQueryList =
       request.method === "GET" && /^\/api\/tables\/[a-z0-9][a-z0-9-]{0,63}\/(rows|count)$/.test(url.pathname);
-    // OPS-01 (ADR 018): the audit list and notifications list take query
+    // OPS-01 (ADR 020): the audit list and notifications list take query
     // strings too, each through its own allowlisted parser.
     const opsQueryList =
       (url.pathname === "/api/audit" || url.pathname === "/api/notifications") && request.method === "GET";
-    if (url.search && !(historyList && request.method === "GET") && !tableQueryList && !opsQueryList)
+    const fileList = url.pathname === "/api/files" && request.method === "GET";
+    const fileBytes = url.pathname === "/api/files/content" && (request.method === "GET" || request.method === "PUT");
+    if (
+      url.search &&
+      !(historyList && request.method === "GET") &&
+      !tableQueryList &&
+      !opsQueryList &&
+      !fileList &&
+      !fileBytes
+    )
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (isOrgPath) {
       const orgRoute = await routeOrgs(request, env, ctx, url);
@@ -208,7 +382,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // like every other /api/* route; drift is pinned by test/sdk.test.ts.
       return json(describeContract());
     if (url.pathname === "/api/executions" && request.method === "POST") {
-      const key = parseKey(request.headers.get("Idempotency-Key"));
+      const key = parseCallerKey(request.headers.get("Idempotency-Key"));
       if (
         request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
         request.headers.has("Content-Encoding")
@@ -250,7 +424,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // provider, or publication behavior lives here.
       const name = formSubmit[1];
       if (!FORM_NAME.test(name)) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
-      const key = parseKey(request.headers.get("Idempotency-Key"));
+      const key = parseCallerKey(request.headers.get("Idempotency-Key"));
       if (
         request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
         request.headers.has("Content-Encoding")
@@ -450,6 +624,159 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
           env,
         ),
       );
+    }
+    // Managed file locations (FILE-01, ADR 018): declared locations,
+    // policy-checked proxy access, finalize-after-upload verification, and
+    // versioned mutation. One explicit matcher per route, mirroring the
+    // executions/apps style: boring and greppable beats a shared capture.
+    // Query strings stay deny-by-default: only GET /api/files takes them,
+    // and only its allowlisted keys (location/prefix/limit/cursor).
+    // Capability tokens arrive as ?token= on the byte routes only; every
+    // other file route reads the standard Authorization header.
+    if (url.pathname === "/api/file-locations" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ locations: await listLocations(env.DB, caller) });
+    }
+    if (url.pathname === "/api/file-locations" && request.method === "POST") {
+      requireJson(request);
+      return json({ location: await createLocation(env.DB, caller, await boundedJson(request.body)) }, 201);
+    }
+    const locationOne = /^\/api\/file-locations\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (locationOne?.[1] && request.method === "GET") {
+      const found = await loadLocation(env.DB, caller.orgId, locationOne[1]);
+      if (!found) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const policies = await listPolicies(env.DB, caller, locationOne[1]);
+      return json({ location: found, policies });
+    }
+    if (locationOne?.[1] && request.method === "DELETE") {
+      await deleteLocation(env.DB, caller, locationOne[1]);
+      return json({ deleted: true });
+    }
+    if (url.pathname === "/api/files/uploads" && request.method === "POST") {
+      requireJson(request);
+      const issued = await issueUploadBatch(env.DB, caller, parseBatchEntries(await boundedJson(request.body)));
+      const denied = issued.some((entry) => !entry.allowed);
+      return json(
+        {
+          entries: issued.map((entry) =>
+            entry.allowed
+              ? { path: entry.path, allowed: true, token: entry.token, expiresAt: entry.expiresAt }
+              : { path: entry.path, allowed: false, code: entry.code, message: entry.message },
+          ),
+        },
+        denied ? 207 : 200,
+      );
+    }
+    if (url.pathname === "/api/files/downloads" && request.method === "POST") {
+      requireJson(request);
+      const issued = await issueDownloadBatch(env.DB, caller, parseBatchEntries(await boundedJson(request.body)));
+      const denied = issued.some((entry) => !entry.allowed);
+      return json(
+        {
+          entries: issued.map((entry) =>
+            entry.allowed
+              ? { path: entry.path, allowed: true, token: entry.token, expiresAt: entry.expiresAt }
+              : { path: entry.path, allowed: false, code: entry.code, message: entry.message },
+          ),
+        },
+        denied ? 207 : 200,
+      );
+    }
+    if (url.pathname === "/api/files/content" && request.method === "PUT") {
+      // Upload bytes to a staging key: the token is single-use-consumed and
+      // the body is bounded at the location limit + 1 (413 past the cap).
+      // Bearer uploads are not accepted: writes always go through an issued
+      // slot so the finalize step can verify what was stored.
+      const token = url.searchParams.get("token");
+      const extra = [...url.searchParams.keys()].filter((key) => key !== "token");
+      if (token === null || extra.length > 0)
+        throw new Fault(400, "UNSUPPORTED_QUERY", "Uploads need exactly ?token= from an issued slot.");
+      const consumed = await consumeUploadToken(env.DB, token);
+      const declared = await loadLocation(env.DB, consumed.orgId, consumed.location);
+      if (!declared) throw new Fault(404, "NOT_FOUND", "Not found.");
+      if (!request.body) throw new Fault(400, "EMPTY_UPLOAD", "The upload body must not be empty.");
+      const contentType = request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() || "";
+      if (declared.contentTypes.length > 0 && !declared.contentTypes.includes(contentType)) {
+        throw new Fault(415, "CONTENT_TYPE_REJECTED", `Content type "${contentType}" is not allowed in this location.`);
+      }
+      const bytes = await readBoundedBytes(request.body, declared.maxBytes + 1);
+      await env.FILES.put(consumed.staging, bytes, { httpMetadata: { contentType: contentType || undefined } });
+      return json({ staged: true, size: bytes.byteLength });
+    }
+    if (url.pathname === "/api/files/content" && request.method === "GET") {
+      // Download bytes: capability token (?token=) or Bearer-shape read,
+      // resolved through the existence-first read tier. Only ready rows are
+      // readable; every denied read answers 404 (non-disclosure).
+      const getToken = url.searchParams.get("token");
+      if (getToken !== null) {
+        const extra = [...url.searchParams.keys()].filter((key) => key !== "token");
+        if (extra.length > 0)
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only token is supported with capability downloads.");
+      } else {
+        for (const key of url.searchParams.keys()) {
+          if (key !== "location" && key !== "path")
+            throw new Fault(400, "UNSUPPORTED_QUERY", "Only location and path are supported here.");
+        }
+      }
+      const token = getToken;
+      const resolved =
+        token !== null
+          ? await resolveDownloadToken(env.DB, token)
+          : await resolveBearerRead(
+              env.DB,
+              caller,
+              parseLocationName(url.searchParams.get("location") ?? ""),
+              parseFilePath(url.searchParams.get("path") ?? ""),
+            );
+      const row = await env.DB.prepare(
+        "SELECT size,content_type,sha256,version FROM files WHERE org_id=? AND location=? AND path=? AND status='ready'",
+      )
+        .bind(resolved.sourceOrgId, resolved.location, resolved.path)
+        .first<{ size: number; content_type: string; sha256: string; version: number }>();
+      if (!row) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const stored = await env.FILES.get(objectKey(resolved.sourceOrgId, resolved.location, resolved.path));
+      if (!stored) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return new Response(stored.body, {
+        status: 200,
+        headers: {
+          "Content-Type": row.content_type,
+          "Content-Length": String(row.size),
+          ETag: `"${row.sha256}"`,
+          "X-File-Version": String(row.version),
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    if (url.pathname === "/api/files/finalize" && request.method === "POST") {
+      requireJson(request);
+      return json({
+        file: await finalizeUpload(env.DB, env.FILES, caller, parseFinalizeBody(await boundedJson(request.body))),
+      });
+    }
+    if (url.pathname === "/api/files" && request.method === "GET") {
+      // Organization-scoped structural listing (never shared rows).
+      if (!url.search) throw new Fault(400, "INVALID_LOCATION", "Listing needs a location.");
+      const listed = await listFiles(env.DB, caller, parseFileListQuery(url.searchParams));
+      return json({ files: listed.files, nextCursor: listed.nextCursor });
+    }
+    if (url.pathname === "/api/files" && request.method === "DELETE") {
+      requireJson(request);
+      await deleteFile(env.DB, env.FILES, caller, await boundedJson(request.body));
+      return json({ deleted: true });
+    }
+    if (url.pathname === "/api/file-policies" && request.method === "POST") {
+      requireJson(request);
+      return json({ policy: await grantPolicy(env.DB, caller, await boundedJson(request.body)) }, 201);
+    }
+    if (url.pathname === "/api/file-policies" && request.method === "DELETE") {
+      requireJson(request);
+      await revokePolicy(env.DB, caller, await boundedJson(request.body));
+      return json({ revoked: true });
+    }
+    if (url.pathname === "/api/file-policies/test" && request.method === "POST") {
+      requireJson(request);
+      return json({ access: await testAccess(env.DB, caller, await boundedJson(request.body)) });
     }
     // Authored Applications (APP-01, ADR 017): independent-app lifecycle
     // (create/edit/validate/build/inspect/swap/delete) plus authorized
@@ -727,6 +1054,161 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       const dismissed = await dismissNotification(env.DB, caller, parseNotificationId(notifOne[1]));
       if (!dismissed) return json({ error: { code: "NOTIFICATION_NOT_FOUND", message: "Not found." } }, 404);
       return json({ dismissed: true });
+    }
+    // Connection management (CON-01, issue #146): portable Integration
+    // definitions plus per-Organization non-secret mappings through one
+    // authorized boundary. Every response is scrubbed with the deployment
+    // secrets before send; views carry required-secret names only, never
+    // values. Secret values are never accepted on any path here (SEC-02
+    // tripwire stays shut). One explicit matcher per route.
+    if (url.pathname === "/api/integrations" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(scrubConnectionPayload({ integrations: describeIntegrations() }, env));
+    }
+    if (url.pathname === "/api/connections" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(scrubConnectionPayload({ connections: await listConnections(env.DB, caller) }, env));
+    }
+    if (url.pathname === "/api/connections" && request.method === "POST") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { integrationId?: unknown } & Record<string, unknown>;
+      if (typeof body.integrationId !== "string") {
+        throw new Fault(400, "UNKNOWN_INTEGRATION", "A Connection write needs an integrationId.");
+      }
+      const created = await createConnection(env.DB, caller, body.integrationId, {
+        config: body.config,
+        ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+      });
+      return json(scrubConnectionPayload({ connection: created }, env), 201);
+    }
+    const connTest = /^\/api\/connections\/([0-9a-f-]{36})\/test$/.exec(url.pathname);
+    if (connTest?.[1] && request.method === "POST") {
+      const tested = await testConnection(env.DB, caller, connTest[1], env);
+      if (!tested.ok) {
+        const code = tested.code;
+        const status =
+          code === "UNKNOWN_INTEGRATION" || code === "CONNECTION_NOT_FOUND" || code === "CONNECTION_DISABLED"
+            ? 404
+            : code === "INTEGRATION_REQUIREMENT_UNSATISFIED"
+              ? 424
+              : code === "SECRET_NOT_CONFIGURED"
+                ? 502
+                : 502;
+        return json(scrubConnectionPayload({ test: tested }, env), status);
+      }
+      return json(scrubConnectionPayload({ test: tested }, env));
+    }
+    const connOne = /^\/api\/connections\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (connOne?.[1] && request.method === "GET") {
+      return json(scrubConnectionPayload({ connection: await getConnection(env.DB, caller, connOne[1]) }, env));
+    }
+    if (connOne?.[1] && request.method === "PUT") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as Record<string, unknown>;
+      const updated = await updateConnection(env.DB, caller, connOne[1], {
+        ...(body.config === undefined ? {} : { config: body.config }),
+        ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+      });
+      return json(scrubConnectionPayload({ connection: updated }, env));
+    }
+    if (connOne?.[1] && request.method === "DELETE") {
+      await deleteConnection(env.DB, caller, connOne[1]);
+      return json({ deleted: true });
+    }
+    // TRG-02 endpoint management (issue #138, ADR 018): operator-owned
+    // inventory over this Organization's scoped endpoints. Create returns
+    // the raw credential once (apiKey, or webhookSecret to plant in the
+    // deployment secret store); summaries never carry digests or secrets.
+    // Bad names answer 404 (never a leak); foreign-Organization rows 404.
+    if (url.pathname === "/api/endpoints" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ endpoints: await listEndpoints(env.DB, caller.orgId).catch(() => []) });
+    }
+    if (url.pathname === "/api/endpoints" && request.method === "POST") {
+      requireJson(request);
+      const body = await boundedJson(request.body);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(400, "INVALID_ENDPOINT", "Provide name, sagaId, and kind.");
+      }
+      const record = body as Record<string, unknown>;
+      if (typeof record.name === "string") parseEndpointName(record.name);
+      const created = await createEndpoint(
+        env.DB,
+        caller.orgId,
+        {
+          name: typeof record.name === "string" ? record.name : "",
+          sagaId: typeof record.sagaId === "string" ? record.sagaId : "",
+          kind: record.kind as "api-key" | "webhook",
+          ...(record.rateLimitPerMinute === undefined
+            ? {}
+            : { rateLimitPerMinute: record.rateLimitPerMinute as number | null }),
+          ...(record.challenge === undefined ? {} : { challenge: record.challenge as "none" | "echo-param" }),
+          ...(record.keyExpiresAt === undefined ? {} : { keyExpiresAt: record.keyExpiresAt as string | null }),
+        },
+        SAGA_CATALOG.map((entry) => entry.id),
+      );
+      return json(
+        {
+          endpoint: endpointSummary(created.row),
+          ...(created.row.kind === "api-key"
+            ? { apiKey: created.rawCredential }
+            : { webhookSecret: created.rawCredential }),
+        },
+        201,
+      );
+    }
+    const endpointEvents = /^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})\/events$/.exec(url.pathname);
+    // Unknown name shapes (uppercase, dots, slashes beyond one segment)
+    // answer 404 like parseEndpointName does — never UNIMPLEMENTED theater.
+    if (
+      /^\/api\/endpoints\/[^/]+(\/[^/]+)?$/.exec(url.pathname) &&
+      !endpointEvents &&
+      !/^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})\/rotate$/.exec(url.pathname) &&
+      !/^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname)
+    ) {
+      return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+    }
+    if (endpointEvents?.[1] && request.method === "GET") {
+      const name = parseEndpointName(endpointEvents[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ events: await listEndpointEvents(env.DB, caller.orgId, name, 50).catch(() => []) });
+    }
+    const endpointRotate = /^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})\/rotate$/.exec(url.pathname);
+    if (endpointRotate?.[1] && request.method === "POST") {
+      const name = parseEndpointName(endpointRotate[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const rotated = await rotateEndpointCredential(env.DB, caller.orgId, name).catch(() => null);
+      if (!rotated) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json({
+        endpoint: endpointSummary(rotated.row),
+        ...(rotated.row.kind === "api-key"
+          ? { apiKey: rotated.rawCredential }
+          : { webhookSecret: rotated.rawCredential }),
+      });
+    }
+    const endpointOne = /^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (endpointOne?.[1] && (request.method === "GET" || request.method === "PATCH")) {
+      const name = parseEndpointName(endpointOne[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const row = await loadEndpoint(env.DB, caller.orgId, name).catch(() => null);
+      if (!row) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      if (request.method === "GET") return json({ endpoint: endpointSummary(row) });
+      requireJson(request);
+      const body = await boundedJson(request.body);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(400, "INVALID_ENDPOINT", "Provide enabled, rateLimitPerMinute, or keyExpiresAt.");
+      }
+      const record = body as Record<string, unknown>;
+      const updated = await updateEndpoint(env.DB, caller.orgId, name, {
+        ...(record.enabled === undefined ? {} : { enabled: record.enabled as boolean }),
+        ...(record.rateLimitPerMinute === undefined
+          ? {}
+          : { rateLimitPerMinute: record.rateLimitPerMinute as number | null }),
+        ...(record.keyExpiresAt === undefined ? {} : { keyExpiresAt: record.keyExpiresAt as string | null }),
+      });
+      return json({ endpoint: endpointSummary(updated) });
     }
     // Author Tables over D1 (TABLE-01 minimal slice, TABLE-02 query/count/
     // batch; issues #117, #154): Organization-scoped declarations with

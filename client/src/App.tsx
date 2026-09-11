@@ -4,8 +4,10 @@ import { Nav } from "./components/Nav";
 import { AdminOrgs } from "./pages/AdminOrgs";
 import { ApplicationDetailView, ApplicationsList } from "./pages/Applications";
 import { AuditList } from "./pages/Audit";
+import { ConnectionsList } from "./pages/Connections";
 import { ExecutionDetailView } from "./pages/ExecutionDetail";
 import { ExecutionHistoryList } from "./pages/ExecutionHistory";
+import { FilesList } from "./pages/Files";
 import { NotificationsList } from "./pages/Notifications";
 import { SagasList } from "./pages/Sagas";
 
@@ -24,6 +26,8 @@ export function App(): React.JSX.Element {
           <Route path="/apps/:id" element={<ApplicationDetailView />} />
           <Route path="/audit" element={<AuditList />} />
           <Route path="/notifications" element={<NotificationsList />} />
+          <Route path="/files" element={<FilesList />} />
+          <Route path="/connections" element={<ConnectionsList />} />
           <Route path="*" element={<p>Not found. Try History.</p>} />
         </Routes>
       </main>

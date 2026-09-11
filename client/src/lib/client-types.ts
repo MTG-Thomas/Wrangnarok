@@ -57,6 +57,66 @@ export interface SagasResponse {
   sagas: SagaSummary[];
 }
 
+/** Integration definition for GET /api/integrations (CON-01): portable
+ * schema, defaults, required-secret names, and health — never org state. */
+export interface IntegrationSummary {
+  id: string;
+  name: string;
+  description: string;
+  secretFields: string[];
+  configSchema: {
+    name: string;
+    type: string;
+    required: boolean;
+    default?: string;
+    maxLength?: number;
+    description: string;
+  }[];
+  requiredSecrets: string[];
+  secretEnvVars: Record<string, string>;
+  health: { testHint: string; remediation: string };
+}
+
+export interface IntegrationsResponse {
+  integrations: IntegrationSummary[];
+}
+
+/** Connection mapping for GET /api/connections (CON-01): stable IDs,
+ * non-secret config, ownership, health — secret values never appear. */
+export interface ConnectionSummary {
+  id: string;
+  integrationId: string;
+  integrationName: string;
+  orgId: string;
+  displayName: string | null;
+  endpoint: string;
+  config: Record<string, string>;
+  enabled: boolean;
+  managedBy: string | null;
+  ownerKind: "managed" | "loose";
+  secretsRequired: string[];
+  updatedAt: string | null;
+}
+
+export interface ConnectionsResponse {
+  connections: ConnectionSummary[];
+}
+
+export interface ConnectionResponse {
+  connection: ConnectionSummary;
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  checkedAt: string;
+  detail: string;
+  code?: string;
+}
+
+export interface ConnectionTestResponse {
+  test: ConnectionTestResult;
+}
+
 /** Detail shape for GET /api/executions/:id. */
 export interface ExecutionDetail extends ExecutionSummary {
   runtimeStatus: string | null;
@@ -179,4 +239,35 @@ export interface AppNotification {
 
 export interface NotificationsResponse {
   notifications: AppNotification[];
+}
+
+/** File location declaration (FILE-01, ADR 018). */
+export interface FileLocation {
+  name: string;
+  maxBytes: number;
+  contentTypes: string[];
+  sharedRead: boolean;
+  createdAt: string;
+}
+
+export interface FileLocationsResponse {
+  locations: FileLocation[];
+}
+
+/** File metadata row (only ready rows are downloadable). */
+export interface FileMeta {
+  location: string;
+  path: string;
+  version: number;
+  size: number;
+  contentType: string;
+  sha256: string;
+  status: "pending" | "ready";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FilesResponse {
+  files: FileMeta[];
+  nextCursor: string | null;
 }
