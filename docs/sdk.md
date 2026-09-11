@@ -64,6 +64,12 @@ await client.listHistory({ status: "Failed,TimedOut", limit: 20 });
 await client.cancelExecution(done.executionId);
 await client.diagnoseExecution(done.executionId); // detail + hint for known codes
 
+// Scoped config (CON-02, ADR 020): typed rows for this Organization.
+// Secret rows answer "[SECRET]"; secret values never cross the wire.
+await client.listConfigs();
+await client.setConfig({ key: "timeout", type: "int", value: "30" });
+await client.setConfig({ key: "apiKey", type: "secret", value: { ref: "clientSecret" } });
+
 // Contract drift check.
 await client.getContract(); // throws SDK_CLIENT_MISMATCH on version skew
 ```
@@ -108,7 +114,7 @@ register endpoint by design):
 3. Add the stable identity to `sagas.manifest.json` (the saga-contract test
    fails loudly otherwise).
 4. Rules: all I/O and nondeterminism inside `step.do()`; touch
-   `ctx.integrations` / `ctx.db` / `ctx.secrets` only there; keep
+   `ctx.integrations` / `ctx.db` / `ctx.secrets` / `ctx.config` only there; keep
    input/output JSON-serializable; declare `requiredIntegrations`
    explicitly (even when empty); never put timeouts, retries, schedules,
    endpoints, or access rules in source.
@@ -120,3 +126,4 @@ Tables, forms (beyond the FORM-01 binding slice), files, config, agents,
 events, roles, and deploy/sync commands belong to their owning parity
 issues (`docs/sdk-capability-map.md` section 1, `docs/upstream-parity.md`).
 The contract descriptor lists them as `tracked`, never as supported.
+escriptor lists them as `tracked`, never as supported.

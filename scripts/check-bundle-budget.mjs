@@ -43,7 +43,14 @@ import { join } from "node:path";
 // guard, compacted SDK descriptor), stacked here on the FILE-01 surface.
 // Same deliberate feature headroom as the earlier raises, not dependency
 // bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 310 * 1024;
+// 2026-09-11 (CON-02, issue #147): 340 KiB. The scoped-config surface
+// (src/config.ts: typed validation, secret-reference provisioning,
+// org-only resolution, managed-row reconciliation; 4 operator routes plus
+// the ctx.config Saga handle and SDK descriptor entries) stacks on the
+// APP-02 surface and measures ~334 KiB combined. Same deliberate feature
+// headroom as the earlier raises, not dependency bloat: package.json is
+// unchanged versus main.
+const BUDGET_BYTES = 340 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
