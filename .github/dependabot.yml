@@ -16,6 +16,12 @@ updates:
       # ships a vitest-5-compatible plugin.
       - dependency-name: "vitest"
         update-types: ["version-update:semver-major"]
+      # Hold @vitest/coverage-istanbul at 4.x for the same reason: v5
+      # peers vitest 5.0.0, which conflicts with the Cloudflare plugin
+      # peer (see PR129, ERESOLVE on `npm ci`). Revisit together with
+      # the vitest hold once Cloudflare ships a vitest-5-compatible plugin.
+      - dependency-name: "@vitest/coverage-istanbul"
+        update-types: ["version-update:semver-major"]
       # Hold typescript at 5.x: typescript-eslint@8.70.0 hard-fails on
       # TS 7 ("typescript-eslint does not support TS 7.0"), so TS 7
       # breaks `npm run lint` and the CI Lint gate (see PR32, closed;
