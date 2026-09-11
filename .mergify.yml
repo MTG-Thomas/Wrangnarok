@@ -6,12 +6,13 @@
 # No CI rewrite needed: Mergify validates against temp branches using the
 # existing push/pull_request triggers.
 #
-# Strict branch protection ("require branches to be up to date") rules out
-# batched speculative checks, so this queue is serial (batch_size 1,
-# max_parallel_checks 1) with identical queue/merge conditions. Do not raise
-# batching without also relaxing protection, or Mergify will refuse to queue.
+# Strict branch protection ("require branches to be up to date") is OFF (see
+# ADR 004): protection still requires the Validate check, but PRs no longer
+# need to be current with main. Mergify therefore tests each queued PR against
+# predicted main (main + PRs ahead of it) in parallel, so a merge never
+# invalidates the PR behind it. What merges is exactly what was tested.
 merge_queue:
-  max_parallel_checks: 1
+  max_parallel_checks: 3
 merge_protections_settings:
   # Vendor-blessed auto-queue: label-gated, evaluated on protection state.
   # Replaces the old pull_request_rules queue action, which missed 4 of 4
@@ -24,7 +25,7 @@ queue_rules:
       - check-success=Validate
     merge_conditions:
       - check-success=Validate
-    batch_size: 1
+    batch_size: 3
     merge_method: merge
     # NOTE: head-branch cleanup is NOT a queue key (validator rejects it
     # here). It lives in repo Settings → General → Automatically delete head
