@@ -59,6 +59,7 @@ export const SDK_ERROR_CODES = [
   "INVALID_LIMIT",
   "INVALID_CURSOR",
   "INTEGRATION_REQUIREMENT_UNSATISFIED",
+  "FORM_VALIDATION_FAILED",
   "ECHO_VENDOR_TIMEOUT",
   "ECHO_INTEGRATION_FAILED",
   "NINJA_NOT_CONFIGURED",
@@ -458,10 +459,12 @@ export function validateAgainstSchema(value: unknown, schema: IoSchema | undefin
     const actual = value[key];
     switch (prop.type) {
       case "string":
-        if (typeof actual !== "string") return { ok: false, error: `Input field ${JSON.stringify(key)} must be a string.` };
+        if (typeof actual !== "string")
+          return { ok: false, error: `Input field ${JSON.stringify(key)} must be a string.` };
         break;
       case "number":
-        if (typeof actual !== "number") return { ok: false, error: `Input field ${JSON.stringify(key)} must be a number.` };
+        if (typeof actual !== "number")
+          return { ok: false, error: `Input field ${JSON.stringify(key)} must be a number.` };
         break;
       case "boolean":
         if (typeof actual !== "boolean") {
@@ -511,8 +514,12 @@ export interface SdkSubmitOptions {
 }
 
 export interface SdkHistoryQuery {
+  /** One status or a comma-separated set (mirrors the server + upstream
+   * multi-status filter). Unknown values fail server-side with INVALID_STATUS. */
   readonly status?: string;
   readonly saga?: string;
+  readonly from?: string;
+  readonly to?: string;
   readonly limit?: number;
   readonly cursor?: string;
 }
@@ -649,7 +656,10 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       return await fn();
     } catch (error) {
       if (error instanceof SdkError) throw error;
-      throw new SdkError("SDK_CLIENT_NETWORK", `${what} request failed: ${error instanceof Error ? error.message : error}`);
+      throw new SdkError(
+        "SDK_CLIENT_NETWORK",
+        `${what} request failed: ${error instanceof Error ? error.message : error}`,
+      );
     }
   }
 
@@ -713,6 +723,8 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       const params = new URLSearchParams();
       if (query.status !== undefined) params.set("status", query.status);
       if (query.saga !== undefined) params.set("sagaId", await resolveSagaId(query.saga));
+      if (query.from !== undefined) params.set("startDate", query.from);
+      if (query.to !== undefined) params.set("endDate", query.to);
       if (query.limit !== undefined) params.set("limit", String(query.limit));
       if (query.cursor !== undefined) params.set("cursor", query.cursor);
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
@@ -771,13 +783,27 @@ export function describeContract(): SdkContractDescriptor {
       { method: "GET", path: "/api/sdk", description: "This contract descriptor (authenticated)." },
       { method: "GET", path: "/api/sagas", description: "Saga discovery catalog (read-only metadata)." },
       { method: "POST", path: "/api/executions", description: "Submit an Execution (Idempotency-Key required)." },
-      { method: "GET", path: "/api/executions", description: "ExecutionHistory summaries (allowlisted filters)." },
+      {
+        method: "GET",
+        path: "/api/executions",
+        description: "ExecutionHistory summaries (status/sagaId/sagaName/startDate/endDate/limit/cursor).",
+      },
       {
         method: "GET",
         path: "/api/executions/:id",
         description: "Execution detail with Operations, result, and safe error.",
       },
       { method: "POST", path: "/api/executions/:id/cancel", description: "Owner-only cancellation (exact ID)." },
+      {
+        method: "GET",
+        path: "/api/forms/:name",
+        description: "Form declaration for this Organization (FORM-01 binding slice; renderer belongs to FORM-02).",
+      },
+      {
+        method: "POST",
+        path: "/api/forms/:name/submit",
+        description: "Validate against the declaration (422 FORM_VALIDATION_FAILED) then submit the bound Saga.",
+      },
     ],
     errorCodes: [...SDK_ERROR_CODES],
     capabilities: [
@@ -789,7 +815,8 @@ export function describeContract(): SdkContractDescriptor {
       {
         name: "author-registration",
         status: "git-owned",
-        detail: "Sagas register through Git-owned TypeScript plus sagas.manifest.json (ADR 002); no runtime register endpoint.",
+        detail:
+          "Sagas register through Git-owned TypeScript plus sagas.manifest.json (ADR 002); no runtime register endpoint.",
       },
       {
         name: "validated-input",
@@ -800,12 +827,14 @@ export function describeContract(): SdkContractDescriptor {
       {
         name: "resource-management",
         status: "tracked",
-        detail: "Tables, forms, files, config, and agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md).",
+        detail:
+          "Tables, forms, files, config, and agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md).",
       },
     ],
     docs: [
       { name: "Author and automation SDK", path: "docs/sdk.md" },
       { name: "Python SDK capability map", path: "docs/sdk-capability-map.md" },
+      { name: "AI-agent authoring instructions", path: "docs/sdk-agents.md" },
     ],
   };
 }

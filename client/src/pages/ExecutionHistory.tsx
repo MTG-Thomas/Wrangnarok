@@ -4,12 +4,16 @@
 // vendor/upstream/client) with Wrangnarök vocabulary throughout: Saga (not
 // Workflow), Execution (not run), and no Agents surface.
 //
-// Filtering is split by surface on purpose. Status and Saga run server-side
-// through the allowlisted history query keys (status, sagaId); search text,
-// date range, and the local-time rendering toggle stay client-side over the
-// loaded page (see lib/history-view.ts). The summary line states the scope
-// honestly when more rows exist server-side.
-import { Fragment, useEffect, useMemo, useState } from "react";
+// Filtering is split by surface on purpose. Status (single or multi), exact
+// Saga name, and ISO date bounds run server-side through the allowlisted
+// history query keys (status, sagaId, sagaName, startDate, endDate, limit,
+// cursor — upstream parity: scope/workflow + multi-status + ISO dates +
+// keyset continuation). Free-text search stays client-side over each loaded
+// slice (upstream exposes no search param on the executions list; only the
+// admin-only logs surface has message_search). The summary line states the
+// scope honestly: loaded-slice counts plus "more available" whenever the
+// server reports hasMore — first-page counts are never presented as totals.
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchExecutionHistory, getToken, listSagas, setToken } from "../lib/api-client";
 import { getErrorMessage } from "../lib/api-error";
@@ -31,6 +35,18 @@ import { StatusBadge } from "../components/StatusBadge";
 function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }
+
+/** Server-side status sets: which pill maps to which server filter. */
+export const SERVER_STATUS_FILTERS: Readonly<Record<StatusFilter, ExecutionStatus[] | undefined>> = {
+  all: undefined,
+  Pending: ["Pending"],
+  Running: ["Running"],
+  Succeeded: ["Succeeded"],
+  Failed: ["Failed"],
+  TimedOut: ["TimedOut"],
+  Cancelling: ["Cancelling"],
+  Cancelled: ["Cancelled"],
+};
 
 function RowCells({ row, localTime }: { row: ExecutionSummary; localTime: boolean }): React.JSX.Element {
   const duration = formatExecutionDuration(row.startedAt, row.completedAt);
@@ -77,24 +93,57 @@ function RowCells({ row, localTime }: { row: ExecutionSummary; localTime: boolea
 }
 
 export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse }): React.JSX.Element {
-  const [data, setData] = useState<ExecutionHistoryResponse | null>(props.initial ?? null);
+  const [pages, setPages] = useState<ExecutionSummary[][]>(props.initial ? [props.initial.executions] : []);
+  const [hasMore, setHasMore] = useState(props.initial?.hasMore ?? false);
+  const [nextCursor, setNextCursor] = useState<string | null>(props.initial?.nextCursor ?? null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(props.initial ? false : true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [token, setTokenState] = useState(getToken());
   const [filters, setFilters] = useState<HistoryFilterState>(EMPTY_HISTORY_FILTERS);
   const [catalog, setCatalog] = useState<SagaSummary[] | null>(null);
 
   // Stable Saga UUID for the selected Saga name (catalog first, loaded rows
   // as fallback so the dropdown keeps working if the catalog fetch fails).
-  const rows = useMemo(() => data?.executions ?? [], [data]);
+  const loaded = useMemo(() => pages.flat(), [pages]);
   const serverSagaId = useMemo(() => {
     if (filters.sagaName === "") return undefined;
     const fromCatalog = catalog?.find((saga) => saga.name === filters.sagaName)?.id;
     if (fromCatalog) return fromCatalog;
-    return rows.find((row) => row.sagaName === filters.sagaName)?.sagaId;
-  }, [catalog, rows, filters.sagaName]);
-  const serverStatus: ExecutionStatus | undefined = filters.status === "all" ? undefined : filters.status;
+    return loaded.find((row) => row.sagaName === filters.sagaName)?.sagaId;
+  }, [catalog, loaded, filters.sagaName]);
+  const serverStatuses = SERVER_STATUS_FILTERS[filters.status];
 
+  const serverQuery = useMemo(
+    () => ({
+      ...(serverStatuses ? { status: serverStatuses } : {}),
+      // Exact-name fallback keeps the Saga filter server-side even when the
+      // catalog fetch failed (e.g. a catalog 500): the server matches
+      // saga_name directly, so filters never silently go client-only.
+      ...(serverSagaId ? { sagaId: serverSagaId } : filters.sagaName !== "" ? { sagaName: filters.sagaName } : {}),
+      ...(filters.from !== "" ? { startDate: filters.from } : {}),
+      ...(filters.to !== "" ? { endDate: filters.to } : {}),
+    }),
+    [serverStatuses, serverSagaId, filters.sagaName, filters.from, filters.to],
+  );
+
+  const loadFirstPage = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const first = await fetchExecutionHistory(serverQuery);
+      setPages([first.executions]);
+      setHasMore(first.hasMore);
+      setNextCursor(first.nextCursor);
+    } catch (err) {
+      setError(getErrorMessage(err, "Could not load history."));
+    } finally {
+      setLoading(false);
+    }
+  }, [serverQuery]);
+
+  // Server-filtered refetch: any server-side filter change resets to page
+  // one with the same filters applied — never mixing cursors across queries.
   useEffect(() => {
     if (props.initial) return;
     let cancelled = false;
@@ -102,12 +151,11 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
     setError(null);
     void (async () => {
       try {
-        setData(
-          await fetchExecutionHistory({
-            ...(serverStatus ? { status: serverStatus } : {}),
-            ...(serverSagaId ? { sagaId: serverSagaId } : {}),
-          }),
-        );
+        const first = await fetchExecutionHistory(serverQuery);
+        if (cancelled) return;
+        setPages([first.executions]);
+        setHasMore(first.hasMore);
+        setNextCursor(first.nextCursor);
       } catch (err) {
         if (!cancelled) setError(getErrorMessage(err, "Could not load history."));
       } finally {
@@ -117,7 +165,26 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
     return () => {
       cancelled = true;
     };
-  }, [props.initial, serverStatus, serverSagaId]);
+  }, [props.initial, serverQuery]);
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || !nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      // Cursor traversal preserves the active server filters: the next page
+      // is the same query resumed below the cursor, never an unfiltered tail.
+      const next = await fetchExecutionHistory({ ...serverQuery, cursor: nextCursor });
+      const seen = new Set(loaded.map((row) => row.executionId));
+      setPages((prev) => [...prev, next.executions.filter((row) => !seen.has(row.executionId))]);
+      setHasMore(next.hasMore);
+      setNextCursor(next.nextCursor);
+    } catch (err) {
+      setError(getErrorMessage(err, "Could not load the next page."));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, nextCursor, loadingMore, serverQuery, loaded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -135,12 +202,18 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
   }, []);
 
   const sagaNames = useMemo(
-    () => [...new Set([...(catalog ?? []).map((saga) => saga.name), ...rows.map((row) => row.sagaName)])].sort(),
-    [catalog, rows],
+    () => [...new Set([...(catalog ?? []).map((saga) => saga.name), ...loaded.map((row) => row.sagaName)])].sort(),
+    [catalog, loaded],
   );
-  const filtered = useMemo(() => filterExecutions(rows, filters), [rows, filters]);
+  // Free-text search is client-side over the loaded slices only: the server
+  // exposes no search param here, so the empty-state copy says so whenever
+  // more rows exist server-side.
+  const filtered = useMemo(
+    () => filterExecutions(loaded, { ...filters, status: "all", sagaName: "", from: "", to: "" }),
+    [loaded, filters],
+  );
   const groups = useMemo(() => groupExecutionsByDay(filtered, filters.localTime), [filtered, filters.localTime]);
-  const summary = useMemo(() => summarizeExecutions(rows), [rows]);
+  const summary = useMemo(() => summarizeExecutions(loaded), [loaded]);
   const filtersActive = hasActiveHistoryFilters(filters);
 
   const setStatus = (status: StatusFilter): void => setFilters((prev) => ({ ...prev, status }));
@@ -154,7 +227,7 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
           "No Executions loaded."
         ) : (
           <>
-            {summary.total} Execution{summary.total !== 1 ? "s" : ""}
+            {summary.total} Execution{summary.total !== 1 ? "s" : ""} loaded
             {HISTORY_STATUSES.map((status) =>
               summary.byStatus[status] ? (
                 <span key={status}>
@@ -163,7 +236,7 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
                 </span>
               ) : null,
             )}
-            {data?.hasMore ? " · more available" : null}
+            {hasMore ? " · more available server-side" : null}
           </>
         )}
       </p>
@@ -172,15 +245,7 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
         onSubmit={(e) => {
           e.preventDefault();
           setToken(token);
-          setLoading(true);
-          setError(null);
-          void fetchExecutionHistory({
-            ...(serverStatus ? { status: serverStatus } : {}),
-            ...(serverSagaId ? { sagaId: serverSagaId } : {}),
-          })
-            .then((next) => setData(next))
-            .catch((err: unknown) => setError(getErrorMessage(err, "Could not load history.")))
-            .finally(() => setLoading(false));
+          void loadFirstPage();
         }}
       >
         <label htmlFor="token">Bearer token (local fixture only, never committed)</label>
@@ -195,112 +260,108 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
         />
         <button type="submit">Reload</button>
       </form>
-      {data ? (
-        <form className="filter-bar" aria-label="Filter Executions" onSubmit={(e) => e.preventDefault()}>
-          <div className="filter-field">
-            <label htmlFor="history-search">Name search</label>
-            <input
-              id="history-search"
-              name="search"
-              type="search"
-              autoComplete="off"
-              placeholder="Saga, user, or Execution ID…"
-              value={filters.search}
-              onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
-            />
-          </div>
-          <div className="filter-field">
-            <label htmlFor="history-saga">Saga</label>
-            <select
-              id="history-saga"
-              name="saga"
-              value={filters.sagaName}
-              onChange={(e) => setFilters((prev) => ({ ...prev, sagaName: e.target.value }))}
-            >
-              <option value="">All Sagas</option>
-              {sagaNames.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="filter-field">
-            <label htmlFor="history-status">Status</label>
-            <select
-              id="history-status"
-              name="status"
-              value={filters.status}
-              onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value as StatusFilter }))}
-            >
-              <option value="all">All</option>
-              {HISTORY_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="filter-field">
-            <label htmlFor="history-from">From</label>
-            <input
-              id="history-from"
-              name="from"
-              type="date"
-              value={filters.from}
-              onChange={(e) => setFilters((prev) => ({ ...prev, from: e.target.value }))}
-            />
-          </div>
-          <div className="filter-field">
-            <label htmlFor="history-to">To</label>
-            <input
-              id="history-to"
-              name="to"
-              type="date"
-              value={filters.to}
-              onChange={(e) => setFilters((prev) => ({ ...prev, to: e.target.value }))}
-            />
-          </div>
-          <div className="filter-field filter-field--check">
-            <input
-              id="history-local-time"
-              name="localTime"
-              type="checkbox"
-              checked={filters.localTime}
-              onChange={(e) => setFilters((prev) => ({ ...prev, localTime: e.target.checked }))}
-            />
-            <label htmlFor="history-local-time">Local time</label>
-          </div>
-          {filtersActive ? (
-            <div className="filter-field filter-field--check">
-              <button type="button" className="link-button" onClick={clearFilters}>
-                Clear filters
-              </button>
-            </div>
-          ) : null}
-        </form>
-      ) : null}
-      {data ? (
-        <div className="pills" role="group" aria-label="Filter by status">
-          {(["all", ...HISTORY_STATUSES] as StatusFilter[]).map((status) => {
-            const count = status === "all" ? summary.total : (summary.byStatus[status] ?? 0);
-            return (
-              <button
-                key={status}
-                type="button"
-                className="pill"
-                aria-pressed={filters.status === status}
-                onClick={() => setStatus(status)}
-              >
-                {status === "all" ? "All" : status}
-                <span className="pill-count" aria-label={`${count} Executions`}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
+      <form className="filter-bar" aria-label="Filter Executions" onSubmit={(e) => e.preventDefault()}>
+        <div className="filter-field">
+          <label htmlFor="history-search">Name search (loaded pages only)</label>
+          <input
+            id="history-search"
+            name="search"
+            type="search"
+            autoComplete="off"
+            placeholder="Saga, user, or Execution ID…"
+            value={filters.search}
+            onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
+          />
         </div>
-      ) : null}
+        <div className="filter-field">
+          <label htmlFor="history-saga">Saga (server)</label>
+          <select
+            id="history-saga"
+            name="saga"
+            value={filters.sagaName}
+            onChange={(e) => setFilters((prev) => ({ ...prev, sagaName: e.target.value }))}
+          >
+            <option value="">All Sagas</option>
+            {sagaNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="filter-field">
+          <label htmlFor="history-status">Status (server)</label>
+          <select
+            id="history-status"
+            name="status"
+            value={filters.status}
+            onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value as StatusFilter }))}
+          >
+            <option value="all">All</option>
+            {HISTORY_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="filter-field">
+          <label htmlFor="history-from">From (server)</label>
+          <input
+            id="history-from"
+            name="from"
+            type="date"
+            value={filters.from}
+            onChange={(e) => setFilters((prev) => ({ ...prev, from: e.target.value }))}
+          />
+        </div>
+        <div className="filter-field">
+          <label htmlFor="history-to">To (server)</label>
+          <input
+            id="history-to"
+            name="to"
+            type="date"
+            value={filters.to}
+            onChange={(e) => setFilters((prev) => ({ ...prev, to: e.target.value }))}
+          />
+        </div>
+        <div className="filter-field filter-field--check">
+          <input
+            id="history-local-time"
+            name="localTime"
+            type="checkbox"
+            checked={filters.localTime}
+            onChange={(e) => setFilters((prev) => ({ ...prev, localTime: e.target.checked }))}
+          />
+          <label htmlFor="history-local-time">Local time</label>
+        </div>
+        {filtersActive ? (
+          <div className="filter-field filter-field--check">
+            <button type="button" className="link-button" onClick={clearFilters}>
+              Clear filters
+            </button>
+          </div>
+        ) : null}
+      </form>
+      <div className="pills" role="group" aria-label="Filter by status">
+        {(["all", ...HISTORY_STATUSES] as StatusFilter[]).map((status) => {
+          const count = status === "all" ? summary.total : (summary.byStatus[status] ?? 0);
+          return (
+            <button
+              key={status}
+              type="button"
+              className="pill"
+              aria-pressed={filters.status === status}
+              onClick={() => setStatus(status)}
+            >
+              {status === "all" ? "All" : status}
+              <span className="pill-count" aria-label={`${count} loaded Executions`}>
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
       {loading ? (
         <p role="status" className="status-line">
           Loading ExecutionHistory…
@@ -311,7 +372,7 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
           {error} {error.includes("UNIMPLEMENTED") ? <span>(server reports this surface UNIMPLEMENTED)</span> : null}
         </p>
       ) : null}
-      {data ? (
+      {pages.length > 0 || !loading ? (
         <>
           <div className="table-scroll">
             <table className="history-table">
@@ -348,11 +409,29 @@ export function ExecutionHistoryList(props: { initial?: ExecutionHistoryResponse
               </tbody>
             </table>
           </div>
-          {data.hasMore ? <p className="more-line">More results available.</p> : null}
-          {filtered.length === 0 && filtersActive ? (
-            <p className="empty-state">No Executions match these filters.</p>
+          {hasMore ? (
+            <div className="more-row">
+              <p className="more-line">More results available server-side.</p>
+              <button
+                type="button"
+                onClick={() => void loadMore()}
+                disabled={loadingMore}
+                data-testid="history-load-more"
+              >
+                {loadingMore ? "Loading…" : "Load more"}
+              </button>
+            </div>
           ) : null}
-          {rows.length === 0 ? <p className="empty-state">No Executions yet.</p> : null}
+          {filtered.length === 0 && filtersActive ? (
+            <p className="empty-state">
+              No Executions match these filters
+              {hasMore
+                ? " in the loaded pages (more rows exist server-side — narrow the server filters or load more)"
+                : ""}
+              .
+            </p>
+          ) : null}
+          {loaded.length === 0 ? <p className="empty-state">No Executions yet.</p> : null}
         </>
       ) : null}
     </section>

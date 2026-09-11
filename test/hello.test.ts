@@ -64,6 +64,13 @@ it("runs the hello pilot end to end: prepare, pure greet, persisted success", as
     ],
   });
   expect(fetch).not.toHaveBeenCalled();
+  // History proof (#119 exit): the completed pilot run is visible through
+  // the standard sagaId-filtered history query with its registered ID.
+  const history = await worker.fetch(request(`/api/executions?sagaId=${helloSaga.id}`), bindings);
+  expect(history.status).toBe(200);
+  expect(await history.json()).toMatchObject({
+    executions: expect.arrayContaining([expect.objectContaining({ executionId: id, status: "Succeeded" })]),
+  });
 });
 it("rejects empty and non-string hello names", async () => {
   for (const [body, k] of [
