@@ -17,6 +17,9 @@ import { existsSync, readFileSync } from "node:fs";
 const TERMINAL = ["Succeeded", "Failed", "TimedOut", "Cancelled"];
 const EXECUTION_ID = /^[a-f0-9]{64}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{16,128}$/;
+/** Human-rendering bound for input/result payloads (mirrors the D1 4096-byte bound). */
+const CLI_JSON_BOUND = 4096;
+const HISTORY_STATUSES = ["Pending", "Running", "Succeeded", "Failed", "TimedOut", "Cancelling", "Cancelled"];
 
 function fail(code, message) {
   console.error(`WRANGNAROK_CLI ${code}: ${message}`);
@@ -147,14 +150,55 @@ function printSagas(sagas) {
   for (const saga of sagas) console.log(`${saga.name}\t${saga.id}\t${saga.revision}`);
 }
 
-function printHistory(executions, hasMore) {
+function boundedCliJson(value) {
+  if (value === null || value === undefined) return "—";
+  const text = JSON.stringify(value, null, 2) ?? "—";
+  if (text.length <= CLI_JSON_BOUND) return text;
+  return `${text.slice(0, CLI_JSON_BOUND)}\n… (truncated at ${CLI_JSON_BOUND} chars; rerun with --json for the full payload)`;
+}
+
+function printHistory(executions, hasMore, { pages }) {
   if (emit({ executions, hasMore })) return;
   for (const row of executions) {
     console.log(
       `${String(row.executionId).slice(0, 12)}\t${row.sagaName}\t${row.status}\t${row.startedAt ?? row.createdAt ?? "-"}`,
     );
   }
-  if (hasMore) console.log("# more available server-side; narrow with --status/--saga or --limit.");
+  // Loaded-slice counts are never presented as totals: hasMore means the
+  // server holds rows this output does not show.
+  if (hasMore) console.log(`# ${executions.length} loaded across ${pages} page(s); more available server-side.`);
+  else console.log(`# ${executions.length} loaded (complete under these filters).`);
+}
+
+function printDetail(detail) {
+  if (emit(detail)) return;
+  console.log(`${detail.executionId} ${detail.status}`);
+  console.log(`saga: ${detail.sagaName} (${detail.sagaRevision})`);
+  console.log(`runtime: ${detail.runtimeStatus ?? "unavailable (native history expired or not yet dispatched)"}`);
+  console.log(`dispatch: ${detail.dispatchConfirmed ? "confirmed" : "unconfirmed (Pending receipt only)"}`);
+  console.log(
+    `created: ${detail.createdAt ?? "-"} started: ${detail.startedAt ?? "-"} completed: ${detail.completedAt ?? "-"}`,
+  );
+  console.log(`input: ${boundedCliJson(detail.input)}`);
+  if (detail.status === "Succeeded") console.log(`result: ${boundedCliJson(detail.result)}`);
+  else if (detail.status === "Failed" || detail.status === "TimedOut" || detail.status === "Cancelled") {
+    const error = detail.error;
+    console.log(`error: ${error?.code ?? "UNKNOWN"}: ${error?.message ?? "no message"}`);
+  } else console.log("output: still active (no terminal result yet)");
+  for (const op of detail.operations ?? []) {
+    console.log(`op ${op.name} ${op.status} started=${op.startedAt} completed=${op.completedAt ?? "-"}`);
+    if (op.result !== null && op.result !== undefined) console.log(`  result: ${boundedCliJson(op.result)}`);
+    if (op.error !== null && op.error !== undefined) {
+      console.log(`  error: ${op.error?.code ?? "UNKNOWN"}: ${op.error?.message ?? boundedCliJson(op.error)}`);
+    }
+  }
+}
+
+function printCancel(outcome) {
+  if (emit(outcome)) return;
+  if (outcome.cancelled)
+    console.log(`${outcome.executionId} Cancelled (confirmed; it will not run again under this key)`);
+  else console.log(`${outcome.executionId} ${outcome.status} (already in progress; another request won the race)`);
 }
 
 const HELP = `wrangnarok: thin CLI over the Worker HTTP API (no Saga logic here).
@@ -175,8 +219,10 @@ Commands:
   submit --saga NAME|UUID [--input JSON|@FILE] [--key KEY] [--no-wait]
                                           Submit an Execution (202 + poll to terminal)
   detail --id HEX                         Fetch one Execution (add --wait to poll)
-  history [--status S] [--saga NAME|UUID] [--limit N]
-                                          Query Execution summaries (server filters)
+  history [--status S[,S2]] [--saga NAME|UUID] [--from YYYY-MM-DD]
+          [--to YYYY-MM-DD] [--limit N] [--all]
+                                          Query Execution summaries (server filters,
+                                          cursor traversal; loaded counts are not totals)
   cancel --id HEX                         Cancel one Execution (exact ID only)
   selftest                                Offline selftest (stub fetch, no network)
 
@@ -240,17 +286,45 @@ export async function runCommand(ctx, deps = {}) {
       });
     }
     case "history": {
-      const params = new URLSearchParams();
-      if (ctx.statusFilter) params.set("status", ctx.statusFilter);
-      if (ctx.sagaFilter) params.set("sagaId", await resolveSagaId(full, ctx.sagaFilter));
-      if (ctx.limit) params.set("limit", String(ctx.limit));
-      const suffix = params.size > 0 ? `?${params.toString()}` : "";
-      const data = await readJson(
-        await fetchImpl(`${ctx.base}/api/executions${suffix}`, { headers: full.headers }),
-        "history",
-      );
-      if (!Array.isArray(data.executions)) fail("SERVER_MISMATCH", "history has no executions array.");
-      return data;
+      // Cursor traversal: --all follows nextCursor while preserving the
+      // active filters; otherwise one page. Statuses stay comma-separated
+      // (mirrors the server + upstream multi-status filter).
+      const statuses = ctx.statusFilter
+        ? String(ctx.statusFilter)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+      for (const status of statuses) {
+        if (!HISTORY_STATUSES.includes(status))
+          fail("USAGE", `--status must be ${HISTORY_STATUSES.join("|")} (comma-separated ok).`);
+      }
+      const sagaId = ctx.sagaFilter ? await resolveSagaId(full, ctx.sagaFilter) : undefined;
+      const collected = [];
+      let cursor;
+      let pages = 0;
+      let hasMore;
+      for (;;) {
+        const params = new URLSearchParams();
+        if (statuses.length > 0) params.set("status", statuses.join(","));
+        if (sagaId) params.set("sagaId", sagaId);
+        if (ctx.from) params.set("startDate", ctx.from);
+        if (ctx.to) params.set("endDate", ctx.to);
+        if (ctx.limit) params.set("limit", String(ctx.limit));
+        if (cursor) params.set("cursor", cursor);
+        const suffix = params.size > 0 ? `?${params.toString()}` : "";
+        const data = await readJson(
+          await fetchImpl(`${ctx.base}/api/executions${suffix}`, { headers: full.headers }),
+          "history",
+        );
+        if (!Array.isArray(data.executions)) fail("SERVER_MISMATCH", "history has no executions array.");
+        collected.push(...data.executions);
+        pages += 1;
+        hasMore = data.hasMore === true;
+        cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
+        if (!ctx.all || !hasMore || !cursor) break;
+      }
+      return { executions: collected, hasMore, pages };
     }
     case "cancel": {
       const id = checkExecutionId(ctx.id);
@@ -299,6 +373,9 @@ async function main() {
     input: command === "submit" ? readInput() : undefined,
     statusFilter: command === "history" ? arg("status") : undefined,
     limit: limit === undefined ? undefined : Number(limit),
+    from: command === "history" ? arg("from") : undefined,
+    to: command === "history" ? arg("to") : undefined,
+    all: command === "history" ? flag("all") : false,
     wait: command === "submit" ? !flag("no-wait") : flag("wait"),
   };
   const result = await runCommand(ctx).catch((error) => {
@@ -306,7 +383,9 @@ async function main() {
     fail("NETWORK", `request failed: ${error instanceof Error ? error.message : error}`);
   });
   if (command === "sagas") printSagas(result.sagas);
-  else if (command === "history") printHistory(result.executions, result.hasMore);
+  else if (command === "history") printHistory(result.executions, result.hasMore, { pages: result.pages ?? 1 });
+  else if (command === "detail") printDetail(result);
+  else if (command === "cancel") printCancel(result);
   else if (parsed.json) console.log(JSON.stringify(result));
   else if (typeof result.status === "string") console.log(`${result.executionId} ${result.status}`);
   else console.log(`${result.executionId} accepted (replayed: ${result.replayed === true})`);
@@ -365,12 +444,57 @@ async function selftest() {
 
   // history forwards allowlisted filters only.
   {
-    const stub = stubFetch([jsonResponse({ executions: [], hasMore: false })]);
+    const stub = stubFetch([jsonResponse({ executions: [], hasMore: false, nextCursor: null })]);
     await runCommand(
       { ...base, command: "history", statusFilter: "Failed", limit: 5 },
       { fetchImpl: stub.fetch, ...noSleep },
     );
     check("history query", stub.calls[0].url === "http://local.test/api/executions?status=Failed&limit=5");
+  }
+
+  // history --all follows cursors with filters preserved.
+  {
+    const stub = stubFetch([
+      jsonResponse({ executions: [{ executionId: "a" }], hasMore: true, nextCursor: "cursor-2" }),
+      jsonResponse({ executions: [{ executionId: "b" }], hasMore: false, nextCursor: null }),
+    ]);
+    const result = await runCommand(
+      {
+        ...base,
+        command: "history",
+        statusFilter: "Failed,TimedOut",
+        from: "2026-09-01",
+        to: "2026-09-10",
+        limit: 1,
+        all: true,
+      },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("history traversal", result.executions.length === 2 && result.pages === 2 && result.hasMore === false);
+    check(
+      "history cursor keeps filters",
+      stub.calls[1].url.includes("status=Failed%2CTimedOut") &&
+        stub.calls[1].url.includes("startDate=2026-09-01") &&
+        stub.calls[1].url.includes("cursor=cursor-2"),
+    );
+  }
+
+  // history rejects unknown statuses before any fetch.
+  {
+    const stub = stubFetch([]);
+    let error = null;
+    const exit = process.exit;
+    process.exit = (code) => {
+      throw new Error(`exit:${code}`);
+    };
+    try {
+      await runCommand({ ...base, command: "history", statusFilter: "Bogus" }, { fetchImpl: stub.fetch, ...noSleep });
+    } catch (e) {
+      error = e;
+    } finally {
+      process.exit = exit;
+    }
+    check("history status gate", /exit:2/.test(String(error)) && stub.calls.length === 0);
   }
 
   // cancel refuses ambiguous IDs.
