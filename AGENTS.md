@@ -45,7 +45,7 @@ If a change introduces a new platform primitive, changes Saga/Execution/Operatio
 
 ## Simplicity checkpoint (recurring steward review)
 
-Every 5th merge to `main`, and on any ADR-level change, the steward must answer: can we still explain the platform in one diagram with one authoritative path each for authentication/authorization, execution, persistence, secrets, deployment, and recovery? If the answer becomes "multiple paths depending on which feature landed when," pause new parity lanes and consolidate first. Stop conditions for opening Phase 4-6 lanes: a second authoritative path appears; the coverage gate stays red for more than one queue cycle; a lane touches files outside its scope twice; LIMITS-01 flags a Free violation without an approved exception. Checklist lives at `docs/architecture/000-steward-checklist.md`.
+Every ADR-level change, new Cloudflare primitive, auth/security boundary change, persistence-model change, or completion of a major parity slice — with a periodic fallback every 10th merge to `main` — the steward must answer: can we still explain the platform in one diagram with one authoritative path each for authentication/authorization, execution, persistence, secrets, deployment, and recovery? If the answer becomes "multiple paths depending on which feature landed when," pause new parity lanes and consolidate first. Stop conditions for opening Phase 4-6 lanes: a second authoritative path appears; the coverage gate stays red for more than one queue cycle; a lane touches files outside its scope twice; LIMITS-01 flags a Free violation without an approved exception. Checklist lives at `docs/architecture/000-steward-checklist.md`.
 
 ## Upstream archaeology
 

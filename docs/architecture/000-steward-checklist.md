@@ -1,6 +1,6 @@
 # Steward checklist (recurring simplicity review)
 
-Run every 5th merge to `main` and on any ADR-level change. Record the outcome as a comment on the umbrella issue (#132) or the relevant ADR.
+Run on every ADR-level change, new Cloudflare primitive, auth/security boundary change, persistence-model change, or major parity slice completion — with a periodic fallback every 10th merge to `main`. Record the outcome as a comment on the umbrella issue (#132) or the relevant ADR.
 
 ## One-diagram test
 
@@ -20,6 +20,8 @@ Draw (or update) the single platform diagram. It must show exactly one authorita
 - Migration numbers owned by the steward; no duplicate or skipped numbers.
 - Every lane scope file current; no repeated out-of-scope touches.
 - LIMITS-01 classifications current (free / paid-adaptation / redesign / unresolved).
+- Operator-journey harness (single reproducible script: allowed + denied + recovery paths) green against local workerd.
+- Phase 4-6 lanes earn merge per-lane: no presumption from work-started; pause/rescope any that forces a premature contract or violates the spine.
 
 ## Failure action
 
