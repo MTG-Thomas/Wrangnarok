@@ -287,6 +287,45 @@ describe("config resolver branches", () => {
 });
 
 describe("config installer fences", () => {
+  it("rejects non-string and overlong descriptions", async () => {
+    await expect(
+      setConfig(stubDb(), caller, { key: "k", type: "string", value: "v", description: 5 }, {}),
+    ).rejects.toMatchObject({ code: "INVALID_CONFIG_DESCRIPTION" });
+    await expect(
+      setConfig(stubDb(), caller, { key: "k", type: "string", value: "v", description: "d".repeat(281) }, {}),
+    ).rejects.toMatchObject({ code: "INVALID_CONFIG_DESCRIPTION" });
+  });
+
+  it("refuses managed-row updates and preserves empty secret updates", async () => {
+    const id = "aaaaaaaa-1111-4111-8111-111111111111";
+    const managed = stubDb({ row: configRow({ managed_by: "bundle@1.0.0" }) });
+    await expect(updateConfig(managed, caller, id, { value: "x", hasDescription: false }, {})).rejects.toMatchObject({
+      code: "MANAGED_RESOURCE",
+    });
+    // Secret update with an empty object value: reference cleared to {},
+    // exercising the null-reference arms.
+    const cleared = stubDb({
+      firstRows: [
+        configRow({ key: "apiKey", type: "secret", value_json: JSON.stringify({ ref: "clientSecret" }) }),
+        configRow({ key: "apiKey", type: "secret", value_json: "{}" }),
+      ],
+    });
+    const out = await updateConfig(cleared, caller, id, { value: {}, hasDescription: false }, {});
+    expect(out).toMatchObject({ value: SECRET_MASK });
+  });
+
+  it("resolves undeclared missing secrets to null without throwing", async () => {
+    const ref = stubDb({
+      row: configRow({ key: "apiKey", type: "secret", value_json: JSON.stringify({ ref: "clientSecret" }) }),
+    });
+    // No default, not declared, no deployment value: silent null.
+    expect(await resolveConfig({ db: ref, orgId: caller.orgId, secrets: {} }, "apiKey")).toMatchObject({
+      found: false,
+      declared: false,
+      value: null,
+    });
+  });
+
   it("rejects guard mismatches with SDK_CLIENT_MISMATCH", () => {
     expect(faultCode(() => parseConfigList({ configs: "nope" }))).toBe("SDK_CLIENT_MISMATCH");
     expect(faultCode(() => parseConfigList({ configs: [{ key: "k" }] }))).toBe("SDK_CLIENT_MISMATCH");
