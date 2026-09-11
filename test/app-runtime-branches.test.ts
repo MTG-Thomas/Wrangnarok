@@ -208,6 +208,17 @@ describe("table parsers fail closed", () => {
       404,
       "APP_TABLE_NOT_FOUND",
     );
+    const vaultRow = "55555555-5555-4555-8555-555555555555";
+    await expectCode(
+      await call(`/api/apps/${appId}/runtime/tables/vault/rows/${vaultRow}`, "PATCH", { data: { status: "x" } }),
+      404,
+      "APP_TABLE_NOT_FOUND",
+    );
+    await expectCode(
+      await call(`/api/apps/${appId}/runtime/tables/vault/rows/${vaultRow}`, "DELETE"),
+      404,
+      "APP_TABLE_NOT_FOUND",
+    );
     await expectCode(
       await call(`/api/apps/${appId}/runtime/tables/orders/rows/bad-row-id`, "PATCH", { data: { status: "x" } }),
       400,
@@ -319,6 +330,16 @@ describe("file arms fail closed", () => {
       await call(`/api/apps/${appId}/runtime/files/upload`, "POST", {}, { "X-File-Token": "bogus" }),
       400,
       "INVALID_APP_FILE",
+    );
+    await expectCode(
+      await call(`/api/apps/${appId}/runtime/files/upload`, "POST", {
+        content: "eA==",
+        contentType: "text/plain",
+        size: 1,
+        sha256: "0".repeat(64),
+      }),
+      401,
+      "APP_FILE_TOKEN_INVALID",
     );
     await expectCode(
       await call(`/api/apps/${appId}/runtime/files/download`, "POST", {}, { "X-File-Token": "bogus" }),
@@ -527,6 +548,7 @@ describe("file arms fail closed", () => {
 describe("route guards fail closed", () => {
   it("rejects query strings on query-less app routes", async () => {
     const appId = await createApp("guard-arms", "guard-arms");
+    await expectCode(await call(`/api/apps?x=1`), 400, "UNSUPPORTED_QUERY");
     await expectCode(await call(`/api/apps/${appId}/grants?x=1`, "POST"), 400, "UNSUPPORTED_QUERY");
     await expectCode(await rawCall(`/api/apps/${appId}/grants`, "POST", "", "text/plain"), 415, "JSON_REQUIRED");
     await expectCode(await call(`/api/apps/${appId}/grants/whatever/revoke?x=1`, "POST"), 400, "UNSUPPORTED_QUERY");

@@ -94,6 +94,12 @@ function requireJson(request: Request): void {
   )
     throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
 }
+/** Guard for query-less routes: anything after `?` is UNSUPPORTED_QUERY,
+ * matching the /api/executions submit gate. Shared by the app runtime routes
+ * below so the deny-by-default rule stays one line per route. */
+function rejectQuery(url: URL): void {
+  if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+}
 export default {
   async fetch(request: Request, env: Bindings): Promise<Response> {
     const started = Date.now();
@@ -366,7 +372,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     // explicit matcher per route, mirroring the executions/cancel style
     // above: boring and greppable beats a shared capture.
     if (url.pathname === "/api/apps" && request.method === "GET") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       return json({ apps: await listApps(env.DB, caller) });
     }
     if (url.pathname === "/api/apps" && request.method === "POST") {
@@ -377,7 +383,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const appBuilds = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
     if (appBuilds?.[1] && (request.method === "GET" || request.method === "POST")) {
       const id = parseAppId(appBuilds[1]);
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       if (request.method === "GET") return json({ jobs: await listJobs(env.DB, caller, id) });
       return json({ job: await startBuild(env.DB, caller, id) }, 202);
     }
@@ -433,7 +439,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     // One explicit matcher per route, mirroring the executions style above.
     const appGrants = /^\/api\/apps\/([0-9a-f-]{36})\/grants$/.exec(url.pathname);
     if (appGrants?.[1] && request.method === "GET") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       return json({ grants: await listAppGrants(env.DB, caller, parseAppId(appGrants[1])) });
     }
     if (appGrants?.[1] && request.method === "POST") {
@@ -443,14 +449,14 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     }
     const appGrantRevoke = /^\/api\/apps\/([0-9a-f-]{36})\/grants\/([^/]+)\/revoke$/.exec(url.pathname);
     if (appGrantRevoke?.[1] && appGrantRevoke[2] && request.method === "POST") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       return json({
         grant: await revokeAppGrant(env.DB, caller, parseAppId(appGrantRevoke[1]), appGrantRevoke[2]),
       });
     }
     const appTables = /^\/api\/apps\/([0-9a-f-]{36})\/tables$/.exec(url.pathname);
     if (appTables?.[1] && request.method === "GET") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       return json({ tables: await listDeclaredTables(env.DB, caller, parseAppId(appTables[1])) });
     }
     if (appTables?.[1] && request.method === "POST") {
@@ -467,7 +473,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     }
     const appRuntimeTables = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/tables$/.exec(url.pathname);
     if (appRuntimeTables?.[1] && request.method === "GET") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       const app = await loadRuntimeApp(env.DB, caller, parseAppId(appRuntimeTables[1]));
       return json({ tables: await listRuntimeTables(env.DB, app.id) });
     }
@@ -537,13 +543,13 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     }
     const appExecutions = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/executions$/.exec(url.pathname);
     if (appExecutions?.[1] && request.method === "GET") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       const app = await loadRuntimeApp(env.DB, caller, parseAppId(appExecutions[1]));
       return json({ executions: await listAppExecutions(env.DB, app.id, 20) });
     }
     const appFilesList = /^\/api\/apps\/([0-9a-f-]{36})\/runtime\/files$/.exec(url.pathname);
     if (appFilesList?.[1] && request.method === "GET") {
-      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      rejectQuery(url);
       const app = await loadRuntimeApp(env.DB, caller, parseAppId(appFilesList[1]));
       return json({ files: await listRuntimeFiles(env.DB, app.id) });
     }

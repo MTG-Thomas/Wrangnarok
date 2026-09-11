@@ -17,7 +17,15 @@ import { join } from "node:path";
 // module (src/secrets.ts with scrub call sites, no new dependencies) measure
 // ~114 KiB combined. Same deliberate feature headroom as the 110 KiB raise,
 // not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 120 * 1024;
+// 2026-09-11 (APP-02, issue #160): 165 KiB. The app-runtime surface (20
+// routes plus the app-runtime domain: grants, visible Tables with bounded
+// reads, versioned files with single-use tokens, scoped invoke, handshake)
+// adds ~42 KiB of hand-written feature code with no new dependencies —
+// measured 158740 bytes against the 120 KiB line after a shrink pass (shared
+// rejectQuery guard, compacted SDK descriptor). Same deliberate feature
+// headroom as the earlier raises, not dependency bloat: package.json is
+// unchanged versus main.
+const BUDGET_BYTES = 165 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
