@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 // CON-01 (issue #146): authorized Integration/Connection management through
 // one Worker boundary. Runs in real workerd with a real D1 binding (full
-// migration chain 0001-0007); only outbound vendor HTTP is intercepted.
+// migration chain 0001-0009); only outbound vendor HTTP is intercepted.
 // Secret values never appear on any path: management writes carry non-secret
 // config only, views carry required-secret names only, and the deployment
 // scrub pins every response.
@@ -20,7 +20,10 @@ import migration3 from "../migrations/0003_usage_blocks.sql?raw";
 import migration4 from "../migrations/0004_solutions_install.sql?raw";
 import migration5 from "../migrations/0005_forms.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
-import migration7 from "../migrations/0007_connection_admin.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
+import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
+import migration9 from "../migrations/0009_connection_admin.sql?raw";
+import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const ORG = "00000000-0000-4000-8000-000000000001";
@@ -49,11 +52,23 @@ beforeEach(async () => {
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(migration3);
   await bindings.DB.exec(migration4);
+  await bindings.DB.exec(seed);
   await bindings.DB.exec(migration5);
   await bindings.DB.exec(migration6);
   await bindings.DB.exec(migration7);
-  await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?)").bind(ORG, "Local demo").run();
-  await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?)").bind(OTHER_ORG, "Other").run();
+  await bindings.DB.exec(migration8);
+  await bindings.DB.exec(migration9);
+  // The LAB fixture identity self-bootstraps membership on first request
+  // (src/auth.ts); the second org is created directly since cross-org
+  // membership for the fixture caller would widen its scope. The foreign
+  // caller below overrides LAB_USER_ID per request, which bootstraps
+  // nothing — exactly the stranger posture the lifecycle tests pin.
+  await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?) ON CONFLICT(id) DO NOTHING")
+    .bind(OTHER_ORG, "Other")
+    .run();
+  // The local seed owns the fixture echo row for the LAB org; this suite
+  // owns every mapping it asserts on, so start without it.
+  await bindings.DB.prepare("DELETE FROM connections WHERE org_id=?").bind(ORG).run();
   // Intercept only outbound vendor HTTP. Native D1/Workflow bindings are never replaced.
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = input instanceof Request ? input.url : String(input);
