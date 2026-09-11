@@ -87,6 +87,28 @@ import {
   type MemberUpdate,
   type OrgRole,
 } from "./orgs";
+import {
+  batchDelete,
+  batchInsert,
+  batchUpdate,
+  countRows,
+  createTable,
+  deleteRow,
+  deleteTable,
+  grantTable,
+  insertRow,
+  listTables,
+  loadTable,
+  parseBatchBody,
+  parseBatchDeleteBody,
+  parseTableName,
+  parseTableQuery,
+  queryRows,
+  readRow,
+  revokeTable,
+  TABLE_NAME,
+  updateRow,
+} from "./tables";
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
@@ -277,10 +299,13 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const isOrgPath =
       url.pathname === "/api/orgs" || url.pathname.startsWith("/api/orgs/") || url.pathname.startsWith("/api/users/");
     const isOrgHistory = /^\/api\/orgs\/[0-9a-fA-F-]{36}\/executions$/.test(url.pathname) && request.method === "GET";
-    // Query strings are deny-by-default: only the history list routes take
-    // them, and only their allowlisted keys (anything else is UNSUPPORTED_QUERY).
+    // Query strings are deny-by-default: only the history list routes and
+    // the table query/count routes take them, each through its own
+    // allowlisted parser (anything else is UNSUPPORTED_QUERY).
     const historyList = url.pathname === "/api/executions" || isOrgHistory;
-    if (url.search && !(historyList && request.method === "GET"))
+    const tableQueryList =
+      request.method === "GET" && /^\/api\/tables\/[a-z0-9][a-z0-9-]{0,63}\/(rows|count)$/.test(url.pathname);
+    if (url.search && !(historyList && request.method === "GET") && !tableQueryList)
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (isOrgPath) {
       const orgRoute = await routeOrgs(request, env, ctx, url);
@@ -674,6 +699,131 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         ...(record.keyExpiresAt === undefined ? {} : { keyExpiresAt: record.keyExpiresAt as string | null }),
       });
       return json({ endpoint: endpointSummary(updated) });
+    }
+    // Author Tables over D1 (TABLE-01 minimal slice, TABLE-02 query/count/
+    // batch; issues #117, #154): Organization-scoped declarations with
+    // deny-by-absence per-action grants, policy-safe keyset queries, scoped
+    // counts with skip_count, and all-or-denied batch mutations. One explicit
+    // matcher per route, mirroring the apps style above: boring and greppable
+    // beats a shared capture. Realtime subscriptions are deferred per the
+    // multi-slice note in issue #154; polling repeats the GET rows route.
+    if (url.pathname === "/api/tables" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ tables: await listTables(env.DB, caller) });
+    }
+    if (url.pathname === "/api/tables" && request.method === "POST") {
+      requireJson(request);
+      const body: unknown = await boundedJson(request.body);
+      if (body === null || typeof body !== "object" || Array.isArray(body) || !("name" in body)) {
+        throw new Fault(400, "INVALID_TABLE", "Table creation needs { name }.");
+      }
+      return json({ table: await createTable(env.DB, caller, (body as Record<string, unknown>).name) }, 201);
+    }
+    const tableCount = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})\/count$/.exec(url.pathname);
+    if (tableCount?.[1] && request.method === "GET") {
+      // Scoped filtered count: same filters as the rows route. skip_count
+      // answers total=-1 without scanning; a filled scan window answers -2.
+      const table = await loadTable(env.DB, caller.orgId, tableCount[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json(await countRows(env.DB, caller, table, parseTableQuery(url.searchParams)));
+    }
+    const tableRows = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})\/rows$/.exec(url.pathname);
+    if (tableRows?.[1] && request.method === "GET") {
+      const table = await loadTable(env.DB, caller.orgId, tableRows[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json(await queryRows(env.DB, caller, table, parseTableQuery(url.searchParams)));
+    }
+    const tableBatchInsert = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})\/rows\/batch$/.exec(url.pathname);
+    if (tableBatchInsert?.[1] && request.method === "POST") {
+      // All-or-denied batch insert: policy/attribution denials fail the whole
+      // batch first (403 TABLE_BATCH_DENIED); operational per-item failures
+      // ride per-item results after the surviving writes land atomically.
+      requireJson(request);
+      const table = await loadTable(env.DB, caller.orgId, tableBatchInsert[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json(await batchInsert(env.DB, caller, table, parseBatchBody(await boundedJson(request.body))), 201);
+    }
+    const tableBatchUpdate = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})\/rows\/batch-update$/.exec(url.pathname);
+    if (tableBatchUpdate?.[1] && request.method === "PUT") {
+      requireJson(request);
+      const table = await loadTable(env.DB, caller.orgId, tableBatchUpdate[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json(await batchUpdate(env.DB, caller, table, parseBatchBody(await boundedJson(request.body))));
+    }
+    const tableBatchDelete = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})\/rows\/batch-delete$/.exec(url.pathname);
+    if (tableBatchDelete?.[1] && request.method === "POST") {
+      requireJson(request);
+      const table = await loadTable(env.DB, caller.orgId, tableBatchDelete[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json(await batchDelete(env.DB, caller, table, parseBatchDeleteBody(await boundedJson(request.body))));
+    }
+    const tableRow = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})\/rows\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(
+      url.pathname,
+    );
+    if (tableRow?.[1] && tableRow[2]) {
+      const table = await loadTable(env.DB, caller.orgId, tableRow[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      if (request.method === "PUT") {
+        requireJson(request);
+        const body: unknown = await boundedJson(request.body);
+        if (body === null || typeof body !== "object" || Array.isArray(body) || !("data" in body)) {
+          throw new Fault(400, "INVALID_DOCUMENT", "Row writes need { data } with a JSON object document.");
+        }
+        const row = await insertRow(env.DB, caller, table, tableRow[2], (body as Record<string, unknown>).data);
+        return json({ row }, 201);
+      }
+      if (request.method === "GET") {
+        return json({ row: await readRow(env.DB, caller, table, tableRow[2]) });
+      }
+      if (request.method === "PATCH") {
+        requireJson(request);
+        const body: unknown = await boundedJson(request.body);
+        if (body === null || typeof body !== "object" || Array.isArray(body) || !("data" in body)) {
+          throw new Fault(400, "INVALID_DOCUMENT", "Row updates need { data } with a JSON object document.");
+        }
+        return json({
+          row: await updateRow(env.DB, caller, table, tableRow[2], (body as Record<string, unknown>).data),
+        });
+      }
+      if (request.method === "DELETE") {
+        await deleteRow(env.DB, caller, table, tableRow[2]);
+        return json({ deleted: true });
+      }
+    }
+    const tableGrant = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})\/grants$/.exec(url.pathname);
+    if (tableGrant?.[1] && (request.method === "POST" || request.method === "DELETE")) {
+      // Owner-only grant administration. Grants name user IDs in this slice;
+      // role claims belong to AUTH-02. Revocation converges immediately for
+      // subsequent calls (no live push until realtime subscriptions land).
+      requireJson(request);
+      const name = parseTableName(tableGrant[1]);
+      const table = await loadTable(env.DB, caller.orgId, name);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const body: unknown = await boundedJson(request.body);
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(400, "INVALID_GRANT", "Grant bodies need { action, granteeUserId }.");
+      }
+      const record = body as Record<string, unknown>;
+      if (request.method === "POST") {
+        await grantTable(env.DB, caller, table, record.action, record.granteeUserId);
+        return json({ granted: true });
+      }
+      await revokeTable(env.DB, caller, table, record.action, record.granteeUserId);
+      return json({ revoked: true });
+    }
+    const tableOne = /^\/api\/tables\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (tableOne?.[1] && request.method === "GET") {
+      if (!TABLE_NAME.test(tableOne[1])) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const table = await loadTable(env.DB, caller.orgId, tableOne[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json({ table });
+    }
+    if (tableOne?.[1] && request.method === "DELETE") {
+      const table = await loadTable(env.DB, caller.orgId, tableOne[1]);
+      if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      await deleteTable(env.DB, caller, table);
+      return json({ deleted: true });
+
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).
