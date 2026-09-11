@@ -29,10 +29,6 @@ import { join } from "node:path";
 // stacks on the TRG-02 surface above and measures ~226 KiB combined with the
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged versus main.
-// 2026-09-11 (FILE-02 stacked over CON-01, issue #158): TBD KiB pending local
-// measure. The generated-artifacts surface (19 routes plus the artifacts
-// domain) stacks with the same deliberate feature headroom, not dependency
-// bloat: package.json is unchanged versus main.
 // 2026-09-11 (FILE-01, issue #157): 275 KiB. The managed-files surface (14
 // routes plus the files domain: locations, policies, capabilities,
 // finalize verification, versioned mutation, structural listing, plus the
@@ -54,11 +50,12 @@ import { join } from "node:path";
 // APP-02 surface and measures ~334 KiB combined. Same deliberate feature
 // headroom as the earlier raises, not dependency bloat: package.json is
 // unchanged versus main.
-const BUDGET_BYTES = 340 * 1024;
-// 2026-09-11 (FILE-02 stacked over CON-02, issue #158): TBD KiB pending
-// measure. The generated-artifacts surface (19 routes plus the artifacts
-// domain) stacks with the same deliberate feature headroom, not dependency
-// bloat: package.json is unchanged versus main.
+// 2026-09-11 (FILE-02 stacked over APP-02/CON-02, issue #158): 365 KiB. The
+// generated-artifacts surface (19 routes plus the artifacts domain) stacks
+// with the same deliberate feature headroom, not dependency bloat:
+// package.json is unchanged versus main. Combined measures ~357 KiB locally
+// (CI number governs).
+const BUDGET_BYTES = 365 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
