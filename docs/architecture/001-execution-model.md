@@ -158,7 +158,7 @@ Expected failures use a structured `{ code, message }` shape with a stable machi
 
 ### History versus detail
 
-History/list endpoints return lightweight Execution summaries (no input/result, max 20 + `hasMore`; cursor pagination deferred). Full input/result/Operation detail belongs on an individual Execution endpoint. Detail exposes stored status, ordered Operation records, and a separate advisory `runtimeStatus` from native Workflow introspection when available. A missing/unavailable native status is never interpreted as success, failure, or expiry. This mirrors a useful upstream separation and avoids large D1 reads.
+History/list endpoints return lightweight Execution summaries (no input/result, default limit 20 + `hasMore` + opaque `nextCursor`). OBS-01 (issue #152) implements keyset cursor pagination over `(created_at DESC, id DESC)` with server-side filters `status` (single or comma-separated multi, mirroring upstream), `sagaId`, exact `sagaName` (upstream `workflowName` parity), ISO `startDate`/`endDate` bounds on `created_at`, and `limit`/`cursor`; anything else stays `400 UNSUPPORTED_QUERY`. Full input/result/Operation detail belongs on an individual Execution endpoint. Detail exposes stored status, ordered Operation records, and a separate advisory `runtimeStatus` from native Workflow introspection when available. A missing/unavailable native status is never interpreted as success, failure, or expiry. This mirrors a useful upstream separation and avoids large D1 reads.
 
 ### Cancellation
 
