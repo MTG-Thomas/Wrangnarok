@@ -218,7 +218,7 @@ Related Wrangnarok issues: #57, #119
 
 Phase 5; **Partial**; existing issue: new
 
-Local status: Git-owned TS plus Wrangler local development works. It is not upstream local-source preview with authenticated environment resources, sync/watch or hosted Git/package management.
+Local status: No-registration local preview (`POST /api/dev/preview`, ADR 016) plus explicit sync/Git/lock/deploy validation (`src/dev.ts`) and the Python-dependency compatibility inventory (`docs/dev-compatibility.md`). Preview is read-only by construction (no D1 writes, no dispatch; opt-in same-org Connection-presence check only). Hosted Git/package management stays out of scope.
 
 Depends: DEV-01, SOL-01
 
