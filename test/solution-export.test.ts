@@ -409,13 +409,17 @@ describe("solution source export and import (SOL-03)", () => {
   });
 
   it("keeps hello pins portable and preserves secret-schema requirements", async () => {
-    await installBundle(bindings.DB, {
-      manifestVersion: 1,
-      bundle: { id: BUNDLE_ID, name: "hello-starter", version: "2.0.0" },
-      sagas: [{ id: helloSaga.id, revision: helloSaga.revision }],
-      integrations: [],
-      config: [],
-    });
+    await installBundle(
+      bindings.DB,
+      {
+        manifestVersion: 1,
+        bundle: { id: BUNDLE_ID, name: "hello-starter", version: "2.0.0" },
+        sagas: [{ id: helloSaga.id, revision: helloSaga.revision }],
+        integrations: [],
+        config: [],
+      },
+      { orgName: "default" },
+    );
     const captured = await captureSource(bindings.DB, {
       manifestVersion: 1,
       bundle: { id: BUNDLE_ID, name: "hello-starter", version: "2.0.0" },
