@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
+import {
+  appDetail,
+  createApp,
+  deleteApp,
+  editAppSource,
+  jobDetail,
+  listApps,
+  listJobs,
+  parseAppBody,
+  parseAppId,
+  parseSwapBody,
+  serveAsset,
+  startBuild,
+  swapSlugs,
+  validateApp,
+} from "./apps";
 import { boundedJson, canTransition, Fault, parseHistoryQuery, parseKey, parseSubmission } from "./domain";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import { SAGA_CATALOG } from "./sagas";
@@ -195,6 +211,81 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
           error: op.error_json ? JSON.parse(op.error_json) : null,
         })),
       });
+    }
+    // Authored Applications (APP-01, ADR 016): independent-app lifecycle
+    // (create/edit/validate/build/inspect/swap/delete) plus authorized
+    // active-deployment asset serving. Solution-owned rows reject live
+    // mutation with MANAGED_RESOURCE; foreign-Organization rows 404.
+    if (url.pathname === "/api/apps" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ apps: await listApps(env.DB, caller) });
+    }
+    if (url.pathname === "/api/apps" && request.method === "POST") {
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      const { name, slug } = parseAppBody(await boundedJson(request.body));
+      return json({ app: await createApp(env.DB, caller, name, slug) }, 201);
+    }
+    const appJobs = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
+    if (appJobs?.[1] && (request.method === "GET" || request.method === "POST")) {
+      const id = parseAppId(appJobs[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      if (request.method === "GET") return json({ jobs: await listJobs(env.DB, caller, id) });
+      return json({ job: await startBuild(env.DB, caller, id) }, 202);
+    }
+    const appJobOne = /^\/api\/apps\/([0-9a-f-]{36})\/builds\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (appJobOne?.[1] && appJobOne[2] && request.method === "GET") {
+      return json({ job: await jobDetail(env.DB, caller, parseAppId(appJobOne[1]), appJobOne[2]) });
+    }
+    const appValidate = /^\/api\/apps\/([0-9a-f-]{36})\/validate$/.exec(url.pathname);
+    if (appValidate?.[1] && request.method === "POST") {
+      return json({ revision: await validateApp(env.DB, caller, parseAppId(appValidate[1])) });
+    }
+    const appSource = /^\/api\/apps\/([0-9a-f-]{36})\/source$/.exec(url.pathname);
+    if (appSource?.[1] && request.method === "PUT") {
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      return json({
+        revision: await editAppSource(env.DB, caller, parseAppId(appSource[1]), await boundedJson(request.body)),
+      });
+    }
+    const appSwap = /^\/api\/apps\/([0-9a-f-]{36})\/swap$/.exec(url.pathname);
+    if (appSwap?.[1] && request.method === "POST") {
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      const otherAppId = parseSwapBody(await boundedJson(request.body));
+      const swapped = await swapSlugs(env.DB, caller, parseAppId(appSwap[1]), otherAppId);
+      return json({ app: swapped.app, other: swapped.other });
+    }
+    const appAsset = /^\/api\/apps\/([0-9a-f-]{36})\/assets\/(.+)$/.exec(url.pathname);
+    if (appAsset?.[1] && appAsset[2] && request.method === "GET") {
+      const served = await serveAsset(env.DB, caller, parseAppId(appAsset[1]), appAsset[2]);
+      return new Response(served.content, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+          ETag: `"${served.contentHash}"`,
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const appOne = /^\/api\/apps\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (appOne?.[1] && request.method === "GET") {
+      return json({ app: await appDetail(env.DB, caller, parseAppId(appOne[1])) });
+    }
+    if (appOne?.[1] && request.method === "DELETE") {
+      await deleteApp(env.DB, caller, parseAppId(appOne[1]));
+      return json({ deleted: true });
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).
