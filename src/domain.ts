@@ -101,6 +101,21 @@ const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]>
 export function canTransition(from: ExecutionStatus, to: ExecutionStatus): boolean {
   return EXECUTION_TRANSITIONS[from].includes(to);
 }
+// Native terminate() outcome (RUN-04, issue #151): the local REST surface
+// throws exact-code Errors after the Workflow engine handles the control —
+// "WorkflowError: (instance.cannot_terminate) ..." when the instance already
+// sits in a finite state (complete/errored/terminated), and "instance.not_found"
+// when no such native instance exists. Everything else (transient or
+// control-plane failures, timeouts, non-Error throws, messages without a
+// known code) fails closed to ambiguous: the route must NOT report a confirmed
+// stop it never observed. Pure and unit-tested; never surfaces native text.
+export type TerminateOutcome = "stopped" | "already-settled" | "not-found" | "ambiguous";
+export function classifyTerminateError(error: unknown): TerminateOutcome {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (message.includes("instance.cannot_terminate")) return "already-settled";
+  if (message.includes("instance.not_found")) return "not-found";
+  return "ambiguous";
+}
 // Operation state model (ADR 010 section 2, Phase 1b follow-up). Operations
 // stay within ('Running','Succeeded','Failed'); the timeout code lives in
 // error_json, never as an Operation status. A step (re)begin moves a fresh
@@ -169,11 +184,20 @@ export interface SafeError {
   message: string;
 }
 
+/** One structured validation failure: names the offending field plus a
+ * machine-readable code. Whole-body errors use an empty field name. */
+export interface FieldFailure {
+  readonly field: string;
+  readonly code: string;
+  readonly message: string;
+}
+
 export class Fault extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = "Fault";
@@ -315,11 +339,23 @@ export async function boundedJson(body: ReadableStream<Uint8Array> | null, limit
   }
 }
 
-// --- ExecutionHistory querying (Phase 2, issue #76) ------------------------
+// --- ExecutionHistory querying (Phase 2, issues #76 then #152) --------------
 // GET /api/executions is the only route that accepts a query string, and only
-// these keys: status (canonical ExecutionStatus), sagaId (stable Saga UUID),
+// these keys: status (one canonical ExecutionStatus or a comma-separated
+// multi-status set, mirroring upstream's comma-separated status filter),
+// sagaId (stable Saga UUID), sagaName (exact Saga name, mirroring upstream's
+// workflowName), startDate/endDate (ISO 8601 datetime or plain YYYY-MM-DD day
+// bounds, applied to created_at so dispatched-but-unstarted Pending rows stay
+// visible — upstream filters started_at, which would silently drop them),
 // limit (1-50, default 20), cursor (opaque page marker). Anything else is
 // UNSUPPORTED_QUERY — the hardening posture stays deny-by-default.
+//
+// Non-applicable upstream keys are deliberately absent, not silently ignored:
+// scope (single org/requester scope here, never a superuser-wide listing) and
+// excludeLocal (no local-runner concept) have no local meaning; free-text
+// search is a client-side slice over loaded pages (upstream exposes no search
+// param on the executions list either — message_search lives only on the
+// admin-only logs surface).
 export const HISTORY_LIMIT_DEFAULT = 20;
 export const HISTORY_LIMIT_MAX = 50;
 const HISTORY_STATUSES: readonly string[] = [
@@ -336,8 +372,15 @@ export interface HistoryCursor {
   readonly id: string;
 }
 export interface HistoryQuery {
-  readonly status?: ExecutionStatus;
+  /** Empty means all statuses. One entry behaves exactly like the old singular filter. */
+  readonly statuses: readonly ExecutionStatus[];
   readonly sagaId?: string;
+  /** Exact Saga name match (upstream workflowName parity). */
+  readonly sagaName?: string;
+  /** Inclusive lower bound on created_at (normalized ISO instant). */
+  readonly startAt?: string;
+  /** Exclusive upper bound on created_at (normalized ISO instant). */
+  readonly endBefore?: string;
   readonly limit: number;
   readonly cursor?: HistoryCursor;
 }
@@ -369,21 +412,49 @@ export function decodeHistoryCursor(value: string): HistoryCursor {
   }
   return { createdAt: cursor.createdAt, id: cursor.id };
 }
+/** Normalize a date filter to an ISO instant. Accepts a full ISO 8601 datetime
+ * or a plain calendar day ("YYYY-MM-DD", interpreted as UTC midnight). Throws
+ * a Fault with the given code on anything else — never silently ignores a
+ * caller-supplied bound the way upstream's repository does. */
+export function parseDateBound(value: string, code: string): string {
+  const dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const instant = dayOnly ? `${value}T00:00:00.000Z` : value.replace(/Z$/i, "+00:00");
+  const parsed = Date.parse(dayOnly ? instant : value.includes("T") ? instant : value);
+  if (Number.isNaN(parsed)) {
+    throw new Fault(400, code, "startDate and endDate must be ISO 8601 date-times (YYYY-MM-DD accepted).");
+  }
+  return new Date(parsed).toISOString();
+}
 /** Pure parser for the history list query string. Throws Faults with
  * machine-readable codes; unit-tested without any runtime binding. */
 export function parseHistoryQuery(params: URLSearchParams): HistoryQuery {
   for (const key of params.keys()) {
-    if (!["status", "sagaId", "limit", "cursor"].includes(key)) {
-      throw new Fault(400, "UNSUPPORTED_QUERY", "Only status, sagaId, limit, and cursor are supported here.");
+    if (!["status", "sagaId", "sagaName", "startDate", "endDate", "limit", "cursor"].includes(key)) {
+      throw new Fault(
+        400,
+        "UNSUPPORTED_QUERY",
+        "Only status, sagaId, sagaName, startDate, endDate, limit, and cursor are supported here.",
+      );
     }
   }
-  let status: ExecutionStatus | undefined;
+  const statuses: ExecutionStatus[] = [];
   const rawStatus = params.get("status");
   if (rawStatus !== null) {
-    if (!HISTORY_STATUSES.includes(rawStatus)) {
-      throw new Fault(400, "INVALID_STATUS", "Status must be a canonical Execution status.");
+    // Comma-separated multi-status, mirroring upstream's status filter: the
+    // UI's failure pills can ask for the whole group in one server-side
+    // filter. A single value behaves exactly as before. Duplicates collapse;
+    // an empty/blank entry is INVALID_STATUS, never a silent match-all.
+    for (const part of rawStatus.split(",")) {
+      const candidate = part.trim();
+      if (!HISTORY_STATUSES.includes(candidate)) {
+        throw new Fault(400, "INVALID_STATUS", "Status must be canonical Execution statuses, comma-separated.");
+      }
+      const status = candidate as ExecutionStatus;
+      if (!statuses.includes(status)) statuses.push(status);
     }
-    status = rawStatus as ExecutionStatus;
+    if (statuses.length === 0) {
+      throw new Fault(400, "INVALID_STATUS", "Status must be canonical Execution statuses, comma-separated.");
+    }
   }
   let sagaId: string | undefined;
   const rawSaga = params.get("sagaId");
@@ -393,6 +464,14 @@ export function parseHistoryQuery(params: URLSearchParams): HistoryQuery {
     }
     sagaId = rawSaga;
   }
+  let sagaName: string | undefined;
+  const rawName = params.get("sagaName");
+  if (rawName !== null) {
+    if (rawName.length === 0 || rawName.length > 256) {
+      throw new Fault(400, "INVALID_SAGA_NAME", "sagaName must be 1 to 256 characters.");
+    }
+    sagaName = rawName;
+  }
   let limit = HISTORY_LIMIT_DEFAULT;
   const rawLimit = params.get("limit");
   if (rawLimit !== null) {
@@ -401,10 +480,31 @@ export function parseHistoryQuery(params: URLSearchParams): HistoryQuery {
     }
     limit = Number(rawLimit);
   }
+  let startAt: string | undefined;
+  const rawStart = params.get("startDate");
+  if (rawStart !== null) startAt = parseDateBound(rawStart, "INVALID_START_DATE");
+  let endAtRaw: string | undefined;
+  const rawEnd = params.get("endDate");
+  if (rawEnd !== null) endAtRaw = parseDateBound(rawEnd, "INVALID_END_DATE");
+  // Plain-day endDates ("YYYY-MM-DD") are exclusive of the whole day: they
+  // normalize to the next midnight so a From/To day-range pair covers the full
+  // To day. Full datetimes stay exact.
+  const endBefore =
+    endAtRaw === undefined
+      ? undefined
+      : /^\d{4}-\d{2}-\d{2}$/.test(rawEnd ?? "")
+        ? new Date(Date.parse(endAtRaw) + 24 * 60 * 60 * 1000).toISOString()
+        : endAtRaw;
+  if (startAt !== undefined && endBefore !== undefined && startAt >= endBefore) {
+    throw new Fault(400, "INVALID_DATE_RANGE", "startDate must be before endDate.");
+  }
   const rawCursor = params.get("cursor");
   return {
-    ...(status === undefined ? {} : { status }),
+    statuses,
     ...(sagaId === undefined ? {} : { sagaId }),
+    ...(sagaName === undefined ? {} : { sagaName }),
+    ...(startAt === undefined ? {} : { startAt }),
+    ...(endBefore === undefined ? {} : { endBefore }),
     limit,
     ...(rawCursor === null ? {} : { cursor: decodeHistoryCursor(rawCursor) }),
   };

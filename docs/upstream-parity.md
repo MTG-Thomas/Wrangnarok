@@ -8,7 +8,7 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 15 Partial, 30 Missing, 2 Gated.
+Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
@@ -33,7 +33,7 @@ Total: 47 capability rows — 15 Partial, 30 Missing, 2 Gated.
 | OBS-02 | Persist and stream authorized author logs and progress with reconnect recovery | 4 | Missing | SEC-01, AUTH-02, OBS-01 | new |
 | TABLE-01 | Deliver the existing minimal author Tables migration slice | 4 | Missing | AUTH-02 | #117 |
 | TABLE-02 | Extend author Tables to policy-safe querying, batch mutations and realtime visibility | 4 | Missing | TABLE-01, AUTH-02, OBS-02 | new |
-| FORM-01 | Deliver the existing Forms-to-Saga input binding slice | 4 | Missing | — | #118 |
+| FORM-01 | Deliver the existing Forms-to-Saga input binding slice | 4 | Partial | — | #118 |
 | FORM-02 | Deliver usable dynamic forms with safe startup, providers and submissions | 4 | Missing | FORM-01, RUN-03, TRG-01, AUTH-02, FILE-01 | new |
 | EMBED-01 | Publish and embed forms/apps with revocable external capabilities | 4 | Missing | FORM-02, APP-01, AUTH-03, AUTH-02 | new |
 | FILE-01 | Deliver managed file locations with policy-checked upload, download and mutation | 4 | Missing | AUTH-02, SEC-01 | new |
@@ -218,7 +218,7 @@ Related Wrangnarok issues: #57, #119
 
 Phase 5; **Partial**; existing issue: new
 
-Local status: Git-owned TS plus Wrangler local development works. It is not upstream local-source preview with authenticated environment resources, sync/watch or hosted Git/package management.
+Local status: No-registration local preview (`POST /api/dev/preview`, ADR 016) plus explicit sync/Git/lock/deploy validation (`src/dev.ts`) and the Python-dependency compatibility inventory (`docs/dev-compatibility.md`). Preview is read-only by construction (no D1 writes, no dispatch; opt-in same-org Connection-presence check only). Hosted Git/package management stays out of scope.
 
 Depends: DEV-01, SOL-01
 
@@ -584,15 +584,22 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## FORM-01: Deliver the existing Forms-to-Saga input binding slice
 
-Phase 4; **Missing**; existing issue: #118
+Phase 4; **Partial**; existing issue: #118
 
-Local status: No form model exists. #118 already owns one validated form-to-Saga binding without renderer.
-
-Depends: none
-
-Acceptance:
-
-- Complete #118 with a chosen pilot form, structured validation failures and a real local Saga submission test. Persisted declared fields are an explicit contract choice for #118 (storage/definition placement decided here), not implied by the original minimal binding. Keep renderer/provider/publication parity separate.
+Local status: Implemented the validated binding without renderer (ADR 015).
+Persisted Organization-scoped `forms` declarations (D1 `0005_forms.sql`) name
+the target Saga plus closed-v1 `text` fields; field names bind to Saga inputs
+by name; the server validates against the persisted declaration (unknown names
+rejected, 200-key and per-field byte caps) and only validated input reaches
+the Saga parse gate (drift surfaces the Saga 400, distinct from field 422s).
+Validation failures are 422 `FORM_VALIDATION_FAILED` with structured
+per-field `details`. `GET /api/forms/:name` reads the declaration;
+`POST /api/forms/:name/submit` submits down the standard Execution path with
+the submit gate authoritative; unknown/foreign names 404. Pilot form
+`hello-greeting` binds to the `hello` Saga, proven end to end in workerd
+(`test/forms.test.ts`) plus pure unit pins (`test/form-binding.test.ts`).
+Renderer, providers, startup handles, scheduled submit, publication, and file
+fields stay explicitly deferred to FORM-02.
 
 Upstream evidence (paths relative to upstream repo root):
 

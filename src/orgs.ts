@@ -13,7 +13,7 @@
 // in Git) for creating/disabling Organizations and recovering stuck tenants.
 // External users are first-class members whose kind is recorded and who can
 // never hold admin: scope selection can never elevate privilege.
-import { encodeHistoryCursor, Fault, UUID, type ExecutionStatus, type HistoryQuery, type Principal } from "./domain";
+import { encodeHistoryCursor, Fault, UUID, type HistoryQuery, type Principal } from "./domain";
 import { summary } from "./executions";
 import type { ExecutionRow } from "./executions";
 
@@ -144,7 +144,7 @@ async function getOrg(db: D1Database, orgId: string): Promise<OrgRow | null> {
     return await db.prepare("SELECT * FROM organizations WHERE id=?").bind(orgId).first<OrgRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0005.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
     }
     throw error;
   }
@@ -174,7 +174,7 @@ export async function resolveCaller(
     // column. Reading through the failure answers 503 with the migration
     // code instead of leaking driver text.
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0005.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
     }
     throw error;
   }
@@ -191,7 +191,7 @@ export async function resolveCaller(
     user = await db.prepare("SELECT * FROM users WHERE user_id=?").bind(principal.userId).first<UserRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0005.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
     }
     throw error;
   }
@@ -221,7 +221,7 @@ export async function resolveCaller(
       .first<MembershipRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0005.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
     }
     throw error;
   }
@@ -279,7 +279,7 @@ export async function resolveUser(db: D1Database, env: AdminEnv, principal: Prin
     user = await db.prepare("SELECT * FROM users WHERE user_id=?").bind(principal.userId).first<UserRow>();
   } catch (error) {
     if (isMissingTable(error)) {
-      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0005.");
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
     }
     throw error;
   }
@@ -673,9 +673,9 @@ export async function listOrgHistory(
 ): Promise<{ executions: ReturnType<typeof summary>[]; hasMore: boolean; nextCursor: string | null }> {
   const clauses = ["org_id=?"];
   const binds: (string | number)[] = [parseOrgId(orgId)];
-  if (query.status !== undefined) {
-    clauses.push("status=?");
-    binds.push(query.status satisfies ExecutionStatus);
+  if (query.statuses.length > 0) {
+    clauses.push(`status IN (${query.statuses.map(() => "?").join(",")})`);
+    binds.push(...query.statuses);
   }
   if (query.sagaId !== undefined) {
     clauses.push("saga_id=?");

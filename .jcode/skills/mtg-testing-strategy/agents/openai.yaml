@@ -1,0 +1,5 @@
+version: 1
+interface:
+  display_name: MTG Testing Strategy
+  short_description: Choose meaningful test layers and residual-risk proof.
+  default_prompt: Use the MTG testing strategy skill to design or improve a test suite by selecting the lowest meaningful test layer, verifying assertions are strong, and reporting residual risk.

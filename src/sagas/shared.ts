@@ -9,6 +9,7 @@ import { EXECUTION_ID } from "../domain";
 import type { ExecutionParams } from "../domain";
 import { assertJsonSerializable, bindSagaStep } from "../saga";
 import type { SagaDefinition, SagaEventContext } from "../saga";
+import { clearExecutionSecrets, registerExecutionSecrets, scrubExecutionText, scrubExecutionValue } from "../secrets";
 import { echo } from "../integrations/echo";
 import { listOrganizations } from "../integrations/ninjaone";
 
@@ -22,13 +23,30 @@ export async function executeSaga<TOutput>(
   if (env.LAB_ENABLED !== "true" || typeof id !== "string" || !EXECUTION_ID.test(id) || id !== event.instanceId) {
     throw new NonRetryableError("Invalid local Execution invocation.");
   }
-  const ctx: SagaEventContext = {
-    executionId: id,
-    integrations: { echo: { echo }, ninjaone: { listOrganizations } },
-    db: env.DB,
-    secrets: { clientId: env.NINJA_CLIENT_ID, clientSecret: env.NINJA_CLIENT_SECRET },
-  };
-  const output = await def.run(ctx, bindSagaStep(step));
-  assertJsonSerializable(output, `${def.name} output`);
-  return output;
+  // The Workflow isolate registers deployment credentials up front so every
+  // checkpoint below scrubs them by substring, including tokens the Action
+  // registers mid-run. Cleared on every exit path — a reused isolate never
+  // carries one Execution's secrets into the next.
+  registerExecutionSecrets(id, [env.NINJA_CLIENT_ID, env.NINJA_CLIENT_SECRET]);
+  try {
+    const ctx: SagaEventContext = {
+      executionId: id,
+      integrations: { echo: { echo }, ninjaone: { listOrganizations } },
+      db: env.DB,
+      secrets: { clientId: env.NINJA_CLIENT_ID, clientSecret: env.NINJA_CLIENT_SECRET },
+    };
+    const output = await def.run(ctx, bindSagaStep(step));
+    assertJsonSerializable(output, `${def.name} output`);
+    // Workflow terminal value is an outward path: a secret-bearing transform
+    // result would otherwise ride the native status API out unscrubbed.
+    return scrubExecutionValue(output, id);
+  } catch (error) {
+    // A secret substring in a thrown exception string must not escape via the
+    // native errored status. NonRetryableError carries only the safe code.
+    if (error instanceof NonRetryableError) throw error;
+    if (error instanceof Error) throw new NonRetryableError(scrubExecutionText(id, error.message));
+    throw error;
+  } finally {
+    clearExecutionSecrets(id);
+  }
 }
