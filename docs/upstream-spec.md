@@ -196,6 +196,18 @@ Authorization fails closed throughout: list filters return nothing unauthenticat
 
 **Wrangnarök implication (feeds Phase 6):** Agents/tool workflows stay Deferred, verdict confirmed. When they arrive, the invariants to keep are: opt-in tool metadata on suitable Sagas with normal Sagas remaining distinct; a gateway-vs-native split; normalized namespaced tool names with description priority; caller-scoped resolution; server-side permissions authoritative even when an agent can discover a tool; hidden-tool denial. No MCP server, agent runtime, or tool-execution path until Phase 6 earns them.
 
+### 19. Configuration: typed key/value rows, cascade scope, masked secrets (CON-02 baseline, Sep 2026)
+
+All pins at vendor/upstream commit `3543c7e` (the parity-audit baseline).
+
+Config is general key/value state with five types (`string`, `int`, `bool`, `json`, `secret`; `api/src/models/enums.py`) and three scopes: global rows (null org), org rows, and Integration-managed rows. Keys match `^[a-zA-Z0-9_]+$`; secret values are encrypted at rest (`api/src/models/contracts/config.py`; `api/src/repositories/config.py`).
+
+Operator surface (`api/src/routers/config.py`): superuser-only list (with scope filter: all, global-only, one org), set/upsert by natural key (org, key), update by ID (rename and org-move allowed; omitted secret values preserve the existing ciphertext), delete by ID. Listing masks secrets as `[SECRET]`; cache invalidation (including the global-version bump on cross-boundary moves) rides every write.
+
+Author surface (`api/bifrost/config.py`): `config.get(key, default, scope)` resolves through the execution context org with automatic global fallback (cascade); a missing key returns 200-with-null and the caller's default — never an error — while permission/server errors surface. `config.set`/`config.delete` write directly. Resolved secret values auto-register for log scrubbing.
+
+**Wrangnarök implication (CON-02, ADR 018):** Adopt the type vocabulary, key shape, `[SECRET]` list masking, partial-update preservation, and declared-versus-undeclared lookup outcomes. Adapt the scope model: org-only resolution with no global tier in v1 (ADR 003's no-implicit-fallback rule extended from credentials to config rows); org/global precedence arrives only with its own ADR. Secret values never reach D1 at all — secret rows store references to declared provider-global deployment secrets (ADR 005 v0), resolved transiently and registered with the execution-scoped scrub registry. Managed-row ownership follows the ADR 011 owned/loose contract.
+
 ## Candidate product invariants
 
 These are stronger than implementation preferences and should guide design reviews:

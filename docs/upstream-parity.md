@@ -24,7 +24,7 @@ Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
 | AUTH-03 | Manage scoped machine credentials and verify delegated human identity parity | 3 | Partial | AUTH-01, AUTH-02 | new |
 | SEC-01 | Enforce execution-scoped secret registration and universal output scrubbing | 3 | Partial | — | new |
 | CON-01 | Manage Integration definitions and scoped Connection mappings through authorized APIs | 3 | Partial | AUTH-02, SEC-01 | new |
-| CON-02 | Expose scoped configuration and secret-reference APIs to authors and operators | 3 | Missing | AUTH-02, SEC-01, CON-01 | new |
+| CON-02 | Expose scoped configuration and secret-reference APIs to authors and operators | 3 | Implemented | AUTH-02, SEC-01, CON-01 | #147 |
 | SEC-02 | Support genuinely per-Organization credentials behind the accepted secret-storage tripwire | 3 | Gated | SEC-01, CON-01 | new |
 | OAUTH-01 | Complete OAuth authorization, centralized refresh and credential health lifecycle | 3 | Partial | CON-01, SEC-02, AUTH-03 | new |
 | RUN-03 | Define and deliver bounded synchronous and data-provider execution | 2+4 | Missing | AUTH-02, RUN-01 | new |
@@ -377,9 +377,9 @@ Related Wrangnarok issues: #75, #110
 
 ## CON-02: Expose scoped configuration and secret-reference APIs to authors and operators
 
-Phase 3; **Missing**; existing issue: new
+Phase 3; **Implemented** (issue #147; ADR 018); existing issue: #147
 
-Local status: Connection endpoints and manifest declarations do not provide Bifrost general key/value configuration with types, org overrides and secret-aware access.
+Local status: Typed key/value config (`string`/`int`/`bool`/`json`/`secret`) in D1 `configs` (migration 0010), org-only resolution (no global tier by design), `[SECRET]` list masking, reference-only secret provisioning against declared provider-global deployment secrets, managed-row ownership (`managed_by`), `bundle_config` pin reconciliation, export-declaration exclusion, `ctx.config` Saga handle with declared-versus-undeclared outcomes, plus SDK/CLI/UI parity.
 
 Depends: AUTH-02, SEC-01, CON-01
 
