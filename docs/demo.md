@@ -58,6 +58,23 @@ Invoke-RestMethod http://127.0.0.1:8903/api/executions/$id -Headers $H
 Invoke-RestMethod http://127.0.0.1:8903/api/executions -Headers $H
 ```
 
+## Project CLI (`scripts/wrangnarok.mjs`)
+
+Thin wrapper over the same HTTP API — no Saga logic. Auth defaults to
+`.dev.vars` `LAB_TOKEN`; `--json` switches every command to raw JSON.
+
+```bash
+node scripts/wrangnarok.mjs sagas
+node scripts/wrangnarok.mjs submit --saga system.smoke --key my-run-0001
+node scripts/wrangnarok.mjs history --status Succeeded --limit 5
+node scripts/wrangnarok.mjs cancel --id <64-hex-execution-id>
+node scripts/wrangnarok.mjs selftest
+```
+
+`--org` is reserved and fails loudly (organization comes from auth
+context); cancel takes the exact Execution ID only. Behind Access, pass
+`--access-client-id` / `--access-client-secret`.
+
 ## Remote dev smoke: human runbook (deferred for machine callers)
 
 The deployed dev smoke (`wrangler deploy --env dev` + `system.smoke` per
