@@ -125,6 +125,15 @@ async function resolveSagaId(ctx, ref) {
   return matches[0].id;
 }
 
+const NOTIFICATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function checkNotificationId(id) {
+  if (!NOTIFICATION_ID.test(id ?? "")) {
+    fail("USAGE", "notification and dismiss-notification need the exact notification UUID.");
+  }
+  return id;
+}
+
 function checkExecutionId(id) {
   if (!EXECUTION_ID.test(id ?? "")) {
     fail("USAGE", "cancel and detail need the exact 64-hex Execution ID (no prefixes, no search).");
@@ -257,6 +266,37 @@ function printHistory(executions, hasMore, { pages }) {
   else console.log(`# ${executions.length} loaded (complete under these filters).`);
 }
 
+function printAudit(events, hasMore, { pages }) {
+  if (emit({ events, hasMore })) return;
+  for (const row of events) {
+    console.log(
+      `${String(row.id).slice(0, 12)}\t${row.action}\t${row.outcome}\t${row.targetId ?? "-"}\t${row.createdAt ?? "-"}`,
+    );
+  }
+  // Loaded-slice counts are never presented as totals: hasMore means the
+  // server holds rows this output does not show.
+  if (hasMore) console.log(`# ${events.length} loaded across ${pages} page(s); more available server-side.`);
+  else console.log(`# ${events.length} loaded (complete under these filters).`);
+}
+
+function printNotifications(notifications) {
+  if (emit({ notifications })) return;
+  for (const row of notifications) {
+    console.log(`${String(row.id).slice(0, 12)}\t${row.scope}\t${row.status}\t${row.title}`);
+  }
+  if (notifications.length === 0) console.log("# no notifications.");
+}
+
+function printNotification(notification) {
+  if (emit({ notification })) return;
+  console.log(`${notification.id} ${notification.status}`);
+  console.log(`${notification.scope} · ${notification.category}: ${notification.title}`);
+  if (notification.body) console.log(notification.body);
+  const detail = notification.detail;
+  if (detail !== null && detail !== undefined) console.log(`detail: ${JSON.stringify(detail)}`);
+  console.log(`created: ${notification.createdAt ?? "-"} updated: ${notification.updatedAt ?? "-"}`);
+}
+
 function printDetail(detail) {
   if (emit(detail)) return;
   console.log(`${detail.executionId} ${detail.status}`);
@@ -368,6 +408,13 @@ Commands:
                                           Query Execution summaries (server filters,
                                           cursor traversal; loaded counts are not totals)
   cancel --id HEX                         Cancel one Execution (exact ID only)
+  audit [--action PREFIX] [--outcome success|failure] [--search TEXT]
+        [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--all]
+                                          Query audit events (server filters,
+                                          cursor traversal; loaded counts are not totals)
+  notifications [--limit N]               List the notifications inbox
+  notification --id UUID                  Fetch one notification
+  dismiss-notification --id UUID          Dismiss one notification (exact ID only)
   artifacts [--limit N]                   List Artifact summaries (no bytes)
   artifact --id UUID                      Fetch one Artifact (versions + bindings)
   upload --name NAME [--mime TYPE] [--file PATH]
@@ -661,6 +708,62 @@ export async function runCommand(ctx, deps = {}) {
         "execution cancel",
       );
     }
+    case "audit": {
+      // Cursor traversal: --all follows nextCursor while preserving the
+      // active filters; otherwise one page. Loaded counts are not totals.
+      if (ctx.auditOutcome !== undefined && !["success", "failure"].includes(ctx.auditOutcome)) {
+        fail("USAGE", "--outcome must be success|failure.");
+      }
+      const collected = [];
+      let cursor;
+      let pages = 0;
+      let hasMore;
+      for (;;) {
+        const params = new URLSearchParams();
+        if (ctx.auditAction) params.set("action", ctx.auditAction);
+        if (ctx.auditOutcome) params.set("outcome", ctx.auditOutcome);
+        if (ctx.auditSearch) params.set("search", ctx.auditSearch);
+        if (ctx.from) params.set("startDate", ctx.from);
+        if (ctx.to) params.set("endDate", ctx.to);
+        if (ctx.limit) params.set("limit", String(ctx.limit));
+        if (cursor) params.set("cursor", cursor);
+        const suffix = params.size > 0 ? `?${params.toString()}` : "";
+        const data = await readJson(
+          await fetchImpl(`${ctx.base}/api/audit${suffix}`, { headers: full.headers }),
+          "audit trail",
+        );
+        if (!Array.isArray(data.events)) fail("SERVER_MISMATCH", "audit trail has no events array.");
+        collected.push(...data.events);
+        pages += 1;
+        hasMore = data.hasMore === true;
+        cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
+        if (!ctx.all || !hasMore || !cursor) break;
+      }
+      return { events: collected, hasMore, pages };
+    }
+    case "notifications": {
+      const params = new URLSearchParams();
+      if (ctx.limit) params.set("limit", String(ctx.limit));
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/notifications${suffix}`, { headers: full.headers }),
+        "notifications",
+      );
+    }
+    case "notification": {
+      checkNotificationId(ctx.id);
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/notifications/${ctx.id}`, { headers: full.headers }),
+        "notification",
+      );
+    }
+    case "dismiss-notification": {
+      checkNotificationId(ctx.id);
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/notifications/${ctx.id}`, { method: "DELETE", headers: full.headers }),
+        "notification dismissal",
+      );
+    }
     case "artifacts": {
       const params = new URLSearchParams();
       if (ctx.limit !== undefined) params.set("limit", String(ctx.limit));
@@ -937,8 +1040,9 @@ async function main() {
   const parsed = parseContext();
   if (!/^https?:\/\//.test(parsed.base)) fail("USAGE", "--base must be an http(s) URL.");
   const limit = arg("limit");
-  if (limit !== undefined && (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > 50)) {
-    fail("USAGE", "--limit must be an integer from 1 to 50.");
+  const limitMax = parsed.command === "notifications" ? 100 : 50;
+  if (limit !== undefined && (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > limitMax)) {
+    fail("USAGE", `--limit must be an integer from 1 to ${limitMax}.`);
   }
   const command = parsed.command;
   const orgCommands = new Set([
@@ -968,16 +1072,24 @@ async function main() {
     scaffoldRevision: command === "scaffold" ? arg("revision") : undefined,
     sagaFilter: command === "history" || command === "org-executions" ? arg("saga") : undefined,
     id:
-      command === "detail" || command === "cancel" || command === "diagnose" || orgCommands.has(command)
+      command === "detail" ||
+      command === "cancel" ||
+      command === "diagnose" ||
+      command === "notification" ||
+      command === "dismiss-notification" ||
+      orgCommands.has(command)
         ? arg("id")
         : undefined,
     key: command === "submit" ? arg("key") : undefined,
     input: command === "submit" || command === "preview" ? readInput() : undefined,
     statusFilter: command === "history" || command === "org-executions" ? arg("status") : undefined,
+    auditAction: command === "audit" ? arg("action") : undefined,
+    auditOutcome: command === "audit" ? arg("outcome") : undefined,
+    auditSearch: command === "audit" ? arg("search") : undefined,
     limit: limit === undefined ? undefined : Number(limit),
-    from: command === "history" ? arg("from") : undefined,
-    to: command === "history" ? arg("to") : undefined,
-    all: command === "history" ? flag("all") : false,
+    from: command === "history" || command === "audit" ? arg("from") : undefined,
+    to: command === "history" || command === "audit" ? arg("to") : undefined,
+    all: command === "history" || command === "audit" ? flag("all") : false,
     wait: command === "submit" ? !flag("no-wait") : flag("wait"),
     artifactId:
       command === "artifact" ||
@@ -1016,7 +1128,13 @@ async function main() {
       for (const step of result.scaffold.next) console.log(`next: ${step}`);
     }
   } else if (command === "history") printHistory(result.executions, result.hasMore, { pages: result.pages ?? 1 });
-  else if (command === "org-executions" && Array.isArray(result.executions))
+  else if (command === "audit") printAudit(result.events, result.hasMore, { pages: result.pages ?? 1 });
+  else if (command === "notifications") printNotifications(result.notifications ?? []);
+  else if (command === "notification") printNotification(result.notification);
+  else if (command === "dismiss-notification") {
+    if (parsed.json) console.log(JSON.stringify(result));
+    else console.log("dismissed");
+  } else if (command === "org-executions" && Array.isArray(result.executions))
     printHistory(result.executions, result.hasMore);
   else if (command === "orgs" && Array.isArray(result.orgs)) {
     if (asJson()) console.log(JSON.stringify(result));
@@ -1421,6 +1539,90 @@ async function selftest() {
       console.error = err;
     }
     check("mismatch loud", /exit:1/.test(String(error)) && errlines.some((line) => line.includes("SERVER_MISMATCH")));
+  }
+
+  // audit forwards allowlisted filters and follows cursors with --all.
+  {
+    const stub = stubFetch([
+      jsonResponse({ events: [{ id: "e1" }], hasMore: true, nextCursor: "cursor-2" }),
+      jsonResponse({ events: [{ id: "e2" }], hasMore: false, nextCursor: null }),
+    ]);
+    const result = await runCommand(
+      {
+        ...base,
+        command: "audit",
+        auditAction: "app.",
+        auditOutcome: "success",
+        auditSearch: "storefront",
+        from: "2026-09-01",
+        to: "2026-09-10",
+        limit: 1,
+        all: true,
+      },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("audit traversal", result.events.length === 2 && result.pages === 2 && result.hasMore === false);
+    check(
+      "audit cursor keeps filters",
+      stub.calls[0].url.includes("action=app.") &&
+        stub.calls[1].url.includes("outcome=success") &&
+        stub.calls[1].url.includes("search=storefront") &&
+        stub.calls[1].url.includes("cursor=cursor-2"),
+    );
+  }
+
+  // audit rejects bad outcomes before any fetch.
+  {
+    const stub = stubFetch([]);
+    let error = null;
+    const exit = process.exit;
+    process.exit = (code) => {
+      throw new Error(`exit:${code}`);
+    };
+    try {
+      await runCommand({ ...base, command: "audit", auditOutcome: "Bogus" }, { fetchImpl: stub.fetch, ...noSleep });
+    } catch (e) {
+      error = e;
+    } finally {
+      process.exit = exit;
+    }
+    check("audit outcome gate", /exit:2/.test(String(error)) && stub.calls.length === 0);
+  }
+
+  // notifications list passes the limit through; fetch and dismiss use exact UUIDs.
+  {
+    const stub = stubFetch([jsonResponse({ notifications: [] })]);
+    await runCommand({ ...base, command: "notifications", limit: 5 }, { fetchImpl: stub.fetch, ...noSleep });
+    check("notifications query", stub.calls[0].url === "http://local.test/api/notifications?limit=5");
+    const one = stubFetch([jsonResponse({ notification: { id: "11111111-1111-4111-8111-111111111111" } })]);
+    await runCommand(
+      { ...base, command: "notification", id: "11111111-1111-4111-8111-111111111111" },
+      { fetchImpl: one.fetch, ...noSleep },
+    );
+    check(
+      "notification exact url",
+      one.calls[0].url === "http://local.test/api/notifications/11111111-1111-4111-8111-111111111111",
+    );
+    const gone = stubFetch([jsonResponse({ dismissed: true })]);
+    await runCommand(
+      { ...base, command: "dismiss-notification", id: "11111111-1111-4111-8111-111111111111" },
+      { fetchImpl: gone.fetch, ...noSleep },
+    );
+    check("dismiss exact url", gone.calls[0].init.method === "DELETE");
+    const bad = stubFetch([]);
+    let error = null;
+    const exit = process.exit;
+    process.exit = (code) => {
+      throw new Error(`exit:${code}`);
+    };
+    try {
+      await runCommand({ ...base, command: "dismiss-notification", id: "abc" }, { fetchImpl: bad.fetch, ...noSleep });
+    } catch (e) {
+      error = e;
+    } finally {
+      process.exit = exit;
+    }
+    check("dismiss exact id", /exit:2/.test(String(error)) && bad.calls.length === 0);
   }
 
   console.log(`wrangnarok cli selftest: ${passed} passed.`);
