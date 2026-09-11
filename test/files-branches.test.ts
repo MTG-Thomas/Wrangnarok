@@ -203,7 +203,7 @@ it("reads bounded bodies: empty bodies fail, over-limit bodies stop at 413", asy
   expect((await readBoundedBytes(exact, 8)).byteLength).toBe(8);
 });
 
-it("administers locations: validation, conflicts, non-empty refusal, unknown rows", async () => {
+it("administers locations: validation, conflicts, unknown rows", async () => {
   expect((await call("/api/file-locations", "POST", { name: "UPPER" })).status).toBe(400);
   expect(await codeOf(await call("/api/file-locations", "POST", { name: "UPPER" }))).toBe("INVALID_LOCATION");
   expect(await codeOf(await call("/api/file-locations", "POST", null))).toBe("INVALID_LOCATION");
@@ -223,6 +223,10 @@ it("administers locations: validation, conflicts, non-empty refusal, unknown row
   expect((await call("/api/file-locations/branch", "GET", undefined, OTHER)).status).toBe(404);
   // Unsupported query strings fail closed on the location list.
   expect((await call("/api/file-locations?location=branch")).status).toBe(400);
+});
+
+it("administers policies: validation, revoke-absent, idempotent grant, access-test", async () => {
+  expect((await call("/api/file-locations", "POST", { name: "branch", maxBytes: 64 })).status).toBe(201);
   // Invalid policy bodies fail before any lookup.
   expect(await codeOf(await call("/api/file-policies", "POST", null))).toBe("INVALID_POLICY");
   expect(await codeOf(await call("/api/file-policies", "POST", { location: "branch", action: "execute" }))).toBe(
@@ -477,7 +481,7 @@ it("deletes fail-closed: validation, unknown locations, revoked policy, fencing"
   await call("/api/file-policies", "POST", { location: "del", action: "delete" });
 });
 
-it("lists fail-closed and paginates with prefix and cursor", async () => {
+it("lists fail-closed: shape, unknown locations, revoked reads", async () => {
   expect((await call("/api/file-locations", "POST", { name: "ls", contentTypes: ["text/plain"] })).status).toBe(201);
   // Listing needs a query string, then an allowlisted shape.
   expect((await call("/api/files")).status).toBe(400);
@@ -489,6 +493,13 @@ it("lists fail-closed and paginates with prefix and cursor", async () => {
   expect((await call("/api/files?location=ls")).status).toBe(404);
   await call("/api/file-policies", "POST", { location: "ls", action: "read" });
   expect(await call("/api/files?location=ls")).toMatchObject({ status: 200 });
+  expect(await codeOf(await call("/api/files?location=ls&cursor=!!!"))).toBe("INVALID_CURSOR");
+  expect(await codeOf(await call("/api/files?location=ls&limit=99"))).toBe("INVALID_LIMIT");
+  expect(await codeOf(await call("/api/files?location=ls&prefix="))).toBe("INVALID_PATH");
+});
+
+it("lists paginate with prefix and cursor", async () => {
+  expect((await call("/api/file-locations", "POST", { name: "ls", contentTypes: ["text/plain"] })).status).toBe(201);
   // Seed two files, then page with limit 1 plus a prefix slice.
   for (const name of ["b.txt", "a.txt"]) {
     const slot = await call("/api/files/uploads", "POST", { entries: [{ location: "ls", path: name }] });
@@ -528,9 +539,6 @@ it("lists fail-closed and paginates with prefix and cursor", async () => {
     files: { path: string }[];
   };
   expect(prefixed.files.map((file) => file.path)).toEqual(["b.txt"]);
-  expect(await codeOf(await call("/api/files?location=ls&cursor=!!!"))).toBe("INVALID_CURSOR");
-  expect(await codeOf(await call("/api/files?location=ls&limit=99"))).toBe("INVALID_LIMIT");
-  expect(await codeOf(await call("/api/files?location=ls&prefix="))).toBe("INVALID_PATH");
 });
 
 it("expires download tokens and races upload revocation and staging", async () => {
