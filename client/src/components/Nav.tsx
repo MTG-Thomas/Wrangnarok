@@ -44,9 +44,9 @@ export const NAV_ENTRIES: NavEntry[] = [
   },
   {
     label: "Connections",
-    enabled: false,
-    issue: `${REPO}/issues/18`,
-    phase: "Phase 3",
+    to: "/connections",
+    enabled: true,
+    phase: "Phase 3 (#146)",
   },
   {
     label: "Triggers",

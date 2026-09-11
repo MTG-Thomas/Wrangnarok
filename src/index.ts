@@ -39,6 +39,16 @@ import {
 } from "./domain";
 import type { TerminateOutcome } from "./domain";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
+import {
+  createConnection,
+  deleteConnection,
+  getConnection,
+  listConnections,
+  scrubConnectionPayload,
+  testConnection,
+  updateConnection,
+} from "./connections";
+import { describeIntegrations } from "./integrations";
 import { SAGA_CATALOG } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
@@ -391,6 +401,68 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     }
     if (appOne?.[1] && request.method === "DELETE") {
       await deleteApp(env.DB, caller, parseAppId(appOne[1]));
+      return json({ deleted: true });
+    }
+    // Connection management (CON-01, issue #146): portable Integration
+    // definitions plus per-Organization non-secret mappings through one
+    // authorized boundary. Every response is scrubbed with the deployment
+    // secrets before send; views carry required-secret names only, never
+    // values. Secret values are never accepted on any path here (SEC-02
+    // tripwire stays shut). One explicit matcher per route.
+    if (url.pathname === "/api/integrations" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(scrubConnectionPayload({ integrations: describeIntegrations() }, env));
+    }
+    if (url.pathname === "/api/connections" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(scrubConnectionPayload({ connections: await listConnections(env.DB, caller) }, env));
+    }
+    if (url.pathname === "/api/connections" && request.method === "POST") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { integrationId?: unknown } & Record<string, unknown>;
+      if (typeof body.integrationId !== "string") {
+        throw new Fault(400, "UNKNOWN_INTEGRATION", "A Connection write needs an integrationId.");
+      }
+      const created = await createConnection(env.DB, caller, body.integrationId, {
+        config: body.config,
+        ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+      });
+      return json(scrubConnectionPayload({ connection: created }, env), 201);
+    }
+    const connTest = /^\/api\/connections\/([0-9a-f-]{36})\/test$/.exec(url.pathname);
+    if (connTest?.[1] && request.method === "POST") {
+      const tested = await testConnection(env.DB, caller, connTest[1], env);
+      if (!tested.ok) {
+        const code = tested.code;
+        const status =
+          code === "UNKNOWN_INTEGRATION" || code === "CONNECTION_NOT_FOUND" || code === "CONNECTION_DISABLED"
+            ? 404
+            : code === "INTEGRATION_REQUIREMENT_UNSATISFIED"
+              ? 424
+              : code === "SECRET_NOT_CONFIGURED"
+                ? 502
+                : 502;
+        return json(scrubConnectionPayload({ test: tested }, env), status);
+      }
+      return json(scrubConnectionPayload({ test: tested }, env));
+    }
+    const connOne = /^\/api\/connections\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (connOne?.[1] && request.method === "GET") {
+      return json(scrubConnectionPayload({ connection: await getConnection(env.DB, caller, connOne[1]) }, env));
+    }
+    if (connOne?.[1] && request.method === "PUT") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as Record<string, unknown>;
+      const updated = await updateConnection(env.DB, caller, connOne[1], {
+        ...(body.config === undefined ? {} : { config: body.config }),
+        ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+      });
+      return json(scrubConnectionPayload({ connection: updated }, env));
+    }
+    if (connOne?.[1] && request.method === "DELETE") {
+      await deleteConnection(env.DB, caller, connOne[1]);
       return json({ deleted: true });
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other

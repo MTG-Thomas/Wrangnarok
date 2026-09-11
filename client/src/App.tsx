@@ -2,6 +2,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Nav } from "./components/Nav";
 import { ApplicationDetailView, ApplicationsList } from "./pages/Applications";
+import { ConnectionsList } from "./pages/Connections";
 import { ExecutionDetailView } from "./pages/ExecutionDetail";
 import { ExecutionHistoryList } from "./pages/ExecutionHistory";
 import { SagasList } from "./pages/Sagas";
@@ -18,6 +19,7 @@ export function App(): React.JSX.Element {
           <Route path="/sagas" element={<SagasList />} />
           <Route path="/apps" element={<ApplicationsList />} />
           <Route path="/apps/:id" element={<ApplicationDetailView />} />
+          <Route path="/connections" element={<ConnectionsList />} />
           <Route path="*" element={<p>Not found. Try History.</p>} />
         </Routes>
       </main>
