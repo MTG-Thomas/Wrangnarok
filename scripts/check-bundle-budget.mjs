@@ -29,7 +29,13 @@ import { join } from "node:path";
 // batches) plus the SDK contract entries stacks on the AUTH-01 surface with
 // the same deliberate feature headroom, not dependency bloat: package.json
 // is unchanged versus main. Combined measures ~174 KiB.
-const BUDGET_BYTES = 180 * 1024;
+// 2026-09-11 (TRG-02, issue #138): 210 KiB. The endpoint/webhook Trigger
+// surface (src/endpoints.ts: key/HMAC verification, rate limits, challenge,
+// delivery protocol, operator management; 3 public plus 6 management routes
+// in src/index.ts) stacks on the TABLE-02 surface with the same deliberate
+// feature headroom, not dependency bloat: package.json is unchanged versus
+// main. Combined measures ~203 KiB.
+const BUDGET_BYTES = 210 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
