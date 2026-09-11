@@ -1,0 +1,31 @@
+# AUTH-01 lane scope (issue #142): Organization and user lifecycle.
+# Allowed: org lifecycle implementation, wiring, tests, docs.
+# Shared wiring files are listed explicitly. forms/, migration/, sdk/,
+# dev preview, skills, hooks belong to other lanes — revert those.
+src/orgs.ts
+src/access.ts
+src/auth.ts
+src/bindings.ts
+src/index.ts
+src/executions.ts
+src/domain.ts
+migrations/0006_org_membership.sql
+migrations/0005_org_membership.sql
+migrations/0007_executions_org_fk.sql
+migrations/0006_executions_org_fk.sql
+client/src/lib/orgs-client.ts
+client/src/pages/AdminOrgs.tsx
+client/src/App.tsx
+client/src/components/Nav.tsx
+docs/architecture/015-org-lifecycle.md
+docs/architecture/014-access-auth.md
+docs/lexicon.md
+test/org-lifecycle.test.ts
+test/org-ctx.test.ts
+test/access-auth.test.ts
+test/history.test.ts
+test/executions.test.ts
+scripts/wrangnarok.mjs
+scripts/check-bundle-budget.mjs
+wrangler.jsonc
+package.json
