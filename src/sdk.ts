@@ -95,6 +95,16 @@ export const SDK_ERROR_CODES = [
   "SYNC_CONFLICT",
   "INVALID_GIT_TARGET",
   "DEPLOY_BLOCKED",
+  "INVALID_ENDPOINT",
+  "ENDPOINT_EXISTS",
+  "ENDPOINT_UNAUTHORIZED",
+  "ENDPOINT_KEY_EXPIRED",
+  "ENDPOINT_DISABLED",
+  "ENDPOINT_EVENT_ID_REQUIRED",
+  "ENDPOINT_IDENTITY_FORBIDDEN",
+  "ENDPOINT_RATE_LIMITED",
+  "ENDPOINT_MISCONFIGURED",
+  "INVALID_CHALLENGE",
   "LOCAL_AUTH_NOT_CONFIGURED",
   "ACCESS_NOT_CONFIGURED",
   "SDK_CLIENT_MISMATCH",
@@ -938,6 +948,30 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/apps/:id/assets/*",
         description: "Serve one active-deployment file.",
       },
+      { method: "GET", path: "/api/endpoints", description: "Operator endpoint inventory (this Organization)." },
+      {
+        method: "POST",
+        path: "/api/endpoints",
+        description: "Create a scoped endpoint bound to a deployed Saga (raw credential returned once).",
+      },
+      { method: "GET", path: "/api/endpoints/:name", description: "Read one scoped endpoint summary." },
+      {
+        method: "PATCH",
+        path: "/api/endpoints/:name",
+        description: "Update endpoint policy (enabled, rateLimitPerMinute, keyExpiresAt).",
+      },
+      { method: "POST", path: "/api/endpoints/:name/rotate", description: "Rotate the endpoint credential." },
+      { method: "GET", path: "/api/endpoints/:name/events", description: "Delivery history for replay visibility." },
+      {
+        method: "POST",
+        path: "/api/endpoints/:name",
+        description: "Public credential-authenticated api-key delivery (X-Endpoint-Key or Bearer).",
+      },
+      {
+        method: "POST",
+        path: "/hooks/:name",
+        description: "Public HMAC-signed webhook delivery (X-Webhook-Signature; echo-param challenge supported).",
+      },
     ],
     errorCodes: [...SDK_ERROR_CODES],
     capabilities: [
@@ -968,6 +1002,12 @@ export function describeContract(): SdkContractDescriptor {
         status: "supported",
         detail:
           "No-registration local preview (POST /api/dev/preview): authoritative parse, no D1 writes, no dispatch; opt-in read-only environment check. Sync/Git/lock/deploy guidance lives in docs/dev-preview.md (DEV-02).",
+      },
+      {
+        name: "endpoint-triggers",
+        status: "supported",
+        detail:
+          "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 018): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
       },
       {
         name: "resource-management",

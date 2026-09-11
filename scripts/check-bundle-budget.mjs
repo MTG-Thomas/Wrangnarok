@@ -23,7 +23,13 @@ import { join } from "node:path";
 // fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
 // shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
 // 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 145 * 1024;
+// 2026-09-11 (TRG-02, issue #138): 175 KiB. The endpoint/webhook Trigger
+// surface (src/endpoints.ts: key/HMAC verification, rate limits, challenge,
+// delivery protocol, operator management; 3 public plus 6 management routes
+// in src/index.ts) measures ~170 KiB combined. Same deliberate feature
+// headroom as the 145 KiB raise, not dependency bloat: package.json is
+// unchanged versus main.
+const BUDGET_BYTES = 175 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

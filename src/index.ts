@@ -28,17 +28,39 @@ import {
   helloSaga,
   ninjaSaga,
   object,
+  parseCallerKey,
   parseDigestInput,
   parseHelloInput,
   parseHistoryQuery,
   parseInput,
-  parseKey,
   parseNinjaOrgsInput,
   parseSmokeInput,
   parseSubmission,
   smokeSaga,
 } from "./domain";
 import type { Principal, TerminateOutcome } from "./domain";
+import {
+  authenticateEndpointKey,
+  authenticateWebhook,
+  checkEndpointRateLimit,
+  createEndpoint,
+  endpointSummary,
+  executeEndpointDelivery,
+  findChallengeEndpoint,
+  listEndpointEvents,
+  listEndpoints,
+  loadEndpoint,
+  loadEndpointsByName,
+  parseEndpointName,
+  parseVendorEventId,
+  parseWebhookSecrets,
+  readWebhookBody,
+  resolveEndpointSagaId,
+  rotateEndpointCredential,
+  updateEndpoint,
+  vendorChallenge,
+} from "./endpoints";
+import type { EndpointRow } from "./endpoints";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import {
   canManageOrg,
@@ -65,7 +87,7 @@ import {
   type MemberUpdate,
   type OrgRole,
 } from "./orgs";
-import { SAGA_CATALOG } from "./sagas";
+import { SAGA_CATALOG, SAGA_DEFINITIONS } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import { scrubValueWithDeploymentSecrets } from "./secrets";
@@ -94,6 +116,90 @@ function requireJson(request: Request): void {
   )
     throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
 }
+/** Bearer token from the Authorization header, or null. Endpoint deliveries
+ * accept it as the api-key transport alongside X-Endpoint-Key. */
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("Authorization");
+  if (!header) return null;
+  const match = /^Bearer (.+)$/.exec(header);
+  return match?.[1] ?? null;
+}
+/** Public TRG-02 deliveries (issue #138, ADR 018): vendor-facing webhook and
+ * endpoint receivers. Authenticated by credential (per-endpoint key or HMAC
+ * secret), never by the operator session — so they run BEFORE the
+ * authenticated /api/* gate below. Name resolution is global by name (names
+ * are not secret); the credential disambiguates across Organizations. */
+async function handlePublicDelivery(request: Request, env: Bindings): Promise<Response | null> {
+  const url = new URL(request.url);
+  const delivery = /^\/(api\/endpoints|hooks)\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+  if (!delivery?.[1] || !delivery[2] || request.method !== "POST") return null;
+  const expected = delivery[1] === "api/endpoints" ? "api-key" : "webhook";
+  const name = parseEndpointName(delivery[2]);
+  // Query strings stay deny-by-default here except the vendor challenge
+  // handshake (?challenge=<token> on echo-param webhook endpoints). Any
+  // other query answers UNSUPPORTED_QUERY like the rest of the API.
+  const queryKeys = [...url.searchParams.keys()];
+  if (queryKeys.some((entry) => entry !== "challenge")) {
+    throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+  }
+  const rows = await loadEndpointsByName(env.DB, name).catch(() => [] as EndpointRow[]);
+  if (rows.length === 0) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+  const challengeRow = findChallengeEndpoint(rows.filter((row) => row.kind === "webhook"));
+  const challenge = challengeRow ? vendorChallenge(challengeRow, url) : null;
+  if (challenge !== null) {
+    return new Response(challenge, {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+  if (url.search) {
+    throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+  }
+  // Read the wire body exactly once: api-key deliveries parse it as JSON;
+  // webhook deliveries keep the raw bytes for HMAC and parse from them.
+  if (
+    request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+    request.headers.has("Content-Encoding")
+  )
+    throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+  const { raw, parsed } = await readWebhookBody(request.body);
+  const headers = request.headers;
+  const secrets = parseWebhookSecrets(env.ENDPOINT_WEBHOOK_SECRETS);
+  const authed =
+    expected === "api-key"
+      ? await authenticateEndpointKey(
+          rows.filter((row) => row.kind === "api-key"),
+          request.headers.get("X-Endpoint-Key") ?? bearerToken(request),
+        )
+      : await authenticateWebhook(
+          rows.filter((row) => row.kind === "webhook"),
+          raw,
+          headers.get("X-Webhook-Signature"),
+          secrets,
+        );
+  await checkEndpointRateLimit(env.DB, authed.endpoint);
+  const eventId = parseVendorEventId(headers, parsed);
+  resolveEndpointSagaId(authed.endpoint, SAGA_CATALOG);
+  const saga = SAGA_DEFINITIONS.find((entry) => entry.id === authed.endpoint.saga_id);
+  if (!saga) throw new Fault(500, "ENDPOINT_MISCONFIGURED", "This endpoint is not configured correctly.");
+  const accepted = await executeEndpointDelivery(env.DB, submit, env, authed.principal, authed.endpoint, {
+    saga: { id: saga.id, name: saga.name, revision: saga.revision, description: saga.description, parse: saga.parse },
+    eventId,
+    payload: parsed,
+  });
+  const responseHeaders: Record<string, string> = { Location: accepted.statusUrl };
+  if (accepted.eventReplayed) responseHeaders["X-Endpoint-Replayed"] = "true";
+  return json(
+    {
+      executionId: accepted.executionId,
+      replayed: accepted.replayed,
+      eventReplayed: accepted.eventReplayed,
+      statusUrl: accepted.statusUrl,
+    },
+    accepted.replayed ? 200 : 202,
+    responseHeaders,
+  );
+}
 export default {
   async fetch(request: Request, env: Bindings): Promise<Response> {
     const started = Date.now();
@@ -113,10 +219,32 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   // Single-Worker full-stack app (ADR 008): the browser UI ships as Static
   // Assets and needs no auth; only /api/* is authenticated JSON.
   if (!url.pathname.startsWith("/api/")) {
+    // Public vendor receivers live outside /api/* precisely so they do not
+    // require the operator session (ADR 018): /hooks/:name for webhooks.
+    if (url.pathname.startsWith("/hooks/")) {
+      try {
+        const delivered = await handlePublicDelivery(request, env);
+        if (delivered) return delivered;
+      } catch (error) {
+        const fault =
+          error instanceof Fault ? error : new Fault(500, "INTERNAL_ERROR", "The request could not be completed.");
+        return json({ error: { code: fault.code, message: fault.message } }, fault.status);
+      }
+    }
     if (env.ASSETS) return env.ASSETS.fetch(request);
     return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
   }
   try {
+    // Public credential-authenticated endpoint deliveries share the /api/*
+    // prefix (POST /api/endpoints/:name) but carry no operator session, so
+    // they run after the public /hooks/* path but before the membership
+    // gate below: vendor credentials, never the operator session.
+    const apiDelivery = /^\/api\/endpoints\/[a-z0-9][a-z0-9-]{0,63}$/.exec(url.pathname);
+    if (apiDelivery && request.method === "POST") {
+      const delivered = await handlePublicDelivery(request, env);
+      if (delivered) return delivered;
+      return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+    }
     const identity = await authenticate(request, env);
     // AUTH-01 membership gate (ADR 015): every /api/* request resolves the
     // caller against D1. The effective org is the path target for org admin
@@ -168,7 +296,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // like every other /api/* route; drift is pinned by test/sdk.test.ts.
       return json(describeContract());
     if (url.pathname === "/api/executions" && request.method === "POST") {
-      const key = parseKey(request.headers.get("Idempotency-Key"));
+      const key = parseCallerKey(request.headers.get("Idempotency-Key"));
       if (
         request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
         request.headers.has("Content-Encoding")
@@ -210,7 +338,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // provider, or publication behavior lives here.
       const name = formSubmit[1];
       if (!FORM_NAME.test(name)) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
-      const key = parseKey(request.headers.get("Idempotency-Key"));
+      const key = parseCallerKey(request.headers.get("Idempotency-Key"));
       if (
         request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
         request.headers.has("Content-Encoding")
@@ -453,6 +581,99 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (appOne?.[1] && request.method === "DELETE") {
       await deleteApp(env.DB, caller, parseAppId(appOne[1]));
       return json({ deleted: true });
+    }
+    // TRG-02 endpoint management (issue #138, ADR 018): operator-owned
+    // inventory over this Organization's scoped endpoints. Create returns
+    // the raw credential once (apiKey, or webhookSecret to plant in the
+    // deployment secret store); summaries never carry digests or secrets.
+    // Bad names answer 404 (never a leak); foreign-Organization rows 404.
+    if (url.pathname === "/api/endpoints" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ endpoints: await listEndpoints(env.DB, caller.orgId).catch(() => []) });
+    }
+    if (url.pathname === "/api/endpoints" && request.method === "POST") {
+      requireJson(request);
+      const body = await boundedJson(request.body);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(400, "INVALID_ENDPOINT", "Provide name, sagaId, and kind.");
+      }
+      const record = body as Record<string, unknown>;
+      if (typeof record.name === "string") parseEndpointName(record.name);
+      const created = await createEndpoint(
+        env.DB,
+        caller.orgId,
+        {
+          name: typeof record.name === "string" ? record.name : "",
+          sagaId: typeof record.sagaId === "string" ? record.sagaId : "",
+          kind: record.kind as "api-key" | "webhook",
+          ...(record.rateLimitPerMinute === undefined
+            ? {}
+            : { rateLimitPerMinute: record.rateLimitPerMinute as number | null }),
+          ...(record.challenge === undefined ? {} : { challenge: record.challenge as "none" | "echo-param" }),
+          ...(record.keyExpiresAt === undefined ? {} : { keyExpiresAt: record.keyExpiresAt as string | null }),
+        },
+        SAGA_CATALOG.map((entry) => entry.id),
+      );
+      return json(
+        {
+          endpoint: endpointSummary(created.row),
+          ...(created.row.kind === "api-key"
+            ? { apiKey: created.rawCredential }
+            : { webhookSecret: created.rawCredential }),
+        },
+        201,
+      );
+    }
+    const endpointEvents = /^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})\/events$/.exec(url.pathname);
+    // Unknown name shapes (uppercase, dots, slashes beyond one segment)
+    // answer 404 like parseEndpointName does — never UNIMPLEMENTED theater.
+    if (
+      /^\/api\/endpoints\/[^/]+(\/[^/]+)?$/.exec(url.pathname) &&
+      !endpointEvents &&
+      !/^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})\/rotate$/.exec(url.pathname) &&
+      !/^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname)
+    ) {
+      return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+    }
+    if (endpointEvents?.[1] && request.method === "GET") {
+      const name = parseEndpointName(endpointEvents[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ events: await listEndpointEvents(env.DB, caller.orgId, name, 50).catch(() => []) });
+    }
+    const endpointRotate = /^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})\/rotate$/.exec(url.pathname);
+    if (endpointRotate?.[1] && request.method === "POST") {
+      const name = parseEndpointName(endpointRotate[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const rotated = await rotateEndpointCredential(env.DB, caller.orgId, name).catch(() => null);
+      if (!rotated) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json({
+        endpoint: endpointSummary(rotated.row),
+        ...(rotated.row.kind === "api-key"
+          ? { apiKey: rotated.rawCredential }
+          : { webhookSecret: rotated.rawCredential }),
+      });
+    }
+    const endpointOne = /^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (endpointOne?.[1] && (request.method === "GET" || request.method === "PATCH")) {
+      const name = parseEndpointName(endpointOne[1]);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const row = await loadEndpoint(env.DB, caller.orgId, name).catch(() => null);
+      if (!row) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      if (request.method === "GET") return json({ endpoint: endpointSummary(row) });
+      requireJson(request);
+      const body = await boundedJson(request.body);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(400, "INVALID_ENDPOINT", "Provide enabled, rateLimitPerMinute, or keyExpiresAt.");
+      }
+      const record = body as Record<string, unknown>;
+      const updated = await updateEndpoint(env.DB, caller.orgId, name, {
+        ...(record.enabled === undefined ? {} : { enabled: record.enabled as boolean }),
+        ...(record.rateLimitPerMinute === undefined
+          ? {}
+          : { rateLimitPerMinute: record.rateLimitPerMinute as number | null }),
+        ...(record.keyExpiresAt === undefined ? {} : { keyExpiresAt: record.keyExpiresAt as string | null }),
+      });
+      return json({ endpoint: endpointSummary(updated) });
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).
