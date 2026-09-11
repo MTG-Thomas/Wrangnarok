@@ -17,6 +17,7 @@ import {
 } from "../domain";
 import type { DigestResult, EchoInput, ExecutionParams, NinjaOrgsResult, SafeError } from "../domain";
 import { defineSaga, withOperation } from "../saga";
+import { scrubExecutionError, scrubExecutionValue } from "../secrets";
 import { beginOperation, failExecution, finishOperation, prepareExecution, resolveConnection } from "../executions";
 import { executeSaga } from "./shared";
 
@@ -81,11 +82,11 @@ export const digestSagaDef = defineSaga<DigestResult>({
         // this step never branches on credentials.
         let result: NinjaOrgsResult;
         try {
-          result = await ctx.integrations.ninjaone.listOrganizations(connection, ctx.secrets);
+          result = await ctx.integrations.ninjaone.listOrganizations(connection, ctx.secrets, id);
         } catch (error) {
           const safe =
             error instanceof Fault
-              ? { code: error.code, message: error.message }
+              ? scrubExecutionError({ code: error.code, message: error.message }, id)
               : { code: "NINJA_INTEGRATION_FAILED", message: "The NinjaOne Integration could not complete." };
           return { ok: false as const, error: safe };
         }
@@ -98,7 +99,7 @@ export const digestSagaDef = defineSaga<DigestResult>({
         if (timedOut) {
           // Explicit timeout step, same posture as the echo leg: a slow
           // NinjaOne vendor surfaces TimedOut, never an inferred failure.
-          const failure: SafeError = orgs.error;
+          const failure: SafeError = scrubExecutionError(orgs.error, id);
           await step.do("timeout-mark-v1", () => failExecution(ctx.db, id, failure, "TimedOut"));
         }
         throw new NonRetryableError(orgs.error.code);
@@ -133,7 +134,7 @@ export const digestSagaDef = defineSaga<DigestResult>({
         } catch (error) {
           const safe =
             error instanceof Fault
-              ? { code: error.code, message: error.message }
+              ? scrubExecutionError({ code: error.code, message: error.message }, id)
               : { code: "ECHO_INTEGRATION_FAILED", message: "The echo Integration could not complete." };
           return { ok: false as const, error: safe };
         }
@@ -144,7 +145,7 @@ export const digestSagaDef = defineSaga<DigestResult>({
         expectedFailure = echoed.error;
         timedOut = echoed.error.code === "ECHO_VENDOR_TIMEOUT";
         if (timedOut) {
-          const failure: SafeError = echoed.error;
+          const failure: SafeError = scrubExecutionError(echoed.error, id);
           await step.do("timeout-mark-v1", () => failExecution(ctx.db, id, failure, "TimedOut"));
         }
         throw new NonRetryableError(echoed.error.code);
@@ -158,15 +159,16 @@ export const digestSagaDef = defineSaga<DigestResult>({
           .prepare(
             "UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'",
           )
-          .bind(new Date().toISOString(), JSON.stringify(output), id)
+          .bind(new Date().toISOString(), JSON.stringify(scrubExecutionValue(output, id)), id)
           .run();
       });
       return output;
     } catch {
-      const safe: SafeError = expectedFailure ?? {
+      const raw: SafeError = expectedFailure ?? {
         code: "EXECUTION_FAILED",
         message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
+      const safe: SafeError = scrubExecutionError(raw, id);
       if (!timedOut) {
         await step.do("persist-failure-v1", () => failExecution(ctx.db, id, safe));
       }

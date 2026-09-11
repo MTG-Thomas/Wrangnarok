@@ -8,6 +8,7 @@ import type { Bindings } from "../bindings";
 import { EXECUTION_ID, parseSmokeInput, smokeSaga } from "../domain";
 import type { ExecutionParams, SafeError, SmokeResult } from "../domain";
 import { defineSaga } from "../saga";
+import { getExecutionSecrets, scrubExecutionError, scrubExecutionValue } from "../secrets";
 import { beginOperation, failExecution, finishOperation, prepareExecution } from "../executions";
 import { buildUsage, logUsage, persistUsage } from "../usage";
 import { executeSaga } from "./shared";
@@ -120,7 +121,7 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
           .prepare(
             "UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'",
           )
-          .bind(new Date().toISOString(), JSON.stringify(output), id)
+          .bind(new Date().toISOString(), JSON.stringify(scrubExecutionValue(output, id)), id)
           .run();
         const count = await ctx.db
           .prepare("SELECT COUNT(*) AS n FROM operations WHERE execution_id=?")
@@ -138,15 +139,16 @@ export const smokeSagaDef = defineSaga<SmokeResult>({
           stepsExecuted: 4,
           durationMs: Date.now() - prepared.startedMs,
         });
-        logUsage(usage);
-        await persistUsage(ctx.db, id, usage);
+        logUsage(usage, getExecutionSecrets(id));
+        await persistUsage(ctx.db, id, usage, getExecutionSecrets(id));
       });
       return output;
     } catch {
-      const safe: SafeError = expectedFailure ?? {
+      const raw: SafeError = expectedFailure ?? {
         code: "EXECUTION_FAILED",
         message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
+      const safe: SafeError = scrubExecutionError(raw, id);
       await step.do("persist-failure-v1", () => failExecution(ctx.db, id, safe));
       throw new NonRetryableError(safe.code);
     }

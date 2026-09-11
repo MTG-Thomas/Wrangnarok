@@ -39,7 +39,7 @@ export interface EchoIntegrationHandle {
   echo(connection: EchoConnection, input: EchoInput, operationId: string): Promise<EchoInput>;
 }
 export interface NinjaOneIntegrationHandle {
-  listOrganizations(connection: NinjaConnection, secrets: NinjaSecrets): Promise<NinjaOrgsResult>;
+  listOrganizations(connection: NinjaConnection, secrets: NinjaSecrets, executionId?: string): Promise<NinjaOrgsResult>;
 }
 export interface SagaIntegrations {
   readonly echo: EchoIntegrationHandle;

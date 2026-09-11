@@ -8,6 +8,7 @@ import type { Bindings } from "../bindings";
 import { echoSaga, ECHO_INTEGRATION_ID, EXECUTION_ID, Fault, parseInput } from "../domain";
 import type { EchoInput, ExecutionParams, SafeError } from "../domain";
 import { defineSaga, withOperation } from "../saga";
+import { scrubExecutionError, scrubExecutionValue } from "../secrets";
 import { beginOperation, failExecution, finishOperation, prepareExecution, resolveConnection } from "../executions";
 import { executeSaga } from "./shared";
 
@@ -65,9 +66,11 @@ export const echoSagaDef = defineSaga<EchoInput>({
         try {
           result = await ctx.integrations.echo.echo(connection, prepared.input, `${id}-${stepOrg.operationId}`);
         } catch (error) {
+          // Raw echo transport errors map to the generic failure; Fault text is
+          // fixed-shape and scrubbed against this Execution's registry.
           const safe =
             error instanceof Fault
-              ? { code: error.code, message: error.message }
+              ? scrubExecutionError({ code: error.code, message: error.message }, id)
               : { code: "ECHO_INTEGRATION_FAILED", message: "The echo Integration could not complete." };
           return { ok: false as const, error: safe };
         }
@@ -82,7 +85,7 @@ export const echoSagaDef = defineSaga<EchoInput>({
           // deadline fired inside echo-http-v1; nothing here is inferred from
           // native Workflow introspection. The shared catch below skips its
           // Failed checkpoint once this marker has persisted.
-          const failure: SafeError = outcome.error;
+          const failure: SafeError = scrubExecutionError(outcome.error, id);
           await step.do("timeout-mark-v1", () => failExecution(ctx.db, id, failure, "TimedOut"));
         }
         throw new NonRetryableError(expectedFailure.code);
@@ -96,16 +99,17 @@ export const echoSagaDef = defineSaga<EchoInput>({
           .prepare(
             "UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'",
           )
-          .bind(new Date().toISOString(), JSON.stringify(output), id)
+          .bind(new Date().toISOString(), JSON.stringify(scrubExecutionValue(output, id)), id)
           .run();
       });
       return output;
     } catch {
       // Expected failures are serialized step results, not Error subclasses transported by Workflows.
-      const safe: SafeError = expectedFailure ?? {
+      const raw: SafeError = expectedFailure ?? {
         code: "EXECUTION_FAILED",
         message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
+      const safe: SafeError = scrubExecutionError(raw, id);
       if (!timedOut) {
         await step.do("persist-failure-v1", () => failExecution(ctx.db, id, safe));
       }

@@ -24,6 +24,7 @@
 // stay in agreement with the static code Catalog.
 import { digestSaga, echoSaga, Fault, hash, helloSaga, ninjaSaga, object, smokeSaga, UUID } from "./domain";
 import { integrationById } from "./integrations";
+import { scrubTextWithSecrets } from "./secrets";
 
 interface CatalogSaga {
   readonly id: string;
@@ -374,9 +375,12 @@ export async function installBundle(db: D1Database, raw: unknown, opts: InstallO
         409,
       );
     } else if (!current.managed_by.startsWith(`${bundleId}@`)) {
+      // Portable install record: scrub caller-supplied secrets before the
+      // marker text leaves (defense-in-depth; markers are IDs, not secrets).
+      const marker = scrubTextWithSecrets(current.managed_by, Object.values(secrets));
       throw invalid(
         "INSTALL_CONFLICT",
-        `Connection is managed by a different bundle (${current.managed_by}): hijack by reinstall is refused.`,
+        `Connection is managed by a different bundle (${marker}): hijack by reinstall is refused.`,
         409,
       );
     } else if (current.endpoint === conn.endpoint) {
@@ -459,6 +463,8 @@ export async function updateConnectionEndpoint(
     .first<{ managed_by: string | null }>();
   if (!row) throw invalid("CONNECTION_NOT_FOUND", "No Connection exists for this Organization and Integration.", 404);
   if (row.managed_by !== null) {
+    // Marker is a bundle ID, not a secret: no secret list exists on this
+    // path, so the scrub is a no-op pin keeping exports secret-free.
     throw invalid(
       "MANAGED_RESOURCE",
       `Connection is managed by bundle install ${row.managed_by}: live mutation outside install is rejected.`,

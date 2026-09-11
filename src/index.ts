@@ -4,6 +4,7 @@ import type { Bindings } from "./bindings";
 import { boundedJson, canTransition, Fault, parseHistoryQuery, parseKey, parseSubmission } from "./domain";
 import { SAGA_CATALOG } from "./sagas";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
+import { scrubValueWithDeploymentSecrets } from "./secrets";
 import { logRequest } from "./usage";
 export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
@@ -129,21 +130,26 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       } catch {
         /* Unavailable or expired, not proof of failure. */
       }
-      return json({
-        ...summary(row),
-        runtimeStatus,
-        input: JSON.parse(row.input_json),
-        result: row.result_json ? JSON.parse(row.result_json) : null,
-        error: row.error_json ? JSON.parse(row.error_json) : null,
-        operations: operations.results.map((op) => ({
-          name: op.name,
-          status: op.status,
-          startedAt: op.started_at,
-          completedAt: op.completed_at,
-          result: op.result_json ? JSON.parse(op.result_json) : null,
-          error: op.error_json ? JSON.parse(op.error_json) : null,
-        })),
-      });
+      return json(
+        scrubValueWithDeploymentSecrets(
+          {
+            ...summary(row),
+            runtimeStatus,
+            input: JSON.parse(row.input_json),
+            result: row.result_json ? JSON.parse(row.result_json) : null,
+            error: row.error_json ? JSON.parse(row.error_json) : null,
+            operations: operations.results.map((op) => ({
+              name: op.name,
+              status: op.status,
+              startedAt: op.started_at,
+              completedAt: op.completed_at,
+              result: op.result_json ? JSON.parse(op.result_json) : null,
+              error: op.error_json ? JSON.parse(op.error_json) : null,
+            })),
+          },
+          env,
+        ),
+      );
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).
@@ -157,6 +163,9 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const headers: Record<string, string> = {};
     if (fault.status === 401) headers["WWW-Authenticate"] = "Bearer";
     if (fault.status === 503) headers["Retry-After"] = "5";
-    return json({ error: { code: fault.code, message: fault.message } }, fault.status, headers);
+    // Outward error path: a secret substring embedded in a Fault message
+    // (caller input echoed back, miswired env text) is replaced before send.
+    const body = scrubValueWithDeploymentSecrets({ error: { code: fault.code, message: fault.message } }, env);
+    return json(body, fault.status, headers);
   }
 }
