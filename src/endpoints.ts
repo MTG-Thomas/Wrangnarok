@@ -702,7 +702,7 @@ export async function executeEndpointDelivery(
   } catch (error) {
     if (error instanceof Fault) throw error;
     // endpoint_events is replay visibility only: a missing table (old DB
-    // before migration 0009) must not fail the Execution itself.
+    // before migration 0021) must not fail the Execution itself.
   }
   return { ...accepted, eventReplayed };
 }

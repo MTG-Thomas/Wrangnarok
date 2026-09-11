@@ -18,9 +18,14 @@ import type {
   ArtifactFormat,
   ArtifactsResponse,
   ArtifactSummary,
+  ConnectionsResponse,
+  ConnectionSummary,
+  ConnectionTestResponse,
   ExecutionDetail,
   ExecutionHistoryResponse,
   ExecutionStatus,
+  IntegrationsResponse,
+  IntegrationSummary,
   SagasResponse,
   SagaSummary,
 } from "./client-types";
@@ -316,6 +321,21 @@ function isArtifactSummary(value: unknown): value is ArtifactSummary {
   );
 }
 
+const INTEGRATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isIntegrationSummary(value: unknown): value is IntegrationSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["id"] === "string" &&
+    typeof v["name"] === "string" &&
+    typeof v["description"] === "string" &&
+    Array.isArray(v["secretFields"]) &&
+    Array.isArray(v["configSchema"]) &&
+    Array.isArray(v["requiredSecrets"])
+  );
+}
+
 function isArtifactDetail(value: unknown): value is ArtifactDetail {
   if (!isArtifactSummary(value)) return false;
   const v = value as unknown as Record<string, unknown>;
@@ -359,4 +379,97 @@ export async function listArtifactFormats(): Promise<ArtifactFormat[]> {
   const formats = (data as { formats?: unknown }).formats;
   if (!Array.isArray(formats)) throw new Error("Unexpected formats response shape.");
   return formats as ArtifactFormat[];
+}
+
+function isConnectionSummary(value: unknown): value is ConnectionSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["id"] === "string" &&
+    typeof v["integrationId"] === "string" &&
+    typeof v["integrationName"] === "string" &&
+    typeof v["orgId"] === "string" &&
+    (v["displayName"] === null || typeof v["displayName"] === "string") &&
+    typeof v["endpoint"] === "string" &&
+    typeof v["enabled"] === "boolean" &&
+    (v["managedBy"] === null || typeof v["managedBy"] === "string") &&
+    (v["ownerKind"] === "managed" || v["ownerKind"] === "loose") &&
+    Array.isArray(v["secretsRequired"])
+  );
+}
+
+/** GET /api/integrations — portable definitions (no org state, no secrets). */
+export async function listIntegrations(): Promise<IntegrationsResponse> {
+  const data = await get("/api/integrations");
+  if (typeof data !== "object" || data === null || !Array.isArray((data as { integrations?: unknown }).integrations)) {
+    throw new Error("Unexpected integrations response shape.");
+  }
+  const integrations = (data as { integrations: unknown[] }).integrations;
+  if (!integrations.every(isIntegrationSummary)) throw new Error("Unexpected integrations response shape.");
+  return { integrations };
+}
+
+/** GET /api/connections — this Organization's mappings (no secret values). */
+export async function listConnections(): Promise<ConnectionsResponse> {
+  const data = await get("/api/connections");
+  if (typeof data !== "object" || data === null || !Array.isArray((data as { connections?: unknown }).connections)) {
+    throw new Error("Unexpected connections response shape.");
+  }
+  const connections = (data as { connections: unknown[] }).connections;
+  if (!connections.every(isConnectionSummary)) throw new Error("Unexpected connections response shape.");
+  return { connections };
+}
+
+export interface ConnectionWrite {
+  integrationId: string;
+  config: Record<string, string>;
+  displayName?: string | null;
+  enabled?: boolean;
+}
+
+/** POST /api/connections — create a loose mapping (non-secret config only). */
+export async function createConnection(write: ConnectionWrite): Promise<ConnectionSummary> {
+  if (!INTEGRATION_ID.test(write.integrationId)) throw new Error("Unexpected Integration ID shape.");
+  const data = await postJson("/api/connections", {
+    integrationId: write.integrationId,
+    config: write.config,
+    ...(write.displayName === undefined ? {} : { displayName: write.displayName }),
+    ...(write.enabled === undefined ? {} : { enabled: write.enabled }),
+  });
+  const connection = (data as { connection?: unknown }).connection;
+  if (!isConnectionSummary(connection)) throw new Error("Unexpected connection response shape.");
+  return connection;
+}
+
+/** PUT /api/connections/:id — update a loose mapping (managed rows refuse). */
+export async function updateConnection(
+  integrationId: string,
+  patch: { config?: Record<string, string>; displayName?: string | null; enabled?: boolean },
+): Promise<ConnectionSummary> {
+  if (!INTEGRATION_ID.test(integrationId)) throw new Error("Unexpected Integration ID shape.");
+  const data = await putJson(`/api/connections/${integrationId}`, patch);
+  const connection = (data as { connection?: unknown }).connection;
+  if (!isConnectionSummary(connection)) throw new Error("Unexpected connection response shape.");
+  return connection;
+}
+
+/** DELETE /api/connections/:id — delete a loose mapping. */
+export async function deleteConnection(integrationId: string): Promise<void> {
+  if (!INTEGRATION_ID.test(integrationId)) throw new Error("Unexpected Integration ID shape.");
+  const token = getToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(`/api/connections/${integrationId}`, { method: "DELETE", headers });
+  if (!response.ok) throw await parseApiError(response);
+}
+
+/** POST /api/connections/:id/test — read-only connectivity test. */
+export async function testConnection(integrationId: string): Promise<ConnectionTestResponse> {
+  if (!INTEGRATION_ID.test(integrationId)) throw new Error("Unexpected Integration ID shape.");
+  const data = await postJson(`/api/connections/${integrationId}/test`, {});
+  const test = (data as { test?: unknown }).test;
+  if (typeof test !== "object" || test === null || typeof (test as { ok?: unknown }).ok !== "boolean") {
+    throw new Error("Unexpected connection test response shape.");
+  }
+  return { test: test as ConnectionTestResponse["test"] };
 }
