@@ -8,3 +8,8 @@ worker-configuration.d.ts
 scripts/seed-local.override.sql
 .env
 .env.*
+ 
+# Third-party skills installed via npx skills add 
+.agents/ 
+.claude/ 
+skills-lock.json

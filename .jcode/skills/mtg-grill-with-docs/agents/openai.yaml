@@ -1,0 +1,4 @@
+interface:
+  display_name: "MTG Grill With Docs"
+  short_description: "Clarify plans into durable docs"
+  default_prompt: "Use $mtg-grill-with-docs to challenge this plan and capture the durable context."
