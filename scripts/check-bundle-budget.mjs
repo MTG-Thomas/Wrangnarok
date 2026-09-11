@@ -36,11 +36,12 @@ import { join } from "node:path";
 // feature headroom, not dependency bloat: package.json is unchanged versus
 // main. Combined measures ~203 KiB.
 // 2026-09-11 (FILE-02 stacked over AUTH-01 + TABLE-02 + TRG-02, issue #158):
-// 225 KiB. The generated-artifacts surface (19 routes plus the artifacts
+// 245 KiB. The generated-artifacts surface (19 routes plus the artifacts
 // domain: versioning, attachment bindings, retention cleanup, R2 byte
 // serving) stacks with the same deliberate feature headroom, not dependency
-// bloat: package.json is unchanged versus main. Combined measures ~218 KiB.
-const BUDGET_BYTES = 225 * 1024;
+// bloat: package.json is unchanged versus main. Combined measures ~233 KiB
+// on CI (local dry-run measured lower; the CI number governs).
+const BUDGET_BYTES = 245 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
