@@ -85,6 +85,10 @@ node scripts/wrangnarok.mjs detail --id <64-hex> --wait
 node scripts/wrangnarok.mjs diagnose --id <64-hex>
 node scripts/wrangnarok.mjs history --status Failed,TimedOut --limit 20 --all
 node scripts/wrangnarok.mjs cancel --id <64-hex>
+node scripts/wrangnarok.mjs audit --action app. --outcome success --all
+node scripts/wrangnarok.mjs notifications
+node scripts/wrangnarok.mjs notification --id <uuid>
+node scripts/wrangnarok.mjs dismiss-notification --id <uuid>
 node scripts/wrangnarok.mjs contract
 node scripts/wrangnarok.mjs selftest   # offline stub-fetch checks, no network
 ```

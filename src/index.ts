@@ -39,10 +39,21 @@ import {
 } from "./domain";
 import type { TerminateOutcome } from "./domain";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
+import {
+  createNotification,
+  dismissNotification,
+  listAudit,
+  listNotifications,
+  parseAuditQuery,
+  parseNotificationId,
+  parseNotificationLimit,
+  recordAudit,
+  visibleNotification,
+} from "./ops";
 import { SAGA_CATALOG } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
-import { scrubValueWithDeploymentSecrets } from "./secrets";
+import { deploymentSecretsFromEnv, scrubValueWithDeploymentSecrets } from "./secrets";
 import { logRequest } from "./usage";
 export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
@@ -92,10 +103,14 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   }
   try {
     const caller = await authenticate(request, env);
-    // Query strings are deny-by-default: only the history list route takes
-    // them, and only its allowlisted keys (anything else is UNSUPPORTED_QUERY).
-    const historyList = url.pathname === "/api/executions" && request.method === "GET";
-    if (url.search && !historyList)
+    // Query strings are deny-by-default: the history list, audit list, and
+    // notifications list routes take them, each with only its own
+    // allowlisted keys (anything else is UNSUPPORTED_QUERY).
+    const queryList =
+      (url.pathname === "/api/executions" && request.method === "GET") ||
+      (url.pathname === "/api/audit" && request.method === "GET") ||
+      (url.pathname === "/api/notifications" && request.method === "GET");
+    if (url.search && !queryList)
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (url.pathname === "/api/sagas" && request.method === "GET")
       // Static Git-owned Catalog (ADR 002): discovery metadata only.
@@ -269,6 +284,17 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         (terminateOutcome === "not-found" && priorStatus === "Pending" && priorDispatched === 0)
       ) {
         await cancelExecution(env.DB, row.id);
+        // OPS-01 audit: owner cancellation confirmed (best-effort; a failed
+        // insert never fails the cancel itself).
+        await recordAudit(
+          env.DB,
+          caller,
+          "execution.cancel",
+          { type: "execution", id: row.id },
+          "success",
+          { sagaId: row.saga_id },
+          deploymentSecretsFromEnv(env),
+        );
         return json({ executionId: row.id, status: "Cancelled", cancelled: true });
       }
       // Ambiguous: a dispatched row whose native instance vanished, or any
@@ -279,6 +305,17 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       await env.DB.prepare("UPDATE executions SET status=? WHERE id=? AND status='Cancelling'")
         .bind(priorStatus, row.id)
         .run();
+      // OPS-01 audit: the cancel was requested but never confirmed (failure
+      // outcome, retry-safe — the same record as the 503 below).
+      await recordAudit(
+        env.DB,
+        caller,
+        "execution.cancel_unconfirmed",
+        { type: "execution", id: row.id },
+        "failure",
+        { outcome: terminateOutcome },
+        deploymentSecretsFromEnv(env),
+      );
       throw new Fault(
         503,
         "CANCELLATION_UNCONFIRMED",
@@ -341,14 +378,113 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (url.pathname === "/api/apps" && request.method === "POST") {
       requireJson(request);
       const { name, slug } = parseAppBody(await boundedJson(request.body));
-      return json({ app: await createApp(env.DB, caller, name, slug) }, 201);
+      try {
+        const app = await createApp(env.DB, caller, name, slug);
+        // OPS-01 audit: app lifecycle emission (best-effort; never fails the mutation).
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.create",
+          { type: "app", id: app.id },
+          "success",
+          { slug: app.slug },
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ app }, 201);
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            "app.create",
+            { type: "app" },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
     }
     const appBuilds = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
     if (appBuilds?.[1] && (request.method === "GET" || request.method === "POST")) {
       const id = parseAppId(appBuilds[1]);
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       if (request.method === "GET") return json({ jobs: await listJobs(env.DB, caller, id) });
-      return json({ job: await startBuild(env.DB, caller, id) }, 202);
+      // OPS-01: the validated build runs inside startBuild; on success the
+      // route records app.build.start/app.build.complete audit events and
+      // emits a terminal personal notification linked to the job (the one
+      // long-running operation this product has). A denied or
+      // unvalidatable build records the failure audit and emits nothing.
+      try {
+        const job = await startBuild(env.DB, caller, id);
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.build.start",
+          { type: "app", id },
+          "success",
+          { jobId: job.id, revision: job.revision },
+          deploymentSecretsFromEnv(env),
+        );
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.build.complete",
+          { type: "app", id },
+          job.status === "succeeded" ? "success" : "failure",
+          { jobId: job.id, revision: job.revision },
+          deploymentSecretsFromEnv(env),
+        );
+        const terminal = job.status === "succeeded" ? "completed" : "failed";
+        // Best-effort like audit: a notification-table failure must not fail
+        // a build that already succeeded. The response carries the row when
+        // stored, null when the table is unavailable.
+        let notification: unknown = null;
+        try {
+          notification = await createNotification(
+            env.DB,
+            caller,
+            {
+              scope: "personal",
+              category: "app_build",
+              title: job.status === "succeeded" ? "App build succeeded" : "App build failed",
+              status: terminal,
+              detail: { appId: id, jobId: job.id, revision: job.revision },
+              dedupKey: `app-build:${job.id}`,
+            },
+            deploymentSecretsFromEnv(env),
+          );
+        } catch {
+          console.warn(`WRANGNAROK_NOTIFICATION_SKIPPED app-build:${job.id}`);
+        }
+        return json({ job, notification }, 202);
+      } catch (error) {
+        if (error instanceof Fault) {
+          if (error.code === "MANAGED_RESOURCE") {
+            await recordAudit(
+              env.DB,
+              caller,
+              "app.managed_deny",
+              { type: "app", id },
+              "failure",
+              { code: error.code },
+              deploymentSecretsFromEnv(env),
+            );
+          } else {
+            await recordAudit(
+              env.DB,
+              caller,
+              "app.build.start",
+              { type: "app", id },
+              "failure",
+              { code: error.code },
+              deploymentSecretsFromEnv(env),
+            );
+          }
+        }
+        throw error;
+      }
     }
     const appJob = /^\/api\/apps\/([0-9a-f-]{36})\/builds\/([0-9a-f-]{36})$/.exec(url.pathname);
     if (appJob?.[1] && appJob[2] && request.method === "GET") {
@@ -361,16 +497,65 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const appSource = /^\/api\/apps\/([0-9a-f-]{36})\/source$/.exec(url.pathname);
     if (appSource?.[1] && request.method === "PUT") {
       requireJson(request);
-      return json({
-        revision: await editAppSource(env.DB, caller, parseAppId(appSource[1]), await boundedJson(request.body)),
-      });
+      const id = parseAppId(appSource[1]);
+      try {
+        const revision = await editAppSource(env.DB, caller, id, await boundedJson(request.body));
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.source.edit",
+          { type: "app", id },
+          "success",
+          { revision: revision.revision },
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ revision });
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            error.code === "MANAGED_RESOURCE" ? "app.managed_deny" : "app.source.edit",
+            { type: "app", id },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
     }
     const appSwap = /^\/api\/apps\/([0-9a-f-]{36})\/swap$/.exec(url.pathname);
     if (appSwap?.[1] && request.method === "POST") {
       requireJson(request);
-      const otherAppId = parseSwapBody(await boundedJson(request.body));
-      const swapped = await swapSlugs(env.DB, caller, parseAppId(appSwap[1]), otherAppId);
-      return json({ app: swapped.app, other: swapped.other });
+      const id = parseAppId(appSwap[1]);
+      try {
+        const otherAppId = parseSwapBody(await boundedJson(request.body));
+        const swapped = await swapSlugs(env.DB, caller, id, otherAppId);
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.swap",
+          { type: "app", id },
+          "success",
+          { otherAppId },
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ app: swapped.app, other: swapped.other });
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            error.code === "MANAGED_RESOURCE" ? "app.managed_deny" : "app.swap",
+            { type: "app", id },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
     }
     const appAsset = /^\/api\/apps\/([0-9a-f-]{36})\/assets\/(.+)$/.exec(url.pathname);
     if (appAsset?.[1] && appAsset[2] && request.method === "GET") {
@@ -390,8 +575,72 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       return json({ app: await appDetail(env.DB, caller, parseAppId(appOne[1])) });
     }
     if (appOne?.[1] && request.method === "DELETE") {
-      await deleteApp(env.DB, caller, parseAppId(appOne[1]));
-      return json({ deleted: true });
+      const id = parseAppId(appOne[1]);
+      try {
+        await deleteApp(env.DB, caller, id);
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.delete",
+          { type: "app", id },
+          "success",
+          {},
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ deleted: true });
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            error.code === "MANAGED_RESOURCE" ? "app.managed_deny" : "app.delete",
+            { type: "app", id },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
+    }
+    // Administrative audit trail (OPS-01, ADR 018): Organization-scoped event
+    // list with action-prefix, outcome, search, date, and cursor filters.
+    // No per-row detail route (upstream has none either).
+    if (url.pathname === "/api/audit" && request.method === "GET") {
+      // Outward path: scrubbed again on read (defense in depth — a secret
+      // substring in a stored detail can never ride the list out).
+      return json(
+        scrubValueWithDeploymentSecrets(await listAudit(env.DB, caller, parseAuditQuery(url.searchParams)), env),
+      );
+    }
+    // Operational notifications (OPS-01, ADR 018): durable personal/org inbox
+    // with dismiss behavior. List is the caller's own personal rows plus
+    // same-org org-scoped rows; reconnects re-read D1, never a stream.
+    if (url.pathname === "/api/notifications" && request.method === "GET") {
+      // Outward path: scrubbed again on read, like the audit list above.
+      return json(
+        scrubValueWithDeploymentSecrets(
+          { notifications: await listNotifications(env.DB, caller, parseNotificationLimit(url.searchParams)) },
+          env,
+        ),
+      );
+    }
+    // Loose segment matcher: parseNotificationId fails closed with
+    // INVALID_NOTIFICATION_ID on bad shapes (never UNIMPLEMENTED), and
+    // unknown UUIDs answer 404 below, never a leak.
+    const notifOne = /^\/api\/notifications\/([^/]+)$/i.exec(url.pathname);
+    if (notifOne?.[1] && request.method === "GET") {
+      const notification = await visibleNotification(env.DB, caller, parseNotificationId(notifOne[1]));
+      if (!notification) return json({ error: { code: "NOTIFICATION_NOT_FOUND", message: "Not found." } }, 404);
+      return json(scrubValueWithDeploymentSecrets({ notification }, env));
+    }
+    if (notifOne?.[1] && request.method === "DELETE") {
+      // Dismissal: personal rows by owner only, org rows by any same-org
+      // caller. Gone-or-foreign answers 404, never a leak; a second dismiss
+      // is gone, not an error to retry.
+      const dismissed = await dismissNotification(env.DB, caller, parseNotificationId(notifOne[1]));
+      if (!dismissed) return json({ error: { code: "NOTIFICATION_NOT_FOUND", message: "Not found." } }, 404);
+      return json({ dismissed: true });
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).

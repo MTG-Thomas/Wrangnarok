@@ -139,3 +139,44 @@ export interface AppDetail extends AppSummary {
   jobs: AppJob[];
   activeDeployment: AppDeployment | null;
 }
+
+/** One administrative audit event (GET /api/audit; OPS-01, ADR 018). */
+export interface AuditEvent {
+  id: string;
+  orgId: string;
+  actorUserId: string;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  outcome: "success" | "failure";
+  detail: unknown;
+  createdAt: string;
+}
+
+export interface AuditResponse {
+  events: AuditEvent[];
+  hasMore: boolean;
+  /** Opaque page marker for the next GET /api/audit call; null when done. */
+  nextCursor: string | null;
+}
+
+/** One operational notification (GET /api/notifications; OPS-01, ADR 018). */
+export interface AppNotification {
+  id: string;
+  orgId: string;
+  userId: string;
+  scope: "personal" | "org";
+  category: string;
+  title: string;
+  body: string | null;
+  status: "pending" | "running" | "awaiting_action" | "completed" | "failed" | "cancelled";
+  progressPercent: number | null;
+  detail: unknown;
+  createdAt: string;
+  updatedAt: string;
+  dismissedAt: string | null;
+}
+
+export interface NotificationsResponse {
+  notifications: AppNotification[];
+}
