@@ -34,6 +34,10 @@ Access (Zero Trust)**, verified in-Worker:
   `ACCESS_ALLOWED_EMAILS` allowlist gates who maps to the org. Empty
   allowlist denies everyone (fail closed). This allowlist is explicitly the
   demotion path: Phase 3 replaces it with the membership table, no API change.
+- Service-token assertions carry no email: their `common_name` claim holds
+  the token CLIENT ID (not the token name). `ACCESS_ALLOWED_SERVICES` lists
+  client IDs; matched services map to `service:<client-id>` principals in the
+  configured org. Verified live against the dev floor.
 - LAB path is untouched and takes over when no assertion header is present.
   An assertion header with Access unconfigured fails closed (503), never
   falls through to LAB. Direct-URL callers bypassing Access still face LAB.
