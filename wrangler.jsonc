@@ -4,6 +4,15 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-09",
   "compatibility_flags": ["nodejs_compat"],
+  // Observability (Workers Logs + traces): sampling 1 while traffic is
+  // experiment-scale; revisit before any real load. Retention/quotas follow
+  // the account plan — verify vs current Cloudflare pricing before claiming
+  // Free-tier headroom for log/trace volume.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true },
+    "traces": { "enabled": true, "head_sampling_rate": 1 },
+  },
   "workers_dev": false,
   "preview_urls": false,
   "routes": [],

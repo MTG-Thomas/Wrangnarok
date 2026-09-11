@@ -58,6 +58,18 @@ export function buildUsage(input: {
 export function logUsage(usage: UsageBlock): void {
   console.log(`WRANGNAROK_USAGE ${JSON.stringify(usage)}`);
 }
+/** Per-request access log: method, route, status, and duration only — never
+ * headers, bodies, query strings, or secrets. Route is the raw /api/*
+ * pathname (IDs are non-secret deterministic hashes) or "static". */
+export interface RequestLog {
+  readonly method: string;
+  readonly route: string;
+  readonly status: number;
+  readonly durationMs: number;
+}
+export function logRequest(entry: RequestLog): void {
+  console.log(`WRANGNAROK_REQUEST ${JSON.stringify(entry)}`);
+}
 /** Persisted Trail-adjacent record (no secrets). Best-effort: a missing table
  * (old DB before migration 0002) must not fail the Execution itself. */
 export async function persistUsage(db: D1Database, executionId: string, usage: UsageBlock): Promise<void> {

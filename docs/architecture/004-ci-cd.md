@@ -67,6 +67,12 @@ The Worker bundle MUST stay under 100 KiB of raw emitted bytes, enforced by `npm
 
 The budget is deliberately generous against the current ~62 KiB bundle. Shrink the bundle first when it trips; raise the budget only with the reason recorded alongside the bump — never silently to make a red run green.
 
+### Observability
+
+Workers Logs and traces are enabled in `wrangler.jsonc` (`observability.enabled`, sampling rate 1 at experiment scale). Every request additionally emits one `WRANGNAROK_REQUEST` JSON log line — method, route, status, duration only — scraped the same way as the `WRANGNAROK_USAGE` block. Access logs MUST NEVER carry headers, bodies, query strings, or secrets, mirroring the usage-block posture in the cost-logging section above.
+
+Retention and quotas follow the account plan, not this ADR: verify vs current Cloudflare pricing before claiming Free-tier headroom for log/trace volume, and revisit sampling before any real load.
+
 ### Platform smoke Saga
 
 Wrangnarök SHOULD permanently include a safe internal `system.smoke` Saga once the execution model supports it.
