@@ -1,0 +1,15 @@
+# RUN-04 lane scope (issue #151): ambiguous native termination must not be
+# reported as confirmed cancellation.
+src/domain.ts
+src/index.ts
+src/executions.ts
+src/bindings.ts
+docs/architecture/001-execution-model.md
+test/cancel-confirmation.test.ts
+test/cancel-race.test.ts
+test/domain.test.ts
+test/execution-guards.test.ts
+test/resilience.test.ts
+scripts/wrangnarok.mjs
+wrangler.jsonc
+package.json
