@@ -229,7 +229,9 @@ describe("workspace-to-bundle bridge (issue #116)", () => {
         { slug: "s", name: "S", connections: [{ integrationName: "echo" }] },
         {
           ...opts(),
-          integrations: { echo: { id: ECHO_INTEGRATION_ID, org: "d", endpoint: "e", secretsRequired: [7] } },
+          integrations: {
+            echo: { id: ECHO_INTEGRATION_ID, org: "d", endpoint: "e", secretsRequired: [7] as unknown as string[] },
+          },
         },
       ),
     ).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE" }));
