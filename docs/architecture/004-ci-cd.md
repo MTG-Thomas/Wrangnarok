@@ -73,6 +73,26 @@ Workers Logs and traces are enabled in `wrangler.jsonc` (`observability.enabled`
 
 Retention and quotas follow the account plan, not this ADR: verify vs current Cloudflare pricing before claiming Free-tier headroom for log/trace volume, and revisit sampling before any real load.
 
+### PR preview environments
+
+Every pull request deploys to one shared disposable preview Worker (`preview` env in `wrangler.jsonc`, `.github/workflows/preview.yml`) and smokes `system.smoke` against its workers.dev URL. Previews catch binding/config drift that `wrangler deploy --dry-run` cannot: real account calls, real D1 migrations, real Workflow dispatch.
+
+Design rules:
+
+- One shared preview Worker + one disposable preview D1, last-wins across PRs at experiment scale. Per-PR environments graduate only when contention demands it.
+- The preview D1 is disposable: smoke writes land under the disposable smoke Organization and test data is never promoted anywhere.
+- Fixture credentials are ephemeral per run: the workflow generates a random `LAB_TOKEN`, masks it, plants it with `wrangler secret put`, and smokes with it. The next run replaces it, so there is nothing to rotate on leak. Demo org/user IDs ship as committed non-secret `vars`, matching the local fixture pattern.
+- Without secrets (forks) the workflow skips gracefully; credential-free CI on the PR itself stays the merge gate.
+
+Token lifecycle (least privilege, no dashboard clicking after bootstrap):
+
+1. Once, a human creates a parent token (dashboard) with `API Tokens Write` + `Workers Scripts Write` + `D1 Write`, scoped to the account.
+2. `CLOUDFLARE_API_TOKEN=<parent> node scripts/mint-preview-token.mjs --account-id <id>` mints the CI child (Workers Scripts Write + D1 Write, account-scoped, 1-year expiry) and prints its value exactly once. The parent token is never printed, logged, or committed.
+3. Store the child as the `CLOUDFLARE_PREVIEW_TOKEN` GitHub Actions secret and the account ID as the `CLOUDFLARE_ACCOUNT_ID` variable, then delete the parent token (or keep it offline for rotation).
+4. Rotation = rerun the mint, update the secret, delete the old child. Real Integration/Connection credentials MUST NEVER take this path — preview secrets are fixture-only by construction.
+
+Human setup before the first preview run: `wrangler d1 create wrangnarok-preview`, paste its database ID over the placeholder in the `preview` env, complete the token lifecycle above. Until then `--env preview` commands fail closed.
+
 ### Platform smoke Saga
 
 Wrangnarök SHOULD permanently include a safe internal `system.smoke` Saga once the execution model supports it.
@@ -111,6 +131,7 @@ Pull request
   +-- unit tests
   +-- workerd integration tests
   +-- Wrangler dry-run/build validation
+  +-- preview deploy + smoke (with secrets; skipped on forks)
   |
   v
 merge to main

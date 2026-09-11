@@ -74,6 +74,11 @@ jobs:
       - name: Mailbox bridge selftest
         run: npm run mailbox:selftest
 
+      # Stub-fetch selftests for the preview helpers (smoke probe, token
+      # payload). No credentials, no network, no live store.
+      - name: Preview helper selftests
+        run: npm run preview:smoke:selftest && npm run preview:token:selftest
+
       - name: Validate repository contract
         shell: bash
         run: |
