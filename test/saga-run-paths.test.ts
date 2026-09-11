@@ -12,6 +12,7 @@ import {
   echoSaga,
   ECHO_INTEGRATION_ID,
   Fault,
+  helloSaga,
   ninjaSaga,
   NINJA_INTEGRATION_ID,
   smokeSaga,
@@ -19,6 +20,7 @@ import {
 import type { SagaEventContext, SagaStep } from "../src/saga";
 import { digestSagaDef } from "../src/sagas/digest";
 import { echoSagaDef } from "../src/sagas/echo";
+import { helloSagaDef } from "../src/sagas/hello";
 import { ninjaOrgsSagaDef } from "../src/sagas/ninjaorgs";
 import { smokeSagaDef } from "../src/sagas/smoke";
 import { executeSaga } from "../src/sagas/shared";
@@ -493,4 +495,71 @@ it("rejects workflow invocations that fail the identity gate", async () => {
 it("references every registered saga def so the module surface stays honest", async () => {
   expect(ninjaSaga.id).toBe(ninjaOrgsSagaDef.id);
   expect(smokeSaga.id).toBe(smokeSagaDef.id);
+});
+
+it("fails a hello Execution generically when prepare cannot parse its input", async () => {
+  await insertExecution(bindings.DB, ID, helloSaga, "Pending", '{"name":123}');
+  const integrations = {
+    echo: { echo: async () => ({ message: "hi" }) },
+    ninjaone: { listOrganizations: async () => ({ organizationCount: 0, organizations: [] }) },
+  } as unknown as SagaEventContext["integrations"];
+  // Fault input (non-string name): prepare throws before any expected failure
+  // is recorded, so the catch persists the generic EXECUTION_FAILED marker.
+  await expect(helloSagaDef.run(ctxWith(bindings.DB, ID, integrations), inlineStep)).rejects.toThrow(
+    "EXECUTION_FAILED",
+  );
+  const { status, error } = await executionStatus(bindings.DB, ID);
+  expect(status).toBe("Failed");
+  expect(error).toMatchObject({ code: "EXECUTION_FAILED" });
+});
+
+it("fails a hello Execution loudly when its greet step reports failure", async () => {
+  await insertExecution(bindings.DB, ID, helloSaga, "Pending", '{"name":"Ada"}');
+  const integrations = {
+    echo: { echo: async () => ({ message: "hi" }) },
+    ninjaone: { listOrganizations: async () => ({ organizationCount: 0, organizations: [] }) },
+  } as unknown as SagaEventContext["integrations"];
+  // A greet step reporting {ok:false} records the expected failure and throws
+  // its code: the catch persists that exact SafeError, not the generic marker.
+  const failGreetStep: SagaStep = {
+    do: async <T>(name: string, fn: () => Promise<T>): Promise<T> =>
+      name === "greet-v1"
+        ? ({ ok: false, error: { code: "STEWARD_PROBE", message: "Steward probe failure." } } as unknown as T)
+        : fn(),
+    sleep: async () => {},
+  };
+  await expect(helloSagaDef.run(ctxWith(bindings.DB, ID, integrations), failGreetStep)).rejects.toThrow(
+    "STEWARD_PROBE",
+  );
+  const { status, error } = await executionStatus(bindings.DB, ID);
+  expect(status).toBe("Failed");
+  expect(error).toMatchObject({ code: "STEWARD_PROBE" });
+});
+
+it("scrubs thrown Error text and rethrows non-Error values in the workflow adapter", async () => {
+  const step = { do: async () => ({}) } as unknown as Parameters<typeof executeSaga>[2];
+  const event = { payload: { executionId: ID }, instanceId: ID } as unknown as Parameters<typeof executeSaga>[1];
+  const secret = "steward-probe-secret-sentinel";
+  const envWithSecret = { ...bindings, NINJA_CLIENT_ID: bindings.NINJA_CLIENT_ID, NINJA_CLIENT_SECRET: secret };
+  // A raw Error carrying a secret substring surfaces with the code only: the
+  // message is scrubbed before the native errored status sees it.
+  const failing = {
+    ...smokeSagaDef,
+    run: async () => {
+      throw new Error(`vendor blew up on ${secret}`);
+    },
+  };
+  await expect(executeSaga(envWithSecret, event, step, failing)).rejects.toThrow(NonRetryableError);
+  try {
+    await executeSaga(envWithSecret, event, step, failing);
+    expect.unreachable();
+  } catch (error) {
+    expect(error).toBeInstanceOf(NonRetryableError);
+    expect(String(error)).not.toContain(secret);
+    expect(String(error)).toContain("[REDACTED]");
+  }
+  // A non-Error throw passes through untouched (identity preserved).
+  const marker = { odd: "throwable-sentinel" };
+  const alien = { ...smokeSagaDef, run: async () => Promise.reject(marker) };
+  await expect(executeSaga(bindings, event, step, alien)).rejects.toBe(marker);
 });

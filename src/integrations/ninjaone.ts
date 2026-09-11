@@ -10,6 +10,7 @@ import {
   NINJA_TOKEN_PATH,
 } from "../domain";
 import type { NinjaOrgSummary, NinjaOrgsResult } from "../domain";
+import { registerExecutionSecrets, scrubTextWithSecrets } from "../secrets";
 export const ninjaIntegration = Object.freeze({ id: NINJA_INTEGRATION_ID, name: "ninjaone" });
 export interface NinjaConnection {
   endpoint: string;
@@ -31,14 +32,33 @@ export interface NinjaSecrets {
  * Credential presence is enforced here, behind the Action boundary: a Saga
  * step passes its secret handle straight through and maps NINJA_NOT_CONFIGURED
  * like any other structured downstream error. */
-export async function listOrganizations(connection: NinjaConnection, secrets: NinjaSecrets): Promise<NinjaOrgsResult> {
+export async function listOrganizations(
+  connection: NinjaConnection,
+  secrets: NinjaSecrets,
+  executionId?: string,
+): Promise<NinjaOrgsResult> {
   const { clientId, clientSecret } = secrets;
   if (!clientId || !clientSecret) {
     throw new Fault(502, "NINJA_NOT_CONFIGURED", "NinjaOne credentials are not configured.");
   }
+  if (executionId !== undefined) registerExecutionSecrets(executionId, [clientId, clientSecret]);
+  // Scrub substrings out of every outward Fault message before it can reach a
+  // step result, D1 row, or Workflow terminal value. Vendor bodies are still
+  // never copied in — shaping is the primary guard, scrubbing the backstop.
+  const registered = [clientId, clientSecret];
+  const clean = (message: string): string => scrubTextWithSecrets(message, registered);
   // Token stays a transient local: fetched, used, dropped. It must never
   // reach D1, ExecutionHistory, logs, or Workflow persisted state.
-  const token = await fetchToken(connection, { clientId, clientSecret });
+  let token: string;
+  try {
+    token = await fetchToken(connection, { clientId, clientSecret });
+  } catch (error) {
+    if (error instanceof Fault) throw new Fault(error.status, error.code, clean(error.message));
+    throw error;
+  }
+  if (executionId !== undefined) registerExecutionSecrets(executionId, [token]);
+  const withToken = [...registered, token];
+  const cleanToken = (message: string): string => scrubTextWithSecrets(message, withToken);
   // Explicit deadline, same posture as echo: a vendor that is slow (abort
   // fires) or merely late (resolves after the deadline because the transport
   // ignored the abort) surfaces NINJA_VENDOR_TIMEOUT.
@@ -46,53 +66,67 @@ export async function listOrganizations(connection: NinjaConnection, secrets: Ni
   const timedOut = () => Date.now() - started >= NINJA_TIMEOUT_MS;
   let response: Response;
   try {
-    response = await fetch(`${connection.endpoint}${NINJA_ORGS_PATH}`, {
-      method: "GET",
-      redirect: "manual",
-      signal: AbortSignal.timeout(NINJA_TIMEOUT_MS),
-      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-    });
+    try {
+      response = await fetch(`${connection.endpoint}${NINJA_ORGS_PATH}`, {
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(NINJA_TIMEOUT_MS),
+        headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+      });
+    } catch (error) {
+      throwIfNinjaTimeout(error);
+      throw error;
+    }
+    if (timedOut()) {
+      await response.body?.cancel();
+      throw new Fault(504, "NINJA_VENDOR_TIMEOUT", "NinjaOne exceeded its deadline.");
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new Fault(502, "NINJA_VENDOR_FAILED", "NinjaOne redirected the request.");
+    }
+    if (response.status === 401) {
+      await response.body?.cancel();
+      throw new Fault(502, "NINJA_UNAUTHORIZED", "NinjaOne rejected the credentials.");
+    }
+    if (response.status === 429) {
+      await response.body?.cancel();
+      throw new Fault(502, "NINJA_RATE_LIMITED", "NinjaOne rate-limited the request.");
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Fault(502, "NINJA_VENDOR_FAILED", "NinjaOne did not return organizations.");
+    }
+    // Transport cap is generous: real tenants return tens of KB. What persists
+    // is still the shaped summary under the D1 result CHECK bound.
+    const value = await boundedJson(response.body, 262144);
+    if (!Array.isArray(value))
+      throw new Fault(502, "NINJA_BAD_RESPONSE", "NinjaOne returned an unexpected organization list.");
+    const organizations: NinjaOrgSummary[] = [];
+    for (const entry of value) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        throw new Fault(502, "NINJA_BAD_RESPONSE", "NinjaOne returned an unexpected organization list.");
+      }
+      const record = entry as Record<string, unknown>;
+      if (typeof record.id !== "number" || typeof record.name !== "string") {
+        throw new Fault(502, "NINJA_BAD_RESPONSE", "NinjaOne returned an unexpected organization list.");
+      }
+      if (organizations.length < NINJA_ORGS_MAX)
+        organizations.push({ id: record.id, name: scrubTextWithSecrets(record.name, withToken) });
+    }
+    return { organizationCount: value.length, organizations };
   } catch (error) {
-    throwIfNinjaTimeout(error);
+    // Raw transport errors (timeouts mapped above aside) propagate for the
+    // Saga to map — but any secret substring hitching a ride in an Error or
+    // vendor-shaped message is scrubbed here, at the boundary.
+    if (error instanceof Fault) throw new Fault(error.status, error.code, cleanToken(error.message));
+    if (error instanceof Error) {
+      const scrubbed = new Error(cleanToken(error.message));
+      (scrubbed as { cause?: unknown }).cause = error.cause;
+      throw scrubbed;
+    }
     throw error;
   }
-  if (timedOut()) {
-    await response.body?.cancel();
-    throw new Fault(504, "NINJA_VENDOR_TIMEOUT", "NinjaOne exceeded its deadline.");
-  }
-  if (response.status >= 300 && response.status < 400) {
-    await response.body?.cancel();
-    throw new Fault(502, "NINJA_VENDOR_FAILED", "NinjaOne redirected the request.");
-  }
-  if (response.status === 401) {
-    await response.body?.cancel();
-    throw new Fault(502, "NINJA_UNAUTHORIZED", "NinjaOne rejected the credentials.");
-  }
-  if (response.status === 429) {
-    await response.body?.cancel();
-    throw new Fault(502, "NINJA_RATE_LIMITED", "NinjaOne rate-limited the request.");
-  }
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Fault(502, "NINJA_VENDOR_FAILED", "NinjaOne did not return organizations.");
-  }
-  // Transport cap is generous: real tenants return tens of KB. What persists
-  // is still the shaped summary under the D1 result CHECK bound.
-  const value = await boundedJson(response.body, 262144);
-  if (!Array.isArray(value))
-    throw new Fault(502, "NINJA_BAD_RESPONSE", "NinjaOne returned an unexpected organization list.");
-  const organizations: NinjaOrgSummary[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new Fault(502, "NINJA_BAD_RESPONSE", "NinjaOne returned an unexpected organization list.");
-    }
-    const record = entry as Record<string, unknown>;
-    if (typeof record.id !== "number" || typeof record.name !== "string") {
-      throw new Fault(502, "NINJA_BAD_RESPONSE", "NinjaOne returned an unexpected organization list.");
-    }
-    if (organizations.length < NINJA_ORGS_MAX) organizations.push({ id: record.id, name: record.name });
-  }
-  return { organizationCount: value.length, organizations };
 }
 
 async function fetchToken(connection: NinjaConnection, credentials: NinjaCredentials): Promise<string> {
