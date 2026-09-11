@@ -180,7 +180,11 @@ export function createAppRuntimeClient(options: AppRuntimeOptions): AppRuntimeCl
   let handshook = false;
 
   function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    return { Accept: "application/json", Authorization: `Bearer ${token}`, ...extra };
+    // The live token wins: a caller-supplied Authorization (e.g. built before
+    // a rotation) never overrides the rotated token on retry.
+    const { Authorization: _stale, ...rest } = extra;
+    void _stale;
+    return { Accept: "application/json", Authorization: `Bearer ${token}`, ...rest };
   }
 
   function retryAfterMs(response: Response): number {
