@@ -77,14 +77,13 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // same org/requester scoping as reads — foreign owners get 404, never
       // a leak. Pending cancels immediately; Running moves
       // Running -> Cancelling -> Cancelled onto the native terminate
-      // control. Re-cancel while Cancelling is idempotent; terminal states
-      // answer 409 and are never rewritten.
+      // control. Only Pending/Running reach the marker write (the transition
+      // gate above rejects everything else, including a second cancel that
+      // lands while Cancelling); terminal states answer 409 and are never
+      // rewritten. A loser that races the winner re-reads below.
       const row = await visibleExecution(env.DB, cancel[1], caller);
       if (!canTransition(row.status, "Cancelling")) {
         throw new Fault(409, "EXECUTION_NOT_CANCELLABLE", "Terminal Executions cannot be cancelled.");
-      }
-      if (row.status === "Cancelling") {
-        return json({ executionId: row.id, status: "Cancelling", cancelled: false });
       }
       const marked = await env.DB.prepare(
         "UPDATE executions SET status='Cancelling' WHERE id=? AND status IN ('Pending','Running')",
