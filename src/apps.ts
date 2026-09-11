@@ -100,16 +100,39 @@ function invalid(code: string, message: string, status = 400, details?: unknown)
   return new Fault(status, code, message, details);
 }
 
+/** Shape-only check that returns field failures instead of throwing, so the
+ * edit path can persist invalid revisions for later inspection. Other
+ * malformed-source faults still throw. */
+function tryValidate(
+  files: unknown,
+  deps: unknown,
+): { parsed: { files: AppFile[]; deps: AppDependency[] }; failures: FieldFailure[] | null } {
+  try {
+    return { parsed: validateAppSource(files, deps), failures: null };
+  } catch (error) {
+    if (error instanceof Fault && error.code === "APP_VALIDATION_FAILED") {
+      return {
+        parsed: {
+          files: Array.isArray(files) ? (files as AppFile[]) : [],
+          deps: Array.isArray(deps) ? (deps as AppDependency[]) : [],
+        },
+        failures: error.details as FieldFailure[],
+      };
+    }
+    throw error;
+  }
+}
+
 export function parseAppName(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.length > APP_NAME_MAX) {
-    throw invalid("INVALID_APP", `App name must be 1 to ${APP_NAME_MAX} characters.`);
+    throw invalid("INVALID_APP", `App name must be 1 to ${APP_NAME_MAX} chars.`);
   }
   return value;
 }
 
 export function parseAppSlug(value: unknown): string {
   if (typeof value !== "string" || !APP_SLUG.test(value)) {
-    throw invalid("INVALID_SLUG", "App slug must be a lowercase slug of 1 to 64 chars (letters, digits, dashes).");
+    throw invalid("INVALID_SLUG", "App slug must be lowercase alphanumerics and dashes, 1 to 64 chars.");
   }
   return value;
 }
@@ -386,21 +409,7 @@ export async function editAppSource(
   if (!row) throw invalid("APP_NOT_FOUND", "App not found.", 404);
   requireIndependent(row);
   if (!object(body)) throw invalid("INVALID_SOURCE", "App source must be a JSON object with files and dependencies.");
-  let parsed: { files: AppFile[]; deps: AppDependency[] };
-  let failures: FieldFailure[] | null = null;
-  try {
-    parsed = validateAppSource(body.files, body.dependencies);
-  } catch (error) {
-    if (error instanceof Fault && error.code === "APP_VALIDATION_FAILED") {
-      failures = error.details as FieldFailure[];
-      parsed = {
-        files: Array.isArray(body.files) ? (body.files as AppFile[]) : [],
-        deps: Array.isArray(body.dependencies) ? (body.dependencies as AppDependency[]) : [],
-      };
-    } else {
-      throw error;
-    }
-  }
+  const { parsed, failures } = tryValidate(body.files, body.dependencies);
   const next = ((await latestRevisionNumber(db, row.id)) ?? 0) + 1;
   const now = new Date().toISOString();
   await db
@@ -411,8 +420,8 @@ export async function editAppSource(
       crypto.randomUUID().toLowerCase(),
       row.id,
       next,
-      JSON.stringify(parsed!.files).slice(0, 16384),
-      JSON.stringify(parsed!.deps).slice(0, 4096),
+      JSON.stringify(parsed.files).slice(0, 16384),
+      JSON.stringify(parsed.deps).slice(0, 4096),
       failures ? "invalid" : "valid",
       failures ? JSON.stringify(failures) : null,
       now,
@@ -485,7 +494,7 @@ export async function startBuild(db: D1Database, caller: Principal, id: string):
       .bind(deploymentId, now, row.id)
       .run();
     if (applied.meta.changes === 0) {
-      throw invalid("BUILD_SUPERSEDED", "A newer build superseded this one; inspect the current app status.", 409);
+      throw invalid("BUILD_SUPERSEDED", "A newer build superseded this one.", 409);
     }
     // Upstream parity: superseded compiled artifacts are deleted — keep only
     // the active row. No retained-history rollback UI (ADR 016 section 4).
@@ -511,10 +520,6 @@ export async function startBuild(db: D1Database, caller: Principal, id: string):
       .bind(prior, new Date().toISOString(), row.id)
       .run();
     if (error instanceof Fault && error.code === "BUILD_SUPERSEDED") throw error;
-    const failed = await readJobs(db, row.id, jobId);
-    if (failed[0]?.status === "failed") {
-      // Surface the failure receipt; the app row already reflects recovery.
-    }
     return (await readJobs(db, row.id, jobId))[0] as AppJob;
   }
   return (await readJobs(db, row.id, jobId))[0] as AppJob;
@@ -566,14 +571,14 @@ export async function swapSlugs(
     .run();
   if (takeB.meta.changes === 0) {
     await db.prepare("UPDATE apps SET slug=?, updated_at=? WHERE id=?").bind(slugA, now, row.id).run();
-    throw invalid("SLUG_CONFLICT", "The parked app slug changed under swap: refusing silent overwrite.", 409);
+    throw invalid("SLUG_CONFLICT", "The parked app slug changed under swap.", 409);
   }
   const takeA = await db
     .prepare("UPDATE apps SET slug=?, updated_at=? WHERE id=? AND slug=?")
     .bind(slugB, now, row.id, parking)
     .run();
   if (takeA.meta.changes === 0) {
-    throw invalid("SLUG_CONFLICT", "The app slug changed under swap: refusing silent overwrite.", 409);
+    throw invalid("SLUG_CONFLICT", "The app slug changed under swap.", 409);
   }
   const freshA = (await loadApp(db, caller, row.id)) as AppRow;
   const freshB = (await loadApp(db, caller, other.id)) as AppRow;

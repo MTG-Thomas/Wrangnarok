@@ -38,6 +38,15 @@ function routeOf(request: Request): string {
   if (!pathname.startsWith("/api/")) return "static";
   return `${request.method} ${pathname}`;
 }
+/** Guard for JSON write routes: unencoded application/json only, matching
+ * the /api/executions submit gate. Shared by the app write routes below. */
+function requireJson(request: Request): void {
+  if (
+    request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+    request.headers.has("Content-Encoding")
+  )
+    throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+}
 export default {
   async fetch(request: Request, env: Bindings): Promise<Response> {
     const started = Date.now();
@@ -215,30 +224,28 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     // Authored Applications (APP-01, ADR 016): independent-app lifecycle
     // (create/edit/validate/build/inspect/swap/delete) plus authorized
     // active-deployment asset serving. Solution-owned rows reject live
-    // mutation with MANAGED_RESOURCE; foreign-Organization rows 404.
+    // mutation with MANAGED_RESOURCE; foreign-Organization rows 404. One
+    // explicit matcher per route, mirroring the executions/cancel style
+    // above: boring and greppable beats a shared capture.
     if (url.pathname === "/api/apps" && request.method === "GET") {
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       return json({ apps: await listApps(env.DB, caller) });
     }
     if (url.pathname === "/api/apps" && request.method === "POST") {
-      if (
-        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
-        request.headers.has("Content-Encoding")
-      )
-        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      requireJson(request);
       const { name, slug } = parseAppBody(await boundedJson(request.body));
       return json({ app: await createApp(env.DB, caller, name, slug) }, 201);
     }
-    const appJobs = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
-    if (appJobs?.[1] && (request.method === "GET" || request.method === "POST")) {
-      const id = parseAppId(appJobs[1]);
+    const appBuilds = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
+    if (appBuilds?.[1] && (request.method === "GET" || request.method === "POST")) {
+      const id = parseAppId(appBuilds[1]);
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       if (request.method === "GET") return json({ jobs: await listJobs(env.DB, caller, id) });
       return json({ job: await startBuild(env.DB, caller, id) }, 202);
     }
-    const appJobOne = /^\/api\/apps\/([0-9a-f-]{36})\/builds\/([0-9a-f-]{36})$/.exec(url.pathname);
-    if (appJobOne?.[1] && appJobOne[2] && request.method === "GET") {
-      return json({ job: await jobDetail(env.DB, caller, parseAppId(appJobOne[1]), appJobOne[2]) });
+    const appJob = /^\/api\/apps\/([0-9a-f-]{36})\/builds\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (appJob?.[1] && appJob[2] && request.method === "GET") {
+      return json({ job: await jobDetail(env.DB, caller, parseAppId(appJob[1]), appJob[2]) });
     }
     const appValidate = /^\/api\/apps\/([0-9a-f-]{36})\/validate$/.exec(url.pathname);
     if (appValidate?.[1] && request.method === "POST") {
@@ -246,22 +253,14 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     }
     const appSource = /^\/api\/apps\/([0-9a-f-]{36})\/source$/.exec(url.pathname);
     if (appSource?.[1] && request.method === "PUT") {
-      if (
-        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
-        request.headers.has("Content-Encoding")
-      )
-        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      requireJson(request);
       return json({
         revision: await editAppSource(env.DB, caller, parseAppId(appSource[1]), await boundedJson(request.body)),
       });
     }
     const appSwap = /^\/api\/apps\/([0-9a-f-]{36})\/swap$/.exec(url.pathname);
     if (appSwap?.[1] && request.method === "POST") {
-      if (
-        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
-        request.headers.has("Content-Encoding")
-      )
-        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      requireJson(request);
       const otherAppId = parseSwapBody(await boundedJson(request.body));
       const swapped = await swapSlugs(env.DB, caller, parseAppId(appSwap[1]), otherAppId);
       return json({ app: swapped.app, other: swapped.other });
