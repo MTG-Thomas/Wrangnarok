@@ -324,6 +324,26 @@ describe("config installer fences", () => {
       declared: false,
       value: null,
     });
+    // Declared, provisioned ref, but the deployment value vanished: loud.
+    const gone = stubDb({
+      row: configRow({ key: "apiKey", type: "secret", value_json: JSON.stringify({ ref: "clientSecret" }) }),
+    });
+    const loud = await resolveConfig({ db: gone, orgId: caller.orgId, secrets: {} }, "apiKey", ["apiKey"], {});
+    if (!loud.found && loud.declared) expect(loud.error.code).toBe("SECRET_NOT_CONFIGURED");
+    else throw new Error("expected a declared-missing provisioned ref");
+    // Explicit undefined declared list: the binder still requires the key.
+    const handle = bindSagaConfig({ db: gone, orgId: caller.orgId, secrets: {} }, undefined, {});
+    await expect(handle.require("apiKey")).rejects.toMatchObject({ code: "SECRET_NOT_CONFIGURED" });
+  });
+
+  it("normalizes empty descriptions to null", async () => {
+    const created = await setConfig(
+      stubDb({ firstRows: [null, configRow({ description: null })] }),
+      caller,
+      { key: "k", type: "string", value: "v", description: "" },
+      {},
+    );
+    expect(created.description).toBe(null);
   });
 
   it("rejects guard mismatches with SDK_CLIENT_MISMATCH", () => {
