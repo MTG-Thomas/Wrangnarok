@@ -479,14 +479,6 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   }
 }
 
-function requireJson(request: Request): void {
-  if (
-    request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
-    request.headers.has("Content-Encoding")
-  )
-    throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
-}
-
 function parseOrgBody(value: unknown): { name: string } {
   if (!object(value) || typeof value.name !== "string") {
     throw new Fault(400, "INVALID_ORG_NAME", "Provide an Organization name of 1 to 128 characters.");
