@@ -51,7 +51,7 @@ export async function authenticate(request: Request, env: LabAuth & AccessEnv): 
     try {
       await ensureLabFixture(env.DB, principal.orgId, principal.userId);
       // AUTH-02 (ADR 018): same standing bootstrap as the org tables — the
-      // migration-0009 tables may not exist on hand-built databases.
+      // migration-0013 tables may not exist on hand-built databases.
       await ensureRoleTables(env.DB);
     } catch {
       // Pre-migration databases (no users table): leave auth working, the

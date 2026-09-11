@@ -20,7 +20,7 @@ import migration5 from "../migrations/0005_forms.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
 import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
-import migration9 from "../migrations/0009_resource_roles.sql?raw";
+import migration9 from "../migrations/0013_resource_roles.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;

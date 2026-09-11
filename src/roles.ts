@@ -124,13 +124,13 @@ function isMissingTable(error: unknown): boolean {
 }
 
 function fail503(): Fault {
-  return new Fault(503, "ROLE_STORE_NOT_MIGRATED", "Resource-role storage is not migrated: apply migration 0009.");
+  return new Fault(503, "ROLE_STORE_NOT_MIGRATED", "Resource-role storage is not migrated: apply migration 0013.");
 }
 
 /**
  * Shared D1 failure mapping for the role store (one site, not one per
  * function): domain Faults thrown inside a try pass through, missing
- * migration-0009 tables answer 503, and anything else rethrows. Callers with
+ * migration-0013 tables answer 503, and anything else rethrows. Callers with
  * duplicate-key semantics (createRole, addGrant) keep their own catch that
  * maps the residual to 409.
  */
@@ -776,7 +776,7 @@ export async function policyConsumers(
   }
 }
 
-/** Ensure the migration-0009 tables exist on hand-built databases (same
+/** Ensure the migration-0013 tables exist on hand-built databases (same
  * standing pattern as ensureLabFixture in orgs.ts): LAB/test databases built
  * from older migrations predate these tables, and production always migrates
  * via `migrations_dir`. Called from authenticate's fixture bootstrap path so

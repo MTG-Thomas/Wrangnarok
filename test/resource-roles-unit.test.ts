@@ -42,7 +42,7 @@ import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration5 from "../migrations/0005_forms.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
-import migration9 from "../migrations/0009_resource_roles.sql?raw";
+import migration9 from "../migrations/0013_resource_roles.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -451,7 +451,7 @@ describe("grant evaluation branches", () => {
     expect(await canPrincipal(bindings.DB, { userId: USER_ORDINARY, orgId: ORG_A }, check)).toBe(false);
   });
 
-  it("fails closed without migration 0009", async () => {
+  it("fails closed without migration 0013", async () => {
     await bindings.DB.exec(
       "DROP TABLE policy_rules; DROP TABLE role_assignments; DROP TABLE role_grants; DROP TABLE resource_roles;",
     );

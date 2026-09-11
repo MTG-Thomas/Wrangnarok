@@ -50,7 +50,7 @@ granular control plane for exactly this (`api/src/routers/roles.py`,
   claims table exists on purpose — a third store for the same allow tuple
   would be clever wrapping over boring typed rows.
 
-### Stores (migration `0009_resource_roles.sql`, Worker + D1 only)
+### Stores (migration `0013_resource_roles.sql`, Worker + D1 only)
 
 - `resource_roles(id, org_id, name, description, created_at)` — org-scoped;
   `(org_id, name)` unique. There are deliberately no global roles: a role
@@ -136,7 +136,7 @@ Organization scope and answers 404 before grant evaluation runs.
   incident response ("remove this user everywhere in this org now") is the
   demonstrated operator need.
 - No new Cloudflare primitive: Worker + D1 only (migration
-  `0009_resource_roles.sql`).
+  `0013_resource_roles.sql`).
 
 ## Consequences
 
