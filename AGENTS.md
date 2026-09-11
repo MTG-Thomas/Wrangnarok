@@ -43,6 +43,10 @@ Keep domain logic independently testable where possible, but include integration
 
 If a change introduces a new platform primitive, changes Saga/Execution/Operation semantics, changes tenancy/security boundaries, or creates a public compatibility contract, write/update an ADR or architecture spec and link the relevant issue.
 
+## Simplicity checkpoint (recurring steward review)
+
+Every 5th merge to `main`, and on any ADR-level change, the steward must answer: can we still explain the platform in one diagram with one authoritative path each for authentication/authorization, execution, persistence, secrets, deployment, and recovery? If the answer becomes "multiple paths depending on which feature landed when," pause new parity lanes and consolidate first. Stop conditions for opening Phase 4-6 lanes: a second authoritative path appears; the coverage gate stays red for more than one queue cycle; a lane touches files outside its scope twice; LIMITS-01 flags a Free violation without an approved exception. Checklist lives at `docs/architecture/000-steward-checklist.md`.
+
 ## Upstream archaeology
 
 When studying Bifrost, record observable behavior and invariants in `docs/upstream-spec.md`. Do not assume a PostgreSQL/Redis/RabbitMQ/process architecture is itself a requirement. Prefer current upstream docs/tests/source over old plans when they disagree. Hew to upstream product philosophy by default; every divergence must be explicit with Cloudflare-driven rationale recorded in the ADR.
