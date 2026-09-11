@@ -101,6 +101,21 @@ const EXECUTION_TRANSITIONS: Record<ExecutionStatus, readonly ExecutionStatus[]>
 export function canTransition(from: ExecutionStatus, to: ExecutionStatus): boolean {
   return EXECUTION_TRANSITIONS[from].includes(to);
 }
+// Native terminate() outcome (RUN-04, issue #151): the local REST surface
+// throws exact-code Errors after the Workflow engine handles the control —
+// "WorkflowError: (instance.cannot_terminate) ..." when the instance already
+// sits in a finite state (complete/errored/terminated), and "instance.not_found"
+// when no such native instance exists. Everything else (transient or
+// control-plane failures, timeouts, non-Error throws, messages without a
+// known code) fails closed to ambiguous: the route must NOT report a confirmed
+// stop it never observed. Pure and unit-tested; never surfaces native text.
+export type TerminateOutcome = "stopped" | "already-settled" | "not-found" | "ambiguous";
+export function classifyTerminateError(error: unknown): TerminateOutcome {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (message.includes("instance.cannot_terminate")) return "already-settled";
+  if (message.includes("instance.not_found")) return "not-found";
+  return "ambiguous";
+}
 // Operation state model (ADR 010 section 2, Phase 1b follow-up). Operations
 // stay within ('Running','Succeeded','Failed'); the timeout code lives in
 // error_json, never as an Operation status. A step (re)begin moves a fresh

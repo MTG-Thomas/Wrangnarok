@@ -5,6 +5,7 @@ import { previewEnvironment, previewLocal } from "./dev";
 import {
   boundedJson,
   canTransition,
+  classifyTerminateError,
   digestSaga,
   echoSaga,
   Fault,
@@ -20,6 +21,7 @@ import {
   parseSubmission,
   smokeSaga,
 } from "./domain";
+import type { TerminateOutcome } from "./domain";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import { SAGA_CATALOG } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
@@ -191,14 +193,20 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     }
     const cancel = /^\/api\/executions\/([a-f0-9]{64})\/cancel$/.exec(url.pathname);
     if (cancel?.[1] && request.method === "POST") {
-      // Owner-only cancellation (issue #16): same fixture auth plus the
-      // same org/requester scoping as reads — foreign owners get 404, never
-      // a leak. Pending cancels immediately; Running moves
-      // Running -> Cancelling -> Cancelled onto the native terminate
-      // control. Only Pending/Running reach the marker write (the transition
-      // gate above rejects everything else, including a second cancel that
-      // lands while Cancelling); terminal states answer 409 and are never
-      // rewritten. A loser that races the winner re-reads below.
+      // Owner-only cancellation (issues #16 then #151): same fixture auth plus
+      // the same org/requester scoping as reads — foreign owners get 404, never
+      // a leak. The route first writes the logical marker (Pending/Running ->
+      // Cancelling, conditional), then attempts the native terminate() control,
+      // then CLASSIFIES the native outcome before reporting anything. A
+      // confirmed stop is never reported unless one was observed (RUN-04): a
+      // resolved terminate, an already-settled engine (finite state), or a
+      // vacuous not-found on an undispatched Pending row all confirm; anything
+      // else rolls back Cancelling to the prior active status and answers 503
+      // CANCELLATION_UNCONFIRMED so the caller retries the same cancel. Only
+      // Pending/Running reach the marker write (the transition gate above
+      // rejects everything else, including a second cancel that lands while
+      // Cancelling); terminal states answer 409 and are never rewritten. A
+      // loser that races the winner re-reads below.
       const row = await visibleExecution(env.DB, cancel[1], caller);
       if (!canTransition(row.status, "Cancelling")) {
         throw new Fault(409, "EXECUTION_NOT_CANCELLABLE", "Terminal Executions cannot be cancelled.");
@@ -215,15 +223,41 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         }
         throw new Fault(409, "EXECUTION_NOT_CANCELLABLE", "Terminal Executions cannot be cancelled.");
       }
+      const priorStatus = row.status;
+      const priorDispatched = row.dispatched;
       const binding = workflowForSaga(env, row.saga_id);
+      let terminateOutcome: TerminateOutcome = "stopped";
       try {
         await (await binding.get(row.id)).terminate();
-      } catch {
-        // Already settled natively (complete/errored/terminated): the D1
-        // marker below still applies, fenced by its Cancelling condition.
+      } catch (error) {
+        terminateOutcome = classifyTerminateError(error);
       }
-      await cancelExecution(env.DB, row.id);
-      return json({ executionId: row.id, status: "Cancelled", cancelled: true });
+      // Known terminal outcomes confirm the logical cancel (ADR 001): a
+      // delivered stop; an engine that already settled (complete/errored/
+      // terminated — the terminal fence already guards racing checkpoints); or
+      // a vacuous stop on an undispatched Pending row (dispatch was never
+      // confirmed, so the native side has nothing left running).
+      if (
+        terminateOutcome === "stopped" ||
+        terminateOutcome === "already-settled" ||
+        (terminateOutcome === "not-found" && priorStatus === "Pending" && priorDispatched === 0)
+      ) {
+        await cancelExecution(env.DB, row.id);
+        return json({ executionId: row.id, status: "Cancelled", cancelled: true });
+      }
+      // Ambiguous: a dispatched row whose native instance vanished, or any
+      // transient/control-plane failure. No terminal or Operation writes — roll
+      // back to the prior active status (a compensating write owned by this
+      // route, not a product transition) so the caller can retry the same
+      // cancel and the true terminal outcome can still land.
+      await env.DB.prepare("UPDATE executions SET status=? WHERE id=? AND status='Cancelling'")
+        .bind(priorStatus, row.id)
+        .run();
+      throw new Fault(
+        503,
+        "CANCELLATION_UNCONFIRMED",
+        "Cancellation could not be confirmed. Retry the same cancel request.",
+      );
     }
     const match = /^\/api\/executions\/([a-f0-9]{64})$/.exec(url.pathname);
     if (match?.[1] && request.method === "GET") {
