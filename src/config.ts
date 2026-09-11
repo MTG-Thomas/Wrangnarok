@@ -32,7 +32,8 @@ const CONFIG_DESCRIPTION_MAX = 280;
 
 /** Credential-shaped names/values must never ride a non-secret config row:
  * secret material belongs in deployment secrets, never in a config value. */
-const CREDENTIAL_SHAPE = /(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|client[_-]?secret|auth)/i;
+const CREDENTIAL_SHAPE =
+  /(secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|access[_-]?key|client[_-]?secret|auth)/i;
 
 function invalid(code: string, message: string, status = 400): Fault {
   return new Fault(status, code, message);
@@ -208,7 +209,9 @@ export function toConfigEntry(row: ConfigRow): ConfigEntry {
 
 export async function loadConfigRow(db: D1Database, orgId: string, key: string): Promise<ConfigRow | null> {
   const row = await db
-    .prepare("SELECT id,org_id,key,type,value_json,description,managed_by,updated_at,updated_by FROM configs WHERE org_id = ? AND key = ?")
+    .prepare(
+      "SELECT id,org_id,key,type,value_json,description,managed_by,updated_at,updated_by FROM configs WHERE org_id = ? AND key = ?",
+    )
     .bind(orgId, key)
     .first<ConfigDbRow>();
   return row ? toConfigRow(row) : null;
@@ -217,7 +220,9 @@ export async function loadConfigRow(db: D1Database, orgId: string, key: string):
 export async function loadConfigById(db: D1Database, caller: Principal, id: string): Promise<ConfigRow> {
   if (!UUID.test(id)) throw invalid("INVALID_CONFIG_ID", "Config lookups need the exact config UUID.", 400);
   const row = await db
-    .prepare("SELECT id,org_id,key,type,value_json,description,managed_by,updated_at,updated_by FROM configs WHERE id = ? AND org_id = ?")
+    .prepare(
+      "SELECT id,org_id,key,type,value_json,description,managed_by,updated_at,updated_by FROM configs WHERE id = ? AND org_id = ?",
+    )
     .bind(id, caller.orgId)
     .first<ConfigDbRow>();
   // Foreign rows 404, mirroring Execution/Connection scoping: a foreign
@@ -228,7 +233,9 @@ export async function loadConfigById(db: D1Database, caller: Principal, id: stri
 
 export async function listConfigs(db: D1Database, caller: Principal): Promise<readonly ConfigEntry[]> {
   const rows = await db
-    .prepare("SELECT id,org_id,key,type,value_json,description,managed_by,updated_at,updated_by FROM configs WHERE org_id = ? ORDER BY key")
+    .prepare(
+      "SELECT id,org_id,key,type,value_json,description,managed_by,updated_at,updated_by FROM configs WHERE org_id = ? ORDER BY key",
+    )
     .bind(caller.orgId)
     .all<ConfigDbRow>();
   return Object.freeze(rows.results.map((row: ConfigDbRow) => toConfigEntry(toConfigRow(row))));
@@ -294,8 +301,7 @@ export function parseSecretRef(value: unknown): { ref: string } | null {
  * non-empty, or the install/operator write fails closed with
  * SECRET_NOT_CONFIGURED so a half-credentialed declaration never resolves. */
 export function requireProvisionedSecret(secrets: DeploymentSecrets, ref: string): void {
-  const value = secrets[ref];
-  if (typeof value !== "string" || value.length === 0) {
+  if (resolveDeploymentSecret(secrets, ref) === undefined) {
     throw invalid(
       "SECRET_NOT_CONFIGURED",
       `Secret "${ref}" has no deployment value available: refusing a half-credentialed config.`,
@@ -343,12 +349,16 @@ export async function setConfig(
   const id = existing?.id ?? crypto.randomUUID();
   if (existing) {
     await db
-      .prepare("UPDATE configs SET type = ?, value_json = ?, description = ?, updated_at = ?, updated_by = ? WHERE id = ? AND org_id = ?")
+      .prepare(
+        "UPDATE configs SET type = ?, value_json = ?, description = ?, updated_at = ?, updated_by = ? WHERE id = ? AND org_id = ?",
+      )
       .bind(type, stored, description, now, caller.userId, id, caller.orgId)
       .run();
   } else {
     await db
-      .prepare("INSERT INTO configs(id, org_id, key, type, value_json, description, managed_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)")
+      .prepare(
+        "INSERT INTO configs(id, org_id, key, type, value_json, description, managed_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+      )
       .bind(id, caller.orgId, key, type, stored, description, now, caller.userId)
       .run();
   }
@@ -426,7 +436,9 @@ export async function updateConfig(
   }
   const now = new Date().toISOString();
   const applied = await db
-    .prepare("UPDATE configs SET key = ?, type = ?, value_json = ?, description = ?, updated_at = ?, updated_by = ? WHERE id = ? AND org_id = ?")
+    .prepare(
+      "UPDATE configs SET key = ?, type = ?, value_json = ?, description = ?, updated_at = ?, updated_by = ? WHERE id = ? AND org_id = ?",
+    )
     .bind(key, type, stored, description, now, caller.userId, id, caller.orgId)
     .run();
   if (applied.meta.changes === 0) {
@@ -561,7 +573,11 @@ export function bindSagaConfig(
       const resolved = await resolveConfig(env, key, declared === undefined ? [key] : [...declared, key], defaults);
       if (resolved.found) return resolved.value;
       if (resolved.declared) throw new Fault(424, resolved.error.code, resolved.error.message);
-      throw new Fault(424, "CONFIG_REQUIREMENT_UNSATISFIED", `This Saga requires config "${key}" that is not set for this Organization.`);
+      throw new Fault(
+        424,
+        "CONFIG_REQUIREMENT_UNSATISFIED",
+        `This Saga requires config "${key}" that is not set for this Organization.`,
+      );
     },
   };
 }
@@ -597,7 +613,9 @@ export async function reconcileManagedConfigs(
   let skipped = 0;
   let deleted = 0;
   const rows = await db
-    .prepare("SELECT config_key AS key, config_value AS value, managed_by FROM bundle_config WHERE bundle_id = ? AND org_id = ?")
+    .prepare(
+      "SELECT config_key AS key, config_value AS value, managed_by FROM bundle_config WHERE bundle_id = ? AND org_id = ?",
+    )
     .bind(bundleId, orgId)
     .all<{ key: string; value: string; managed_by: string }>();
   const byKey = new Map<string, { key: string; value: string; managed_by: string }>(
@@ -607,7 +625,9 @@ export async function reconcileManagedConfigs(
     const current = byKey.get(key);
     if (!current) {
       await db
-        .prepare("INSERT INTO bundle_config(bundle_id, org_id, config_key, config_value, managed_by) VALUES (?, ?, ?, ?, ?)")
+        .prepare(
+          "INSERT INTO bundle_config(bundle_id, org_id, config_key, config_value, managed_by) VALUES (?, ?, ?, ?, ?)",
+        )
         .bind(bundleId, orgId, key, value, marker)
         .run();
       created += 1;
@@ -621,7 +641,9 @@ export async function reconcileManagedConfigs(
       skipped += 1;
     } else {
       const applied = await db
-        .prepare("UPDATE bundle_config SET config_value = ?, managed_by = ? WHERE bundle_id = ? AND org_id = ? AND config_key = ? AND managed_by = ?")
+        .prepare(
+          "UPDATE bundle_config SET config_value = ?, managed_by = ? WHERE bundle_id = ? AND org_id = ? AND config_key = ? AND managed_by = ?",
+        )
         .bind(value, marker, bundleId, orgId, key, current.managed_by)
         .run();
       if (applied.meta.changes === 0) {

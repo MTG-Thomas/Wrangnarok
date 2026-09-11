@@ -40,13 +40,7 @@ import {
 } from "./domain";
 import type { Principal, TerminateOutcome } from "./domain";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
-import {
-  deleteConfig,
-  listConfigs,
-  parseUpdateConfigInput,
-  setConfig,
-  updateConfig,
-} from "./config";
+import { deleteConfig, listConfigs, parseUpdateConfigInput, setConfig, updateConfig } from "./config";
 import {
   canManageOrg,
   createOrg,
@@ -623,7 +617,8 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (url.pathname === "/api/config" && request.method === "POST") {
       requireJson(request);
       const body: unknown = await boundedJson(request.body);
-      if (!object(body)) throw new Fault(400, "INVALID_CONFIG", "Config writes need { key, type, value?, description? }.");
+      if (!object(body))
+        throw new Fault(400, "INVALID_CONFIG", "Config writes need { key, type, value?, description? }.");
       const record = body as Record<string, unknown>;
       return json(
         {
