@@ -11,14 +11,13 @@ import { join } from "node:path";
 // 2026-09-10: the bundle is ~62 KiB; 100 KiB leaves room for real features
 // while catching an accidental heavy dependency. Raise deliberately (with
 // the reason recorded), never to make a red run green.
-// 2026-09-11 (APP-01, issue #159): 110 KiB. The authored-apps surface (12
-// routes plus the apps domain: lifecycle, fenced activation, slug swap,
-// authorized asset serving) adds ~24 KiB of hand-written feature code with
-// no new dependencies — measured 103 KiB against the 100 KiB line after a
-// shrink pass (shared JSON guard, compacted SDK descriptor, tightened
-// messages, dead-code removal). This is the deliberate feature headroom the
-// budget exists to grant, not dependency bloat.
-const BUDGET_BYTES = 110 * 1024;
+// 2026-09-11 (APP-01 + SEC-01 merge, issue #159): 120 KiB. The authored-apps
+// surface (12 routes plus the apps domain: lifecycle, fenced activation,
+// slug swap, authorized asset serving) plus the merged SEC-01 secret-scrub
+// module (src/secrets.ts with scrub call sites, no new dependencies) measure
+// ~114 KiB combined. Same deliberate feature headroom as the 110 KiB raise,
+// not dependency bloat: package.json is unchanged versus main.
+const BUDGET_BYTES = 120 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
