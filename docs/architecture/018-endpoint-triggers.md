@@ -27,7 +27,7 @@ stable Saga UUID, plus a credential and policy.
 
 ## Decision
 
-One `endpoints` table (migration 0009) holds both kinds:
+One `endpoints` table (migration 0021) holds both kinds:
 
 - `api-key` endpoints deliver at `POST /api/endpoints/:name` with the
   per-endpoint key in `X-Endpoint-Key` (or Bearer). Raw keys are shown once
