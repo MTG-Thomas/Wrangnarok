@@ -17,6 +17,10 @@ import type {
   AppSummary,
   AuditEvent,
   AuditResponse,
+  ArtifactDetail,
+  ArtifactFormat,
+  ArtifactsResponse,
+  ArtifactSummary,
   ConfigEntry,
   ConfigListResponse,
   ConnectionsResponse,
@@ -346,6 +350,19 @@ function isAuditEvent(value: unknown): value is AuditEvent {
   );
 }
 
+function isArtifactSummary(value: unknown): value is ArtifactSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["id"] === "string" &&
+    typeof v["name"] === "string" &&
+    typeof v["mime"] === "string" &&
+    typeof v["sizeBytes"] === "number" &&
+    typeof v["version"] === "number" &&
+    (v["status"] === "active" || v["status"] === "deleted")
+  );
+}
+
 function isConfigEntry(value: unknown): value is ConfigEntry {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -530,6 +547,51 @@ export async function fetchAuditEvents(query: AuditListQuery = {}): Promise<Audi
   const data = await get(`/api/audit${suffix}`);
   if (!isAuditResponse(data)) throw new Error("Unexpected audit response shape.");
   return data;
+}
+
+function isArtifactDetail(value: unknown): value is ArtifactDetail {
+  if (!isArtifactSummary(value)) return false;
+  const v = value as unknown as Record<string, unknown>;
+  return Array.isArray(v["versions"]) && Array.isArray(v["bindings"]);
+}
+
+/** GET /api/artifacts — Artifact summaries for this Organization (FILE-02). */
+export async function listArtifacts(limit?: number): Promise<ArtifactsResponse> {
+  const suffix = limit === undefined ? "" : `?limit=${encodeURIComponent(String(limit))}`;
+  const data = await get(`/api/artifacts${suffix}`);
+  if (typeof data !== "object" || data === null || !Array.isArray((data as { artifacts?: unknown }).artifacts)) {
+    throw new Error("Unexpected artifacts response shape.");
+  }
+  const artifacts = (data as { artifacts: unknown[] }).artifacts;
+  if (!artifacts.every(isArtifactSummary)) throw new Error("Unexpected artifacts response shape.");
+  return { artifacts, hasMore: (data as { hasMore?: unknown }).hasMore === true };
+}
+
+/** GET /api/artifacts/:id — Artifact detail with versions and bindings. */
+export async function fetchArtifactDetail(id: string): Promise<ArtifactDetail> {
+  if (!APP_ID.test(id)) throw new Error("Unexpected Artifact ID shape.");
+  const data = await get(`/api/artifacts/${id}`);
+  const artifact = (data as { artifact?: unknown }).artifact;
+  if (!isArtifactDetail(artifact)) throw new Error("Unexpected artifact response shape.");
+  return artifact;
+}
+
+/** DELETE /api/artifacts/:id — soft-delete (metadata survives, bytes removed). */
+export async function deleteArtifact(id: string): Promise<void> {
+  if (!APP_ID.test(id)) throw new Error("Unexpected Artifact ID shape.");
+  const token = getToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(`/api/artifacts/${id}`, { method: "DELETE", headers });
+  if (!response.ok) throw await parseApiError(response);
+}
+
+/** GET /api/artifacts/formats — generated-output format subcapabilities. */
+export async function listArtifactFormats(): Promise<ArtifactFormat[]> {
+  const data = await get("/api/artifacts/formats");
+  const formats = (data as { formats?: unknown }).formats;
+  if (!Array.isArray(formats)) throw new Error("Unexpected formats response shape.");
+  return formats as ArtifactFormat[];
 }
 
 function isConnectionSummary(value: unknown): value is ConnectionSummary {
