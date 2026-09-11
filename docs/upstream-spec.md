@@ -4,6 +4,12 @@ Wrangnarök is AGPL-3.0 and treats `gobifrost/bifrost` as its reference product.
 
 Status vocabulary: **Adopt** preserves the product capability; **Adapt** preserves intent with a Cloudflare-native model; **Defer** is useful but not required yet; **Reject** is intentionally outside this experiment; **Investigate** needs more evidence.
 
+## Current audit baseline (2026-09-11)
+
+The current reference is legitimate upstream `gobifrost/bifrost` commit `3543c7ebee0e1bd9a2cab6dfba080a30621b1c5f`, not the similarly named AI gateway or a workspace/userland repository. See [the full parity map](upstream-parity.md) for capability-level implementation status, source/test evidence, issue ownership and explicit adaptations. **Adopt/Adapt are intent, not completion claims.**
+
+This audit corrects several earlier summaries below. Findings 16–18 retain historical `0598020e` observations except where explicitly corrected; their old paths/line numbers must not be treated as current evidence. The parity map supplies current paths, including `api/shared/form_runtime.py`, `api/bifrost/decorators.py`, and `api/src/services/mcp_server/`. Selected source/tests were inspected, not an upstream production instance or a passing upstream test run.
+
 | Upstream capability | Status | Wrangnarök direction | Candidate Cloudflare primitive |
 | --- | --- | --- | --- |
 | Code-first workflows | **Adopt** | TypeScript **Sagas** | Workflows |
@@ -126,29 +132,29 @@ Runtime facts: workerd `fetch` rejects `redirect:error` (use `manual` plus expli
 
 **Wrangnarök implication:** derive the token host from the Connection endpoint (region-portable, no per-region code). Pin OAuth scope as the least-privilege precedent for future OAuth work. Shape and count-cap vendor list responses before persisting; never assume small.
 
-### 14. Execution state machine, retry, timeout, cancellation (upstream sweep, Sep 2026)
+### 14. Execution state, retry, timeout and cancellation (corrected 2026-09-11)
 
-Upstream statuses, verbatim from `api/src/models/enums.py`: `Scheduled`, `Pending`, `Running`, `Success`, `Failed`, `Timeout`, `Stuck`, `CompletedWithErrors`, `Cancelling`, `Cancelled`. `Scheduled` is a durable pre-publish row (promotable when due); `Pending` is published-but-unclaimed and is never swept; `Cancelling` is the transient cancel-requested state; `Stuck` is legacy/query-only (the sweeper now writes `Timeout`/`Cancelled`); `CompletedWithErrors` is the success-with-errors variant ADR 001 omits.
+At `3543c7e`, the status vocabulary includes `Scheduled`, `Pending`, `Running`, `Success`, `Failed`, `Timeout`, `Stuck`, `CompletedWithErrors`, `Cancelling`, and `Cancelled` (`api/src/models/enums.py`). A returned `{success: false}` can produce `CompletedWithErrors` (`api/src/services/execution/engine.py:408-439`). Wrangnarök's narrower taxonomy remains an explicit adaptation.
 
-Retry is off by default and narrow when on: `ExecutionRetryPolicy` (disabled unless enabled, max 2) plus an operator ceiling, both required. Only engine-loss retries (republish with `Pending` reset) — never business-error retry. Infrastructure redelivery is separate (backed-off delays, poison-letter queue when exhausted).
+**Pending is not universally unswept upstream.** `api/src/jobs/schedulers/execution_cleanup.py:31-44,73-83,119-177` identifies database Pending rows older than ten minutes by `started_at` and writes Timeout. This observation does not imply every Redis-only receipt is swept. Wrangnarök's no-Pending-sweeper rule remains a deliberate local safety choice.
 
-Timeouts are per-workflow (default 1800s, 0 disables); a 5-minute sweeper moves `Running`-past-timeout to `Timeout`, `Scheduled`-24h-overdue to `Failed`, and `Cancelling`-over-3-minutes to `Cancelled`.
+The previous `ExecutionRetryPolicy`/maximum-two/engine-loss-only attribution was not corroborated in current upstream. `api/src/models/contracts/workflows.py:91-95` calls `retry_policy` future use, and the workflow router emits `retry_policy=None`. Broker publication retries (`api/src/jobs/rabbitmq.py:612-695`), drain requeue, processing failures with `requeue=False` (`:255-281`), durable checkpoint retries and vendor retries are distinct concerns. The local ceiling of two for eligible idempotent checkpoints is local policy, not a proven upstream contract.
 
-Cancellation is owner-or-superuser only: `Scheduled`/`Pending` cancel immediately, `Running` goes to `Cancelling` with a cancel flag the worker honors, re-cancel is idempotent, terminal states are not cancellable.
+The deferred promoter commits Scheduled-to-Pending **before** publishing and best-effort reverts on publication failure (`api/src/jobs/schedulers/deferred_execution_promoter.py:9-17,48-105`). The inspected completion update (`api/src/repositories/executions.py:180-194,267-272`) does not establish a universal matching-attempt-token predicate. Do not attribute the earlier advisory-lock/attempt-token/broker-confirm protocol to current upstream without additional evidence.
 
-Ambiguity is fenced, never guessed: advisory locks plus attempt-token claim fences, stale callbacks rejected unless the row is still `Running`/`Cancelling` with a matching token, `Scheduled` stays durable until broker confirm, and missing state surfaces as failure — never invented success.
+Cancellation has owner/admin authorization and distinct scheduled/pending/running paths (`api/src/routers/executions.py:588-642`, `api/src/routers/workflows.py:1108-1190`). Current local code attempts native termination and fences D1 writes, but a swallowed termination failure is not proof of physical stop. The parity map tracks that local follow-up separately from status-name compatibility.
 
-**Wrangnarök implication (feeds issue #15):** adopt an explicit `Cancelling` state plus stale-token rejection; gate retries to engine-loss with an operator ceiling (Workflow step retry 2 risks retrying non-idempotent mutations); keep a durable pre-publish `Scheduled` distinct from `Pending` and never sweep `Pending` — the current 10-minute expiry conflates queue backup with lost dispatch.
+**Wrangnarök implication:** preserve existing idempotency, conservative vendor retries, explicit `Cancelling`, conditional terminal writes and refusal of fabricated success. Correct their provenance rather than weakening working safety rules to imitate upstream. Runtime policy, synchronous invocation, scheduling, partial-success and recovery gaps have explicit parity issues.
 
 ### 15. Integration SDK and OAuth contracts (upstream sweep, Sep 2026)
 
 The SDK is workflow-facing, not vendor-facing: `@workflow`/`@tool` decorators, typed errors, and `integrations.get(name, scope, oauth_scope)` with decrypted secrets auto-registered for log scrubbing. There are deliberately **no** request/response normalization or pagination helpers — vendor calls are raw workflow HTTP plus OAuth URL templating and config merge. Vendor-call discipline comes from elsewhere: a concurrency admission slot (fail-closed, never retries the vendor op), GET-only 5xx retry, 10s timeouts with backoff, and 4xx-no-retry.
 
-OAuth storage splits portable from per-organization state: global providers/tokens (null org) carry defaults; per-org rows carry overrides; client secrets and tokens are Fernet-encrypted while names, URLs, scopes, and expiry stay plaintext. Refresh runs in one shared primitive used by the scheduler (15-minute cadence, refresh within 20 minutes of expiry), the on-demand endpoint, and inline client-credentials auto-refresh; failures mark the token failed and emit events. Requested scopes must be a subset of configured scopes.
+OAuth storage splits portable from per-organization state: global providers/tokens (null org) carry defaults; per-org rows carry overrides; client secrets and tokens are Fernet-encrypted while names, URLs, scopes, and expiry stay plaintext. Refresh runs in one shared primitive used by the scheduler (15-minute cadence, refresh within 20 minutes of expiry), the on-demand endpoint, and inline client-credentials auto-refresh; failures mark the token failed and emit events. **Correction at `3543c7e`:** a blanket configured-scope subset restriction is not supported by the inspected SDK path. `api/src/routers/cli.py:148-182,863-939` uses `oauth_scope` to request a fresh token for a different resource audience; `api/tests/unit/routers/test_cli_auto_refresh.py:284-336` explicitly exercises Graph-to-Exchange scope replacement. OAuth resource scopes are not Organization authorization scope.
 
 Portable definitions declare needs (`SolutionConnectionSchema`); resolution falls back org row → defaults, org overrides winning, token mapping → org token → most-recent global token. Requirement failures are loud when declared (HTTP 424) and silent (`None`/404) when undeclared; 403s propagate.
 
-**Wrangnarök implication (feeds Phase 3):** copy the 424-fail-loud-on-declared vs silent-None-otherwise split instead of a uniform `CONNECTION_NOT_CONFIGURED`; put refresh in one shared primitive with per-Connection status rather than per-Saga code; enforce subset-only scope overrides with an explicit, auditable fallback order before adopting any global cascade.
+**Wrangnarök implication (feeds Phase 3):** preserve the declared-required versus optional-missing split rather than a uniform `CONNECTION_NOT_CONFIGURED`; local required failures currently surface inside ExecutionHistory, not as submit-time HTTP 424. Put refresh in one shared primitive with per-Connection status. Specify audience/scope overrides and an auditable lookup order explicitly; a local subset restriction would be a deliberate divergence, not an upstream invariant. ADR 005's accepted provider-global v0 and per-Organization-secret tripwire remain in force.
 
 ### 16. Files/artifacts: policy-checked URLs, finalize-after-PUT, versioned deletes (upstream sweep, Sep 2026)
 
@@ -166,7 +172,7 @@ Deletes are policy-checked, mutation-locked, and optimistic-versioned: missing f
 
 All pins at vendor/upstream commit `0598020e` (2026-09-04).
 
-Invocation is async-only: `POST /api/workflows/execute` returns an execution ID plus status, never the result; terminal state arrives over WS frames while the result still needs `GET /api/executions/{id}` (`api/src/routers/workflows.py:734-744`; `app-sdk/use-workflow.ts:17-31`). There is no client deadline; the app polls at 2 s and retries only 404/408/429/5xx, fast-failing other 4xx (`use-workflow.ts:76-89,250-256`). The web client is a generated OpenAPI client whose retry discipline is method-shaped: `GET`/`PUT`/`DELETE` retry 502/503/504 with 250/750/2000 ms backoff, `POST`/`PATCH` never (`client/src/lib/api-client.ts:1-13,35-82`). Path refs (`path::fn`) scope to the calling install via app ID plus org scope (`app-sdk/use-workflow.ts:91-99,147-157`).
+**Invocation correction at `3543c7e`: upstream is not async-only.** `api/src/models/contracts/executions.py:134-179` includes `sync`; `api/src/routers/workflows.py:976-1083` supports synchronous/data-provider results as well as asynchronous receipts, and `api/tests/e2e/api/test_executions.py:87-116` asserts inline results. Configured HTTP endpoints also dispatch by persisted sync/async mode (`api/src/routers/endpoints.py:212-232`). The browser SDK's async invoke/stream/poll path is one client workflow, not the whole server contract. Wrangnarök remains async-first, with bounded sync/provider parity separately tracked. Preserve method-shaped retries and explicit install/org context when adapting the current V2 SDK; do not invent forms/config hook exports absent from its export surface.
 
 Execution reads are owner-scoped for non-admins, with redaction of variables/context/memory/CPU and hidden `DEBUG`/`TRACEBACK` logs (`api/src/routers/executions.py:155-190,337-366,462-522`). The UI polls detail every 2 s while `Pending`/`Running` and tolerates brief 404s; cancel invalidates list plus detail (`hooks/useExecutions.ts:66-126,180-200`).
 
@@ -200,7 +206,7 @@ These are stronger than implementation preferences and should guide design revie
 4. **Integration definitions and Organization-specific Connections are separate.**
 5. **Secrets never cross into browser/client code or ordinary execution output.**
 6. **Portable definitions exclude tenant credentials and mutable runtime data.**
-7. **Every externally invokable dependency must independently authorize the caller/context.**
+7. **Every externally invokable dependency must validate caller/context authority, including explicit scoped delegation from an authorized form/app.** A form grant is not arbitrary workflow access, but upstream form submission need not require a separate direct-workflow grant.
 8. **Local development should not require production deployment.**
 9. **Managed/declarative resources must have a clear source of truth.**
 10. **Cloudflare primitives remain visible rather than hidden behind mythological aliases.**
