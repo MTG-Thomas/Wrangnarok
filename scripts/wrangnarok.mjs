@@ -17,12 +17,23 @@ import { existsSync, readFileSync } from "node:fs";
 const TERMINAL = ["Succeeded", "Failed", "TimedOut", "Cancelled"];
 const EXECUTION_ID = /^[a-f0-9]{64}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{16,128}$/;
+const SAGA_SLUG = /^[a-z0-9][a-z0-9.-]*$/i;
+const STABLE_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 /** Human-rendering bound for input/result payloads (mirrors the D1 4096-byte bound). */
 const CLI_JSON_BOUND = 4096;
 const HISTORY_STATUSES = ["Pending", "Running", "Succeeded", "Failed", "TimedOut", "Cancelling", "Cancelled"];
 
+// Stable machine-readable error envelope (DEV-01, issue #140): with --json,
+// failures print one JSON object { error: { code, message } } on stderr and
+// keep the same exit convention (2 for usage, 1 otherwise). Human-readable
+// output keeps the legacy WRANGNAROK_CLI line. Codes match SDK_ERROR_CODES
+// in src/sdk.ts; messages are never the contract.
 function fail(code, message) {
-  console.error(`WRANGNAROK_CLI ${code}: ${message}`);
+  if (process.argv.includes("--json")) {
+    console.error(JSON.stringify({ error: { code, message: String(message) } }));
+  } else {
+    console.error(`WRANGNAROK_CLI ${code}: ${message}`);
+  }
   process.exit(code === "USAGE" ? 2 : 1);
 }
 
@@ -150,6 +161,50 @@ function printSagas(sagas) {
   for (const saga of sagas) console.log(`${saga.name}\t${saga.id}\t${saga.revision}`);
 }
 
+function printInspect(saga) {
+  if (emit({ saga })) return;
+  console.log(`${saga.name}\t${saga.id}\t${saga.revision}`);
+  console.log(saga.description);
+  if (Array.isArray(saga.requiredIntegrations) && saga.requiredIntegrations.length > 0) {
+    console.log(`requiredIntegrations: ${saga.requiredIntegrations.join(", ")}`);
+  } else {
+    console.log("requiredIntegrations: (none)");
+  }
+  if (saga.inputSchema !== undefined) console.log(`inputSchema: ${JSON.stringify(saga.inputSchema)}`);
+  if (saga.outputSchema !== undefined) console.log(`outputSchema: ${JSON.stringify(saga.outputSchema)}`);
+}
+
+const DIAGNOSE_HINTS = {
+  INTEGRATION_REQUIREMENT_UNSATISFIED:
+    "This Saga requires an Integration Connection that is not configured for this Organization.",
+  ECHO_VENDOR_TIMEOUT: "The vendor exceeded its deadline; the timeout-mark checkpoint wrote TimedOut.",
+  NINJA_VENDOR_TIMEOUT: "The vendor exceeded its deadline; the timeout-mark checkpoint wrote TimedOut.",
+  NINJA_UNAUTHORIZED: "NinjaOne credentials are missing or rejected; check the server environment.",
+  NINJA_NOT_CONFIGURED: "NinjaOne credentials are not configured; check the server environment.",
+  EXECUTION_CANCELLED: "The Execution was cancelled; submit a fresh Idempotency-Key to run again.",
+  DISPATCH_UNCONFIRMED: "Work may have started. Retry the same request and Idempotency-Key.",
+};
+
+function printDiagnosis(detail) {
+  const errorCode = detail?.error?.code;
+  const diagnosis = {
+    executionId: detail.executionId,
+    status: detail.status,
+    sagaName: detail.sagaName,
+    operations: detail.operations,
+    result: detail.result,
+    error: detail.error,
+    hint: DIAGNOSE_HINTS[errorCode] ?? null,
+  };
+  if (emit({ diagnosis })) return;
+  console.log(`${diagnosis.executionId} ${diagnosis.status}`);
+  for (const op of diagnosis.operations ?? []) console.log(`  ${op.name}\t${op.status}`);
+  if (diagnosis.error !== null && diagnosis.error !== undefined) {
+    console.log(`error: ${JSON.stringify(diagnosis.error)}`);
+  }
+  if (diagnosis.hint) console.log(`hint: ${diagnosis.hint}`);
+}
+
 function boundedCliJson(value) {
   if (value === null || value === undefined) return "—";
   const text = JSON.stringify(value, null, 2) ?? "—";
@@ -216,14 +271,22 @@ Global flags:
 
 Commands:
   sagas                                   List the Saga catalog
+  inspect --saga NAME|UUID                Show one Saga (schemas, requirements)
+  scaffold --name SLUG --id UUID [--description TEXT] [--revision REV]
+                                          Emit a new defineSaga module (offline)
   submit --saga NAME|UUID [--input JSON|@FILE] [--key KEY] [--no-wait]
                                           Submit an Execution (202 + poll to terminal)
+  preview --saga NAME|UUID [--input JSON|@FILE] [--check-env]
+                                          No-registration local preview (read-only:
+                                          no D1 writes, no dispatch)
   detail --id HEX                         Fetch one Execution (add --wait to poll)
+  diagnose --id HEX                       Fetch one Execution with failure hints
   history [--status S[,S2]] [--saga NAME|UUID] [--from YYYY-MM-DD]
           [--to YYYY-MM-DD] [--limit N] [--all]
                                           Query Execution summaries (server filters,
                                           cursor traversal; loaded counts are not totals)
   cancel --id HEX                         Cancel one Execution (exact ID only)
+  contract                                Show the versioned SDK contract (GET /api/sdk)
   selftest                                Offline selftest (stub fetch, no network)
 
 Auth notes: local .dev.vars tokens never leave this machine in logs. Dev
@@ -254,6 +317,152 @@ export async function runCommand(ctx, deps = {}) {
   switch (ctx.command) {
     case "sagas": {
       return { sagas: await fetchSagas(full) };
+    }
+    case "inspect": {
+      if (!ctx.saga) fail("USAGE", "inspect needs --saga NAME|UUID.");
+      const sagas = await fetchSagas(full);
+      if (STABLE_UUID.test(ctx.saga)) {
+        const byId = sagas.find((entry) => String(entry.id).toLowerCase() === ctx.saga.toLowerCase());
+        if (!byId) fail("SDK_SAGA_NOT_FOUND", `no Saga with stable id ${JSON.stringify(ctx.saga)}.`);
+        return { saga: byId };
+      }
+      const matches = sagas.filter((entry) => entry.name === ctx.saga);
+      if (matches.length === 0) fail("SDK_SAGA_NOT_FOUND", `no Saga named ${JSON.stringify(ctx.saga)}.`);
+      if (matches.length > 1) fail("SDK_SAGA_AMBIGUOUS", `multiple Sagas named ${JSON.stringify(ctx.saga)}.`);
+      return { saga: matches[0] };
+    }
+    case "scaffold": {
+      // Offline: no fetch, no token use. Mirrors scaffoldSaga() in src/sdk.ts;
+      // test/sdk.test.ts pins the same markers in both.
+      const name = ctx.scaffoldName;
+      const id = ctx.scaffoldId;
+      if (!name || !SAGA_SLUG.test(name)) fail("USAGE", "scaffold needs --name SLUG (simple slug).");
+      if (!id || !STABLE_UUID.test(id)) fail("USAGE", "scaffold needs --id UUID (stable Saga identity).");
+      const description = ctx.scaffoldDescription ?? `Saga ${name}`;
+      if (description.length === 0 || description.length > 280) {
+        fail("USAGE", "scaffold --description must be 1-280 chars.");
+      }
+      const revision = ctx.scaffoldRevision ?? `${name}-v1`;
+      if (revision.length === 0 || revision.length > 64) fail("USAGE", "scaffold --revision must be 1-64 chars.");
+      const path = `src/sagas/${name}.ts`;
+      const content = [
+        "// SPDX-License-Identifier: AGPL-3.0",
+        `// ${name} Saga (scaffolded with the Wrangnarok CLI).`,
+        "// Stable identity per ADR 002: changing the id below mints a DIFFERENT Saga.",
+        'import { WorkflowEntrypoint } from "cloudflare:workers";',
+        'import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";',
+        'import { NonRetryableError } from "cloudflare:workflows";',
+        'import type { Bindings } from "../bindings";',
+        'import { EXECUTION_ID } from "../domain";',
+        'import type { ExecutionParams, SafeError } from "../domain";',
+        'import { defineSaga } from "../saga";',
+        'import { failExecution, prepareExecution } from "../executions";',
+        'import { executeSaga } from "./shared";',
+        "",
+        `export const ${name.replace(/[^a-zA-Z0-9_]/g, "_")}SagaDef = defineSaga<unknown>({`,
+        `  id: ${JSON.stringify(id)},`,
+        `  name: ${JSON.stringify(name)},`,
+        `  revision: ${JSON.stringify(revision)},`,
+        `  description: ${JSON.stringify(description)},`,
+        "  requiredIntegrations: [],",
+        "  inputSchema: Object.freeze({",
+        '    type: "object" as const,',
+        "    properties: Object.freeze({}),",
+        "    additionalProperties: false,",
+        "  }),",
+        "  parse: (value) => value,",
+        "  run: async (ctx, step) => {",
+        "    const eid = ctx.executionId;",
+        '    if (typeof eid !== "string" || !EXECUTION_ID.test(eid)) {',
+        '      throw new NonRetryableError("Invalid local Execution invocation.");',
+        "    }",
+        "    let expectedFailure;",
+        "    try {",
+        '      const prepared = await step.do("prepare-input-v1", () =>',
+        `        prepareExecution(ctx.db, eid, ${JSON.stringify(id)}, ${JSON.stringify(revision)}, (v) => v),`,
+        "      );",
+        '      const output = await step.do("work-v1", async () => prepared.input);',
+        '      await step.do("persist-success-v1", async () => {',
+        "        await ctx.db",
+        "          .prepare(",
+        "            \"UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'\",",
+        "          )",
+        "          .bind(new Date().toISOString(), JSON.stringify(output), eid)",
+        "          .run();",
+        "      });",
+        "      return output;",
+        "    } catch {",
+        "      const safe = expectedFailure ?? {",
+        '        code: "EXECUTION_FAILED",',
+        '        message: "The Execution could not complete. Inspect local runtime diagnostics.",',
+        "      };",
+        '      await step.do("persist-failure-v1", () => failExecution(ctx.db, eid, safe));',
+        "      throw new NonRetryableError(safe.code);",
+        "    }",
+        "  },",
+        "});",
+        "",
+        `export class ${name.replace(/[^a-zA-Z0-9]/g, "")}Workflow extends WorkflowEntrypoint<Bindings, ExecutionParams> {`,
+        "  async run(event, step) {",
+        `    return executeSaga(this.env, event, step, ${name.replace(/[^a-zA-Z0-9_]/g, "_")}SagaDef);`,
+        "  }",
+        "}",
+        "",
+      ].join("\n");
+      return {
+        scaffold: {
+          path,
+          content,
+          next: [
+            "Add the definition to SAGA_DEFINITIONS in src/sagas/index.ts and the Workflow binding in wrangler.jsonc.",
+            "Add the stable identity to sagas.manifest.json (the saga-contract test fails loudly otherwise).",
+            "Run npm run check:sagas and npm test before opening a PR.",
+          ],
+        },
+      };
+    }
+    case "diagnose": {
+      const detail = await pollDetail(full, checkExecutionId(ctx.id), {
+        wait: false,
+        timeoutMs: ctx.timeoutMs,
+        pollMs: ctx.pollMs,
+        sleep,
+      });
+      const hint = DIAGNOSE_HINTS[detail?.error?.code] ?? null;
+      return {
+        diagnosis: {
+          executionId: detail.executionId,
+          status: detail.status,
+          sagaName: detail.sagaName,
+          operations: detail.operations,
+          result: detail.result,
+          error: detail.error,
+          hint,
+        },
+      };
+    }
+    case "contract": {
+      return readJson(await fetchImpl(`${ctx.base}/api/sdk`, { headers: full.headers }), "sdk contract");
+    }
+    case "preview": {
+      // DEV-02 (issue #141): no-registration local preview. Read-only by
+      // construction server-side (no D1 writes, no dispatch); --check-env
+      // opts into the read-only Connection-presence check for this
+      // Organization only. Same caller policy as every other command.
+      if (!ctx.saga) fail("USAGE", "preview needs --saga NAME|UUID.");
+      const sagaId = await resolveSagaId(full, ctx.saga);
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/dev/preview`, {
+          method: "POST",
+          headers: full.headers,
+          body: JSON.stringify({
+            sagaId,
+            input: ctx.input ?? {},
+            ...(ctx.checkEnv ? { checkEnvironment: true } : {}),
+          }),
+        }),
+        "saga preview",
+      );
     }
     case "submit": {
       if (!ctx.saga) fail("USAGE", "submit needs --saga NAME|UUID.");
@@ -360,17 +569,22 @@ async function main() {
   const command = parsed.command;
   const ctx = {
     command,
-    token: authToken(),
+    token: command === "scaffold" ? "" : authToken(),
     base: baseUrl(),
     json: parsed.json,
     timeoutMs: Number(arg("timeout-ms", "120000")),
     pollMs: Number(arg("poll-ms", "2000")),
     // Per-command arguments; each command reads only its own.
-    saga: command === "submit" ? arg("saga") : undefined,
+    saga: command === "submit" || command === "inspect" || command === "preview" ? arg("saga") : undefined,
+    checkEnv: command === "preview" ? flag("check-env") : false,
+    scaffoldName: command === "scaffold" ? arg("name") : undefined,
+    scaffoldId: command === "scaffold" ? arg("id") : undefined,
+    scaffoldDescription: command === "scaffold" ? arg("description") : undefined,
+    scaffoldRevision: command === "scaffold" ? arg("revision") : undefined,
     sagaFilter: command === "history" ? arg("saga") : undefined,
-    id: command === "detail" || command === "cancel" ? arg("id") : undefined,
+    id: command === "detail" || command === "cancel" || command === "diagnose" ? arg("id") : undefined,
     key: command === "submit" ? arg("key") : undefined,
-    input: command === "submit" ? readInput() : undefined,
+    input: command === "submit" || command === "preview" ? readInput() : undefined,
     statusFilter: command === "history" ? arg("status") : undefined,
     limit: limit === undefined ? undefined : Number(limit),
     from: command === "history" ? arg("from") : undefined,
@@ -383,7 +597,15 @@ async function main() {
     fail("NETWORK", `request failed: ${error instanceof Error ? error.message : error}`);
   });
   if (command === "sagas") printSagas(result.sagas);
-  else if (command === "history") printHistory(result.executions, result.hasMore, { pages: result.pages ?? 1 });
+  else if (command === "inspect") printInspect(result.saga);
+  else if (command === "diagnose") printDiagnosis(result.diagnosis);
+  else if (command === "scaffold") {
+    if (parsed.json) console.log(JSON.stringify(result));
+    else {
+      console.log(`scaffolded ${result.scaffold.path}`);
+      for (const step of result.scaffold.next) console.log(`next: ${step}`);
+    }
+  } else if (command === "history") printHistory(result.executions, result.hasMore, { pages: result.pages ?? 1 });
   else if (command === "detail") printDetail(result);
   else if (command === "cancel") printCancel(result);
   else if (parsed.json) console.log(JSON.stringify(result));
@@ -522,6 +744,143 @@ async function selftest() {
     const result = await runCommand({ ...base, command: "cancel", id }, { fetchImpl: stub.fetch, ...noSleep });
     check("cancel success", result.status === "Cancelled");
     check("cancel exact url", stub.calls[0].url === `http://local.test/api/executions/${id}/cancel`);
+  }
+
+  // inspect resolves a Saga by exact name and returns its metadata.
+  {
+    const stub = stubFetch([
+      jsonResponse({
+        sagas: [
+          {
+            id: "395e15f0-3627-41f6-8922-008ce37e3b35",
+            name: "hello",
+            revision: "hello-v1",
+            description: "hi",
+            requiredIntegrations: [],
+          },
+        ],
+      }),
+    ]);
+    const result = await runCommand(
+      { ...base, command: "inspect", saga: "hello" },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("inspect name", result.saga.name === "hello");
+  }
+
+  // inspect by stable UUID; unknown names fail with SDK_SAGA_NOT_FOUND.
+  {
+    const stub = stubFetch([
+      jsonResponse({ sagas: [{ id: "395e15f0-3627-41f6-8922-008ce37e3b35", name: "hello", revision: "hello-v1" }] }),
+    ]);
+    const result = await runCommand(
+      { ...base, command: "inspect", saga: "395e15f0-3627-41f6-8922-008ce37e3b35" },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("inspect uuid", result.saga.revision === "hello-v1");
+    const empty = stubFetch([jsonResponse({ sagas: [] })]);
+    let error = null;
+    const exit = process.exit;
+    const errlines = [];
+    const err = console.error;
+    console.error = (line) => errlines.push(String(line));
+    process.exit = (code) => {
+      throw new Error(`exit:${code}`);
+    };
+    try {
+      await runCommand({ ...base, command: "inspect", saga: "missing" }, { fetchImpl: empty.fetch, ...noSleep });
+    } catch (e) {
+      error = e;
+    } finally {
+      process.exit = exit;
+      console.error = err;
+    }
+    check(
+      "inspect unknown",
+      /exit:1/.test(String(error)) && errlines.some((line) => line.includes("SDK_SAGA_NOT_FOUND")),
+    );
+  }
+
+  // scaffold is offline: no fetch, template carries the determinism markers.
+  {
+    const stub = stubFetch([]);
+    const result = await runCommand(
+      {
+        ...base,
+        command: "scaffold",
+        scaffoldName: "fresh",
+        scaffoldId: "395e15f0-3627-41f6-8922-008ce37e3b97",
+        scaffoldDescription: "Fresh scaffold.",
+        scaffoldRevision: "fresh-v1",
+      },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("scaffold path", result.scaffold.path === "src/sagas/fresh.ts");
+    for (const marker of ["defineSaga", "requiredIntegrations", 'step.do("prepare-input-v1"']) {
+      check(`scaffold marker ${marker}`, result.scaffold.content.includes(marker));
+    }
+    check("scaffold offline", stub.calls.length === 0);
+  }
+
+  // diagnose returns the detail plus a hint for known failure codes.
+  {
+    const id = "e".repeat(64);
+    const stub = stubFetch([
+      jsonResponse({
+        executionId: id,
+        status: "Failed",
+        sagaName: "hello",
+        operations: [{ name: "prepare-input-v1", status: "Succeeded" }],
+        result: null,
+        error: { code: "NINJA_UNAUTHORIZED", message: "rejected" },
+      }),
+    ]);
+    const result = await runCommand({ ...base, command: "diagnose", id }, { fetchImpl: stub.fetch, ...noSleep });
+    check("diagnose hint", typeof result.diagnosis.hint === "string" && result.diagnosis.hint.includes("credentials"));
+  }
+
+  // contract fetches the versioned SDK descriptor.
+  {
+    const stub = stubFetch([jsonResponse({ contract: "wrangnarok.sdk", version: "1" })]);
+    const result = await runCommand({ ...base, command: "contract" }, { fetchImpl: stub.fetch, ...noSleep });
+    check("contract version", result.version === "1");
+    check("contract url", stub.calls[0].url === "http://local.test/api/sdk");
+  }
+
+  // preview resolves the Saga name, posts the parsed input, and returns the
+  // read-only receipt untouched. --check-env opts into the read-only check.
+  {
+    const uuid = "395e15f0-3627-41f6-8922-008ce37e3b35";
+    const body = {
+      preview: {
+        saga: { id: uuid, name: "hello", revision: "hello-v1" },
+        input: { name: "Ada" },
+        environmentChecked: false,
+        environment: [],
+        persisted: false,
+        dispatched: false,
+      },
+    };
+    const stub = stubFetch([
+      jsonResponse({ sagas: [{ id: uuid, name: "hello", revision: "hello-v1" }] }),
+      jsonResponse(body),
+    ]);
+    const result = await runCommand(
+      { ...base, command: "preview", saga: "hello", input: { name: "Ada" }, checkEnv: false },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("preview read-only", result.preview.persisted === false && result.preview.dispatched === false);
+    check("preview url", stub.calls[1].url === "http://local.test/api/dev/preview");
+    check("preview opt-in off by default", !JSON.parse(stub.calls[1].init.body).checkEnvironment);
+    const envStub = stubFetch([
+      jsonResponse({ sagas: [{ id: uuid, name: "hello", revision: "hello-v1" }] }),
+      jsonResponse(body),
+    ]);
+    await runCommand(
+      { ...base, command: "preview", saga: uuid, input: {}, checkEnv: true },
+      { fetchImpl: envStub.fetch, ...noSleep },
+    );
+    check("preview check-env opts in", JSON.parse(envStub.calls[0].init.body).checkEnvironment === true);
   }
 
   // server mismatch is loud.
