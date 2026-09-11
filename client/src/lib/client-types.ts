@@ -200,7 +200,7 @@ export interface AppDetail extends AppSummary {
   activeDeployment: AppDeployment | null;
 }
 
-/** Row shape for GET /api/config (CON-02, ADR 019): typed values for this
+/** Row shape for GET /api/config (CON-02, ADR 020): typed values for this
  * Organization; secret rows answer "[SECRET]", never values. */
 export interface ConfigEntry {
   id: string;
@@ -215,6 +215,65 @@ export interface ConfigEntry {
 
 export interface ConfigListResponse {
   configs: ConfigEntry[];
+}
+
+/** Browser App SDK runtime wire shapes (APP-02, ADR 019). Mirrors
+ * src/app-runtime.ts; guards in lib/app-runtime.ts fail loud on drift. */
+
+/** Scoped capability grant (author view; revoked rows stay listed). */
+export interface AppGrant {
+  id: string;
+  kind: "saga" | "table" | "file";
+  ref: string;
+  permission: "invoke" | "read" | "write";
+  revoked: boolean;
+  createdAt: string;
+}
+
+/** App Table declaration (author view shows hidden; runtime lists visible only). */
+export interface AppTableDef {
+  id: string;
+  name: string;
+  visibility: "visible" | "hidden";
+  columns: string[];
+  revision: number;
+  createdAt: string;
+}
+
+/** One JSON document row with its authoritative Table revision. */
+export interface AppTableRow {
+  id: string;
+  data: Record<string, unknown>;
+  tableRevision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Compatibility handshake descriptor (GET /api/apps/:id/sdk). */
+export interface AppHandshake {
+  sdk: "wrangnarok.app-runtime";
+  version: string;
+  app: { id: string; name: string; slug: string; status: string };
+}
+
+/** File metadata (never bytes; bytes ride single-use tokens). */
+export interface AppFileMeta {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  version: number;
+  status: "pending" | "ready";
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Scoped invocation linkage (activity tail; result via execution detail). */
+export interface AppExecutionLink {
+  executionId: string;
+  sagaId: string;
+  createdAt: string;
 }
 
 /** File location declaration (FILE-01, ADR 018). */

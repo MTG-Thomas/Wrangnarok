@@ -132,6 +132,28 @@ export const SDK_ERROR_CODES = [
   "APP_NOT_LIVE",
   "INVALID_ASSET",
   "ASSET_NOT_FOUND",
+  "INVALID_APP_GRANT",
+  "APP_GRANT_CONFLICT",
+  "APP_GRANT_NOT_FOUND",
+  "APP_SAGA_FORBIDDEN",
+  "APP_TABLE_FORBIDDEN",
+  "APP_FILE_FORBIDDEN",
+  "INVALID_APP_TABLE",
+  "INVALID_TABLE_QUERY",
+  "APP_TABLE_QUERY_UNSUPPORTED",
+  "APP_TABLE_NOT_FOUND",
+  "INVALID_TABLE_ROW",
+  "APP_ROW_NOT_FOUND",
+  "APP_TABLE_FULL",
+  "INVALID_APP_FILE",
+  "APP_FILE_NOT_FOUND",
+  "APP_FILE_TOKEN_INVALID",
+  "APP_FILE_TOKEN_EXPIRED",
+  "APP_FILE_METADATA_MISMATCH",
+  "APP_FILE_TOO_LARGE",
+  "APP_FILE_NOT_READY",
+  "APP_FILE_VERSION_CONFLICT",
+  "APP_SDK_MISMATCH",
   "INVALID_LOCATION",
   "LOCATION_CONFLICT",
   "LOCATION_NOT_EMPTY",
@@ -428,7 +450,7 @@ export function parsePreview(value: unknown): SdkPreview {
   return preview as unknown as SdkPreview;
 }
 
-// --- Scoped config (CON-02, ADR 019) -----------------------------------------
+// --- Scoped config (CON-02, ADR 020) -----------------------------------------
 // Typed key/value rows for the caller's own Organization. Secret rows answer
 // "[SECRET]" on every read surface; secret values never cross the wire.
 
@@ -1134,6 +1156,81 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/apps/:id/assets/*",
         description: "Serve one active-deployment file.",
       },
+      { method: "GET", path: "/api/apps/:id/grants", description: "List app grants." },
+      { method: "POST", path: "/api/apps/:id/grants", description: "Create an app grant." },
+      {
+        method: "POST",
+        path: "/api/apps/:id/grants/:grantId/revoke",
+        description: "Revoke an app grant.",
+      },
+      {
+        method: "GET",
+        path: "/api/apps/:id/tables",
+        description: "List declared Tables (includes hidden).",
+      },
+      { method: "POST", path: "/api/apps/:id/tables", description: "Declare an app Table." },
+      { method: "GET", path: "/api/apps/:id/sdk", description: "App SDK handshake (version tripwire)." },
+      {
+        method: "GET",
+        path: "/api/apps/:id/runtime/tables",
+        description: "List granted visible Tables.",
+      },
+      {
+        method: "GET",
+        path: "/api/apps/:id/runtime/tables/:name/rows",
+        description: "Filtered Table page read (filter/limit/cursor/sinceRevision).",
+      },
+      {
+        method: "POST",
+        path: "/api/apps/:id/runtime/tables/:name/rows",
+        description: "Insert one Table row.",
+      },
+      {
+        method: "PATCH",
+        path: "/api/apps/:id/runtime/tables/:name/rows/:rowId",
+        description: "Replace one Table row.",
+      },
+      {
+        method: "DELETE",
+        path: "/api/apps/:id/runtime/tables/:name/rows/:rowId",
+        description: "Delete one Table row.",
+      },
+      {
+        method: "POST",
+        path: "/api/apps/:id/runtime/invoke",
+        description: "Invoke a granted Saga (Idempotency-Key required).",
+      },
+      {
+        method: "GET",
+        path: "/api/apps/:id/runtime/executions",
+        description: "Scoped invocation tail (result via Execution detail).",
+      },
+      { method: "GET", path: "/api/apps/:id/runtime/files", description: "List read-granted files." },
+      {
+        method: "POST",
+        path: "/api/apps/:id/runtime/files",
+        description: "Declare a file location.",
+      },
+      {
+        method: "POST",
+        path: "/api/apps/:id/runtime/files/tokens",
+        description: "Issue a single-use file token.",
+      },
+      {
+        method: "POST",
+        path: "/api/apps/:id/runtime/files/upload",
+        description: "Redeem an upload token (verified).",
+      },
+      {
+        method: "POST",
+        path: "/api/apps/:id/runtime/files/download",
+        description: "Redeem a download token.",
+      },
+      {
+        method: "DELETE",
+        path: "/api/apps/:id/runtime/files/*",
+        description: "Version-aware file delete.",
+      },
       {
         method: "GET",
         path: "/api/file-locations",
@@ -1344,6 +1441,12 @@ export function describeContract(): SdkContractDescriptor {
         detail: "Independent apps: create, edit, validate, build, jobs, swap, delete, asset serving (ADR 017).",
       },
       {
+        name: "app-runtime",
+        status: "supported",
+        detail:
+          "Scoped browser App SDK runtime (ADR 019): grant-scoped Saga invoke, visible-Table read/write with revision polling, versioned files with single-use tokens, handshake tripwire. No WebSocket; no Forms/config hooks.",
+      },
+      {
         name: "managed-files",
         status: "supported",
         detail:
@@ -1371,7 +1474,7 @@ export function describeContract(): SdkContractDescriptor {
         name: "author-config",
         status: "supported",
         detail:
-          "Scoped config over D1 (CON-02, ADR 019): typed string/int/bool/json rows plus secret references, org-only resolution, [SECRET] list masking, managed-row ownership. No global tier.",
+          "Scoped config over D1 (CON-02, ADR 020): typed string/int/bool/json rows plus secret references, org-only resolution, [SECRET] list masking, managed-row ownership. No global tier.",
       },
       {
         name: "endpoint-triggers",
@@ -1383,7 +1486,7 @@ export function describeContract(): SdkContractDescriptor {
         name: "resource-management",
         status: "tracked",
         detail:
-          "Forms, files, and agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md).",
+          "Author Tables/files/forms/agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md); the scoped browser app runtime is the separate app-runtime capability.",
       },
     ],
     docs: [

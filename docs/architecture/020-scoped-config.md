@@ -1,4 +1,4 @@
-# ADR 019: Scoped Configuration and Secret References
+# ADR 020: Scoped Configuration and Secret References
 
 - **Status:** Accepted
 - **Date:** 2026-09-11
