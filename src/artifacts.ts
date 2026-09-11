@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 // Generated Artifacts and attachment lifecycles with retention (FILE-02,
-// issue #158; ADR 018).
+// issue #158; ADR 019).
 //
 // An Artifact is an Organization-scoped record for generated or uploaded
 // bytes: stable UUID identity (ADR 002 rules), a human name, MIME claim, byte
@@ -10,7 +10,7 @@
 // retention policy. No Portable bundle embeds runtime bytes (OPS-03 owns the
 // encrypted full-backup exception).
 //
-// Ownership and access (ADR 018 section 3, composed with AUTH-01):
+// Ownership and access (ADR 019 section 3, composed with AUTH-01):
 // - Canonical access (metadata, bytes, rename, delete): the Artifact row must
 //   sit in the caller's resolved Organization (membership gate first), and
 //   the caller must be the creator or an admin. Admin is the resolved
@@ -30,7 +30,7 @@
 // The current version always wins for preview/download; older bytes stay
 // addressable by version number until the Artifact (or its retention) goes.
 //
-// Retention (ADR 018 section 4): expiry is pinned by Artifact.created_at
+// Retention (ADR 019 section 4): expiry is pinned by Artifact.created_at
 // (upstream invariant), never last access. Cleanup is explicit: preview lists
 // what WOULD be deleted (no writes), run deletes in one bounded batch and
 // reports per-row outcomes plus an interrupted remainder. Deleted rows keep
@@ -188,7 +188,7 @@ export function parseRetentionDays(value: unknown): number {
   return value;
 }
 
-/** Explicit admin bypass (ADR 018 section 3, composed with AUTH-01): the
+/** Explicit admin bypass (ADR 019 section 3, composed with AUTH-01): the
  * resolved CallerCtx carries the answer. Instance admins (the deployment
  * ADMIN_USER_IDS list, install state never in Git) and Organization admins
  * (the membership row) bypass the creator check. Everything else is

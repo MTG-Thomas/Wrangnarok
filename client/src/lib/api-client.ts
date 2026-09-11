@@ -24,6 +24,10 @@ import type {
   ExecutionDetail,
   ExecutionHistoryResponse,
   ExecutionStatus,
+  FileLocation,
+  FileLocationsResponse,
+  FileMeta,
+  FilesResponse,
   IntegrationsResponse,
   IntegrationSummary,
   SagasResponse,
@@ -319,6 +323,80 @@ function isArtifactSummary(value: unknown): value is ArtifactSummary {
     typeof v["version"] === "number" &&
     (v["status"] === "active" || v["status"] === "deleted")
   );
+}
+
+const LOCATION_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+function isFileLocation(value: unknown): value is FileLocation {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["name"] === "string" &&
+    typeof v["maxBytes"] === "number" &&
+    Array.isArray(v["contentTypes"]) &&
+    typeof v["sharedRead"] === "boolean"
+  );
+}
+
+function isFileMeta(value: unknown): value is FileMeta {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["location"] === "string" &&
+    typeof v["path"] === "string" &&
+    typeof v["version"] === "number" &&
+    (v["status"] === "pending" || v["status"] === "ready")
+  );
+}
+
+/** GET /api/file-locations — declared locations for this Organization (FILE-01). */
+export async function listFileLocations(): Promise<FileLocationsResponse> {
+  const data = await get("/api/file-locations");
+  if (typeof data !== "object" || data === null || !Array.isArray((data as { locations?: unknown }).locations)) {
+    throw new Error("Unexpected file locations response shape.");
+  }
+  const locations = (data as { locations: unknown[] }).locations;
+  if (!locations.every(isFileLocation)) throw new Error("Unexpected file locations response shape.");
+  return { locations };
+}
+
+/** POST /api/file-locations — declare a write location. */
+export async function createFileLocation(
+  name: string,
+  options: { maxBytes?: number; contentTypes?: string[]; sharedRead?: boolean } = {},
+): Promise<FileLocation> {
+  if (!LOCATION_NAME.test(name)) throw new Error("Unexpected location name shape.");
+  const data = await postJson("/api/file-locations", { name, ...options });
+  const location = (data as { location?: unknown }).location;
+  if (!isFileLocation(location)) throw new Error("Unexpected file location response shape.");
+  return location;
+}
+
+/** GET /api/files — Organization-scoped structural listing for one location. */
+export async function listFiles(location: string, prefix?: string): Promise<FilesResponse> {
+  if (!LOCATION_NAME.test(location)) throw new Error("Unexpected location name shape.");
+  const params = new URLSearchParams({ location });
+  if (prefix) params.set("prefix", prefix);
+  const data = await get(`/api/files?${params.toString()}`);
+  const body = data as { files?: unknown; nextCursor?: unknown };
+  if (!Array.isArray(body.files) || !body.files.every(isFileMeta)) {
+    throw new Error("Unexpected files response shape.");
+  }
+  if (body.nextCursor !== null && typeof body.nextCursor !== "string") {
+    throw new Error("Unexpected files response shape.");
+  }
+  return { files: body.files, nextCursor: body.nextCursor ?? null };
+}
+
+/** Download one ready file through the authorized Bearer-shape route. */
+export async function downloadFile(location: string, path: string): Promise<Blob> {
+  const params = new URLSearchParams({ location, path });
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(`/api/files/content?${params.toString()}`, { headers });
+  if (!response.ok) throw await parseApiError(response);
+  return await response.blob();
 }
 
 const INTEGRATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

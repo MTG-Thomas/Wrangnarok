@@ -21,9 +21,14 @@ must update every importing test in the same commit.
 | 0009   | 0009_tables.sql                 | TABLE-02| managed tables                       |
 | 0010   | 0010_solutions_activation.sql   | SOL-01  | bundle_active pointer, managed rows, immutability triggers (renumbered from colliding 0005 on 2026-09-11) |
 | 0021   | 0021_endpoints.sql              | TRG-02  | webhook endpoints (renumbered from colliding 0009 on 2026-09-11; was 0009_endpoints.sql from #210) |
+| 0019   | 0019_files.sql                  | FILE-01 | managed file locations, policies, capabilities (renumbered from colliding 0007 on 2026-09-11; was 0007_files.sql from #203) |
 
 ## Resolved collisions
 
+- 0007_org_membership.sql vs 0007_files.sql: resolved 2026-09-11 by
+  renumbering the files file to the reserved 0019_files.sql plus its test
+  imports. Both files are additive CREATE TABLE statements, so
+  already-applied local/dev databases converge on re-application.
 - 0009_tables.sql vs 0009_endpoints.sql: resolved 2026-09-11 by renumbering
   the endpoints file to 0021_endpoints.sql plus its two test imports. Both
   files are additive CREATE TABLE IF NOT EXISTS, so already-applied local/dev
