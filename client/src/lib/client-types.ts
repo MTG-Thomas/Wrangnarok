@@ -140,7 +140,7 @@ export interface AppDetail extends AppSummary {
   activeDeployment: AppDeployment | null;
 }
 
-/** Row shape for GET /api/config (CON-02, ADR 018): typed values for this
+/** Row shape for GET /api/config (CON-02, ADR 019): typed values for this
  * Organization; secret rows answer "[SECRET]", never values. */
 export interface ConfigEntry {
   id: string;

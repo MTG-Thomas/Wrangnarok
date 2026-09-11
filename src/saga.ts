@@ -105,7 +105,7 @@ export function withOperation(org: OrgCtx, operationId: string): OrgCtx {
 }
 
 /** Organization-scoped config reads for the current Execution. Resolves
- * typed rows for this Execution's Organization only (ADR 018) and is usable
+ * typed rows for this Execution's Organization only (ADR 019) and is usable
  * ONLY inside step.do() callbacks, like ctx.integrations/ctx.db/ctx.secrets. */
 export interface SagaConfig {
   /** Read one key: declared-but-missing without a default fails loud with

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// CON-02 SDK and UI parity (issue #147; ADR 018): the typed SDK client
+// CON-02 SDK and UI parity (issue #147; ADR 019): the typed SDK client
 // (list/set/update/delete plus guards) and the Configs page render from live
 // /api/* payloads, secret-masked everywhere. Worker routes run in real
 // workerd; the React page renders from mocked payloads like the apps UI
@@ -24,9 +24,9 @@ import type { ConfigListResponse } from "../client/src/lib/client-types";
 import { ConfigsList } from "../client/src/pages/Configs";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration4 from "../migrations/0004_solutions_install.sql?raw";
-import migration5 from "../migrations/0005_solutions_activation.sql?raw";
+import migration5 from "../migrations/0010_solutions_activation.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
-import migration10 from "../migrations/0010_config.sql?raw";
+import migration10 from "../migrations/0023_config.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);

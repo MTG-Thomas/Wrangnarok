@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Scoped configuration and secret references (CON-02, issue #147; ADR 018):
+// Scoped configuration and secret references (CON-02, issue #147; ADR 019):
 // typed set/list/update/delete, upstream list-masking and partial-update
 // parity, org scoping, managed-row ownership, and export exclusion — proven
 // against real local D1 in workerd. Applies the migration chain (0001 +
@@ -28,9 +28,9 @@ import {
 } from "../src/config";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration4 from "../migrations/0004_solutions_install.sql?raw";
-import migration5 from "../migrations/0005_solutions_activation.sql?raw";
+import migration5 from "../migrations/0010_solutions_activation.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
-import migration10 from "../migrations/0010_config.sql?raw";
+import migration10 from "../migrations/0023_config.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);

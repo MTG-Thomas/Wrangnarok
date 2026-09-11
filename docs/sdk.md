@@ -64,7 +64,7 @@ await client.listHistory({ status: "Failed,TimedOut", limit: 20 });
 await client.cancelExecution(done.executionId);
 await client.diagnoseExecution(done.executionId); // detail + hint for known codes
 
-// Scoped config (CON-02, ADR 018): typed rows for this Organization.
+// Scoped config (CON-02, ADR 019): typed rows for this Organization.
 // Secret rows answer "[SECRET]"; secret values never cross the wire.
 await client.listConfigs();
 await client.setConfig({ key: "timeout", type: "int", value: "30" });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// CON-02 Saga runtime proof (issue #147; ADR 018): ctx.config resolves only
+// CON-02 Saga runtime proof (issue #147; ADR 019): ctx.config resolves only
 // the Execution's own org/install context, inside step.do(), with the same
 // declared-versus-undeclared outcomes as the pure resolver. Runs through the
 // real executeSaga adapter (no native Workflow instance): D1 is real local
@@ -16,9 +16,9 @@ import { executeSaga } from "../src/sagas/shared";
 import { defineSaga } from "../src/saga";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration4 from "../migrations/0004_solutions_install.sql?raw";
-import migration5 from "../migrations/0005_solutions_activation.sql?raw";
+import migration5 from "../migrations/0010_solutions_activation.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
-import migration10 from "../migrations/0010_config.sql?raw";
+import migration10 from "../migrations/0023_config.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const ORG = "00000000-0000-4000-8000-000000000001";

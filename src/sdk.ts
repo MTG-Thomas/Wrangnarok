@@ -128,6 +128,16 @@ export const SDK_ERROR_CODES = [
   "SYNC_CONFLICT",
   "INVALID_GIT_TARGET",
   "DEPLOY_BLOCKED",
+  "INVALID_ENDPOINT",
+  "ENDPOINT_EXISTS",
+  "ENDPOINT_UNAUTHORIZED",
+  "ENDPOINT_KEY_EXPIRED",
+  "ENDPOINT_DISABLED",
+  "ENDPOINT_EVENT_ID_REQUIRED",
+  "ENDPOINT_IDENTITY_FORBIDDEN",
+  "ENDPOINT_RATE_LIMITED",
+  "ENDPOINT_MISCONFIGURED",
+  "INVALID_CHALLENGE",
   "LOCAL_AUTH_NOT_CONFIGURED",
   "ACCESS_NOT_CONFIGURED",
   "SDK_CLIENT_MISMATCH",
@@ -391,7 +401,7 @@ export function parsePreview(value: unknown): SdkPreview {
   return preview as unknown as SdkPreview;
 }
 
-// --- Scoped config (CON-02, ADR 018) -----------------------------------------
+// --- Scoped config (CON-02, ADR 019) -----------------------------------------
 // Typed key/value rows for the caller's own Organization. Secret rows answer
 // "[SECRET]" on every read surface; secret values never cross the wire.
 
@@ -1160,6 +1170,30 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/config/:id",
         description: "Delete one config row by ID (managed rows refuse).",
       },
+      { method: "GET", path: "/api/endpoints", description: "Operator endpoint inventory (this Organization)." },
+      {
+        method: "POST",
+        path: "/api/endpoints",
+        description: "Create a scoped endpoint bound to a deployed Saga (raw credential returned once).",
+      },
+      { method: "GET", path: "/api/endpoints/:name", description: "Read one scoped endpoint summary." },
+      {
+        method: "PATCH",
+        path: "/api/endpoints/:name",
+        description: "Update endpoint policy (enabled, rateLimitPerMinute, keyExpiresAt).",
+      },
+      { method: "POST", path: "/api/endpoints/:name/rotate", description: "Rotate the endpoint credential." },
+      { method: "GET", path: "/api/endpoints/:name/events", description: "Delivery history for replay visibility." },
+      {
+        method: "POST",
+        path: "/api/endpoints/:name",
+        description: "Public credential-authenticated api-key delivery (X-Endpoint-Key or Bearer).",
+      },
+      {
+        method: "POST",
+        path: "/hooks/:name",
+        description: "Public HMAC-signed webhook delivery (X-Webhook-Signature; echo-param challenge supported).",
+      },
     ],
     errorCodes: [...SDK_ERROR_CODES],
     capabilities: [
@@ -1201,7 +1235,13 @@ export function describeContract(): SdkContractDescriptor {
         name: "author-config",
         status: "supported",
         detail:
-          "Scoped config over D1 (CON-02, ADR 018): typed string/int/bool/json rows plus secret references, org-only resolution, [SECRET] list masking, managed-row ownership. No global tier.",
+          "Scoped config over D1 (CON-02, ADR 019): typed string/int/bool/json rows plus secret references, org-only resolution, [SECRET] list masking, managed-row ownership. No global tier.",
+      },
+      {
+        name: "endpoint-triggers",
+        status: "supported",
+        detail:
+          "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 019): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
       },
       {
         name: "resource-management",
