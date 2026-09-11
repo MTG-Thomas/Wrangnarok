@@ -7,7 +7,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 
-const scopeFile = process.argv.slice(1).find((a) => !a.endsWith("lane-scope.mjs") && !a.endsWith("node.exe") && !a.startsWith("-"));
+const scopeFile = process.argv
+  .slice(1)
+  .find((a) => !a.endsWith("lane-scope.mjs") && !a.endsWith("node.exe") && !a.startsWith("-"));
 if (!scopeFile || !existsSync(scopeFile)) {
   console.error("usage: node scripts/lane-scope.mjs <scope-file>");
   process.exit(2);
@@ -32,7 +34,14 @@ try {
   } catch {
     committed = "";
   }
-  out = uncommitted + "\n" + committed.split("\n").filter(Boolean).map((f) => `M  ${f}`).join("\n");
+  out =
+    uncommitted +
+    "\n" +
+    committed
+      .split("\n")
+      .filter(Boolean)
+      .map((f) => `M  ${f}`)
+      .join("\n");
 } catch (e) {
   console.error("lane-scope: git status failed");
   process.exit(2);
@@ -40,7 +49,12 @@ try {
 
 const files = out
   .split("\n")
-  .map((l) => l.slice(3).trim().replace(/^"(.*)"$/, "$1"))
+  .map((l) =>
+    l
+      .slice(3)
+      .trim()
+      .replace(/^"(.*)"$/, "$1"),
+  )
   .filter(Boolean);
 
 const bad = files.filter((f) => {
