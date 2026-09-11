@@ -73,10 +73,7 @@ function isLogLevel(value: string): value is LogLevel {
 
 /** Opaque page marker: base64url of {seq}. Clients resume strictly above it. */
 export function encodeLogCursor(seq: number): string {
-  return btoa(JSON.stringify({ seq }))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
+  return btoa(JSON.stringify({ seq })).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
 export function decodeLogCursor(value: string): number {
@@ -179,7 +176,16 @@ export function parseLogSearchQuery(params: URLSearchParams): LogSearchQuery {
   const startAt = rawStart === null ? undefined : parseDateBound(rawStart, "INVALID_START_DATE");
   const rawEnd = params.get("endDate");
   const endAtRaw = rawEnd === null ? undefined : parseDateBound(rawEnd, "INVALID_END_DATE");
-  const endBefore = endAtRaw === undefined ? undefined : endAtRaw;
+  // Plain-day endDates ("YYYY-MM-DD") are exclusive of the whole day: they
+  // normalize to the next midnight so a From/To day-range pair covers the
+  // full To day. Full datetimes stay exact. Mirrors parseHistoryQuery.
+  const rawEndIsDay = rawEnd !== null && /^\d{4}-\d{2}-\d{2}$/.test(rawEnd);
+  const endBefore =
+    endAtRaw === undefined
+      ? undefined
+      : rawEndIsDay
+        ? new Date(Date.parse(endAtRaw) + 24 * 60 * 60 * 1000).toISOString()
+        : endAtRaw;
   if (startAt !== undefined && endBefore !== undefined && startAt >= endBefore) {
     throw new Fault(400, "INVALID_DATE_RANGE", "startDate must be before endDate.");
   }
@@ -290,8 +296,7 @@ interface LogRow {
   created_at: string;
 }
 
-const LOG_COLUMNS =
-  "seq,execution_id,org_id,user_id,saga_id,saga_name,level,message,data_json,created_at";
+const LOG_COLUMNS = "seq,execution_id,org_id,user_id,saga_id,saga_name,level,message,data_json,created_at";
 
 function toEntry(row: LogRow): LogEntry {
   return {
@@ -321,11 +326,7 @@ function toPage(rows: LogRow[], limit: number, afterSeq?: number): LogPage {
     logs: page.map(toEntry),
     hasMore,
     nextCursor:
-      last !== undefined
-        ? encodeLogCursor(last.seq)
-        : afterSeq !== undefined
-          ? encodeLogCursor(afterSeq)
-          : null,
+      last !== undefined ? encodeLogCursor(last.seq) : afterSeq !== undefined ? encodeLogCursor(afterSeq) : null,
   };
 }
 
@@ -359,11 +360,7 @@ export async function listExecutionLogs(
 
 /** Operator search across the caller's own Executions (org/user scoped),
  * filterable by date/level/Saga. Summaries carry attribution per row. */
-export async function searchExecutionLogs(
-  db: D1Database,
-  caller: Principal,
-  query: LogSearchQuery,
-): Promise<LogPage> {
+export async function searchExecutionLogs(db: D1Database, caller: Principal, query: LogSearchQuery): Promise<LogPage> {
   const clauses = ["org_id=?", "user_id=?", `level IN (${query.levels.map(() => "?").join(",")})`];
   const binds: (string | number)[] = [caller.orgId, caller.userId, ...query.levels];
   if (query.sagaId !== undefined) {

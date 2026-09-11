@@ -17,7 +17,12 @@ import { join } from "node:path";
 // module (src/secrets.ts with scrub call sites, no new dependencies) measure
 // ~114 KiB combined. Same deliberate feature headroom as the 110 KiB raise,
 // not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 120 * 1024;
+// 2026-09-11 (OBS-02, issue #153): 135 KiB. The bounded author-log surface
+// (src/logs.ts domain: parsers, cursor pagination, retention, SEC-01
+// write/read paths, plus two routes, SDK tail/search, and hello-pilot
+// emission) measures ~128 KiB combined. Hand-written feature code with no new
+// dependencies; package.json is unchanged versus main.
+const BUDGET_BYTES = 135 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

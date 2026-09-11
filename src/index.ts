@@ -295,7 +295,10 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // by date/level/Saga, cursor-paginated in seq order. D1 is the source
       // of truth; this is a polling view, never a live stream.
       return json(
-        scrubValueWithDeploymentSecrets(await searchExecutionLogs(env.DB, caller, parseLogSearchQuery(url.searchParams)), env),
+        scrubValueWithDeploymentSecrets(
+          await searchExecutionLogs(env.DB, caller, parseLogSearchQuery(url.searchParams)),
+          env,
+        ),
       );
     }
     const logTail = /^\/api\/executions\/([a-f0-9]{64})\/logs$/.exec(url.pathname);

@@ -990,6 +990,18 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/executions/:id",
         description: "Execution detail with Operations, result, and safe error.",
       },
+      {
+        method: "GET",
+        path: "/api/executions/:id/logs",
+        description:
+          "OBS-02 scoped log tail for one Execution (level, limit, cursor; DEBUG hidden unless asked). Polling view over durable rows.",
+      },
+      {
+        method: "GET",
+        path: "/api/logs",
+        description:
+          "OBS-02 operator log search across the caller's own rows (level, sagaId, sagaName, startDate, endDate, limit, cursor).",
+      },
       { method: "POST", path: "/api/executions/:id/cancel", description: "Owner-only cancellation (exact ID)." },
       {
         method: "GET",
@@ -1056,6 +1068,12 @@ export function describeContract(): SdkContractDescriptor {
         detail: "Offline validateAgainstSchema plus server parse; the server remains authoritative.",
       },
       { name: "execute-status-cancel", status: "supported", detail: "Submit, poll, detail, history, and cancel." },
+      {
+        name: "author-logs",
+        status: "supported",
+        detail:
+          "OBS-02 bounded author logs/progress (tailLogs/searchLogs over GET /api/executions/:id/logs and GET /api/logs; SEC-01 scrubbed, DEBUG hidden unless asked, cursor-poll reconnect).",
+      },
       {
         name: "authored-apps",
         status: "supported",
