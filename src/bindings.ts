@@ -13,5 +13,6 @@ export interface Bindings extends LabAuth, AccessEnv, NinjaCredentials {
   DIGEST_WORKFLOW: Workflow<ExecutionParams>;
   SMOKE_WORKFLOW: Workflow<ExecutionParams>;
   HELLO_WORKFLOW: Workflow<ExecutionParams>;
+  HELLO_PARENT_WORKFLOW: Workflow<ExecutionParams>;
   ASSETS?: Fetcher;
 }

@@ -5,6 +5,7 @@ import {
   encodeHistoryCursor,
   Fault,
   executionId,
+  helloParentSaga,
   helloSaga,
   ninjaSaga,
   RECOVERY_WINDOW_MS,
@@ -31,6 +32,10 @@ export interface ExecutionRow {
   completed_at: string | null;
   result_json: string | null;
   error_json: string | null;
+  /** RUN-02 lineage (ADR 018): the parent Execution plus the parent step
+   * that dispatched this row. NULL for top-level submissions. */
+  parent_execution_id: string | null;
+  parent_step: string | null;
 }
 export async function visibleExecution(db: D1Database, id: string, caller: Principal): Promise<ExecutionRow> {
   const row = await db
@@ -46,6 +51,7 @@ export function workflowForSaga(env: Bindings, sagaId: string): Workflow<{ execu
   if (sagaId === digestSaga.id) return env.DIGEST_WORKFLOW;
   if (sagaId === smokeSaga.id) return env.SMOKE_WORKFLOW;
   if (sagaId === helloSaga.id) return env.HELLO_WORKFLOW;
+  if (sagaId === helloParentSaga.id) return env.HELLO_PARENT_WORKFLOW;
   return env.ECHO_WORKFLOW;
 }
 export async function submit(env: Bindings, caller: Principal, key: string, saga: SagaDef, input: unknown) {

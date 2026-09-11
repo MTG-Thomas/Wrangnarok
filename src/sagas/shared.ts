@@ -9,6 +9,9 @@ import { EXECUTION_ID } from "../domain";
 import type { ExecutionParams } from "../domain";
 import { assertJsonSerializable, bindSagaStep } from "../saga";
 import type { SagaDefinition, SagaEventContext } from "../saga";
+import { bindSagaChildren } from "../children";
+import type { ChildCatalog } from "../children";
+import { SAGA_DEFINITIONS } from "./definitions";
 import { clearExecutionSecrets, registerExecutionSecrets, scrubExecutionText, scrubExecutionValue } from "../secrets";
 import { echo } from "../integrations/echo";
 import { listOrganizations } from "../integrations/ninjaone";
@@ -29,13 +32,39 @@ export async function executeSaga<TOutput>(
   // carries one Execution's secrets into the next.
   registerExecutionSecrets(id, [env.NINJA_CLIENT_ID, env.NINJA_CLIENT_SECRET]);
   try {
+    const sagaStep = bindSagaStep(step);
+    // The child handle needs the parent OrgCtx (org/user identity built from
+    // the immutable parent D1 row, never from caller input). Read the row
+    // here; prepareExecution inside run() revalidates it before Running.
+    const parentRow = await env.DB.prepare("SELECT org_id,user_id FROM executions WHERE id=?")
+      .bind(id)
+      .first<{ org_id: string; user_id: string }>();
+    if (!parentRow) throw new NonRetryableError("Unknown Saga revision.");
+    const catalog: ChildCatalog = { sagas: SAGA_DEFINITIONS };
     const ctx: SagaEventContext = {
       executionId: id,
       integrations: { echo: { echo }, ninjaone: { listOrganizations } },
       db: env.DB,
       secrets: { clientId: env.NINJA_CLIENT_ID, clientSecret: env.NINJA_CLIENT_SECRET },
+      children: bindSagaChildren(
+        {
+          env,
+          catalog,
+          parentOrg: {
+            orgId: parentRow.org_id,
+            userId: parentRow.user_id,
+            executionId: id,
+            sagaId: def.id,
+            sagaRevision: def.revision,
+            attemptToken: `${id}:0`,
+          },
+          parentExecutionId: id,
+          parentSagaId: def.id,
+        },
+        sagaStep,
+      ),
     };
-    const output = await def.run(ctx, bindSagaStep(step));
+    const output = await def.run(ctx, sagaStep);
     assertJsonSerializable(output, `${def.name} output`);
     // Workflow terminal value is an outward path: a secret-bearing transform
     // result would otherwise ride the native status API out unscrubbed.

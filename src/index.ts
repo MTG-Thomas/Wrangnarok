@@ -17,6 +17,7 @@ import {
   swapSlugs,
   validateApp,
 } from "./apps";
+import { cancelDirectChildren } from "./children";
 import { previewEnvironment, previewLocal } from "./dev";
 import {
   boundedJson,
@@ -25,10 +26,12 @@ import {
   digestSaga,
   echoSaga,
   Fault,
+  helloParentSaga,
   helloSaga,
   ninjaSaga,
   parseDigestInput,
   parseHelloInput,
+  parseHelloParentInput,
   parseHistoryQuery,
   parseInput,
   parseKey,
@@ -44,7 +47,14 @@ import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import { scrubValueWithDeploymentSecrets } from "./secrets";
 import { logRequest } from "./usage";
-export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
+export {
+  EchoWorkflow,
+  HelloParentWorkflow,
+  HelloWorkflow,
+  NinjaEchoDigestWorkflow,
+  NinjaOrgsWorkflow,
+  SmokeWorkflow,
+} from "./sagas";
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
   return Response.json(body, {
@@ -189,6 +199,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         [digestSaga.id, parseDigestInput],
         [smokeSaga.id, parseSmokeInput],
         [helloSaga.id, parseHelloInput],
+        [helloParentSaga.id, parseHelloParentInput],
       ]);
       const { meta, parsed, requiredIntegrations } = previewLocal(SAGA_CATALOG, parsers, record.sagaId, record.input);
       const withEnv = record.checkEnvironment === true;
@@ -268,6 +279,11 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         terminateOutcome === "already-settled" ||
         (terminateOutcome === "not-found" && priorStatus === "Pending" && priorDispatched === 0)
       ) {
+        // Best-effort child fan-out (RUN-02, ADR 018): still-active direct
+        // children get the same mark-terminate-classify treatment. Ambiguous
+        // children stay active and inspectable; parent confirmation never
+        // depends on child outcomes.
+        await cancelDirectChildren(env, caller, row.id);
         await cancelExecution(env.DB, row.id);
         return json({ executionId: row.id, status: "Cancelled", cancelled: true });
       }
@@ -300,6 +316,14 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
           result_json: string | null;
           error_json: string | null;
         }>();
+      // RUN-02 lineage (ADR 018): direct children of this Execution, newest
+      // first. The child's own detail carries its parentExecutionId; this
+      // list makes the parent side inspectable without a history scan.
+      const children = await env.DB.prepare(
+        "SELECT id,saga_id,saga_name,status,created_at FROM executions WHERE parent_execution_id=? AND org_id=? AND user_id=? ORDER BY created_at DESC,id DESC",
+      )
+        .bind(row.id, caller.orgId, caller.userId)
+        .all<{ id: string; saga_id: string; saga_name: string; status: string; created_at: string }>();
       let runtimeStatus: string | null = null;
       try {
         const binding = workflowForSaga(env, row.saga_id);
@@ -312,6 +336,15 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
           {
             ...summary(row),
             runtimeStatus,
+            parentExecutionId: row.parent_execution_id,
+            parentStep: row.parent_step,
+            children: children.results.map((kid) => ({
+              executionId: kid.id,
+              sagaId: kid.saga_id,
+              sagaName: kid.saga_name,
+              status: kid.status,
+              createdAt: kid.created_at,
+            })),
             input: JSON.parse(row.input_json),
             result: row.result_json ? JSON.parse(row.result_json) : null,
             error: row.error_json ? JSON.parse(row.error_json) : null,

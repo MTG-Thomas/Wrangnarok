@@ -17,12 +17,14 @@ import {
   BODY_LIMIT,
   ECHO_INTEGRATION_ID,
   digestSaga,
+  helloParentSaga,
   helloSaga,
   echoSaga,
   NINJA_INTEGRATION_ID,
   ninjaSaga,
   parseDigestInput,
   parseHelloInput,
+  parseHelloParentInput,
   parseInput,
   parseNinjaOrgsInput,
   parseSmokeInput,
@@ -38,7 +40,7 @@ const CHURN_MESSAGE =
 
 describe("Saga authoring contract (issue #57)", () => {
   it("keeps all I/O and nondeterminism inside step.do() for every registered Saga", () => {
-    expect(SAGA_DEFINITIONS).toHaveLength(5);
+    expect(SAGA_DEFINITIONS).toHaveLength(6);
     for (const def of SAGA_DEFINITIONS) {
       expect(() => assertDeterministicRun(def.name, def.run)).not.toThrow();
     }
@@ -65,6 +67,10 @@ describe("Saga authoring contract (issue #57)", () => {
       const tables = await ctx.db.prepare("SELECT name FROM sqlite_master").all();
       return step.do("probe-v1", async () => ({ tables: tables.results.length }));
     }
+    async function topLevelChildren(ctx: SagaEventContext, step: SagaStep): Promise<unknown> {
+      const receipt = await ctx.children.invoke("hello", { name: "Ada" });
+      return step.do("probe-v1", async () => ({ receipt }));
+    }
     async function noDurableSteps(): Promise<unknown> {
       return { ok: true };
     }
@@ -75,6 +81,7 @@ describe("Saga authoring contract (issue #57)", () => {
       /ctx\.integrations.*outside step\.do/,
     );
     expect(() => assertDeterministicRun("bad-db", topLevelDb)).toThrow(/ctx\.db.*outside step\.do/);
+    expect(() => assertDeterministicRun("bad-children", topLevelChildren)).toThrow(/ctx\.children.*outside step\.do/);
     expect(() => assertDeterministicRun("bad-nosteps", noDurableSteps)).toThrow(/never calls step\.do/);
   });
 
@@ -123,6 +130,10 @@ describe("Saga authoring contract (issue #57)", () => {
           operationCount: 3,
           operations: ["prepare-input-v1", "smoke-write-v1", "smoke-verify-v1"],
         },
+      },
+      "hello-parent": {
+        input: { name: "Ada" },
+        output: { greeting: "Hello, Ada!", name: "Ada", childExecutionId: "ab".repeat(32) },
       },
     };
     for (const def of SAGA_DEFINITIONS) {
@@ -197,6 +208,7 @@ describe("Saga authoring contract (issue #57)", () => {
     ]);
     expect(byName.get("system.smoke")?.requiredIntegrations).toEqual([]);
     expect(byName.get("hello")?.requiredIntegrations).toEqual([]);
+    expect(byName.get("hello-parent")?.requiredIntegrations).toEqual([]);
     for (const def of SAGA_DEFINITIONS) {
       expect(Array.isArray(def.requiredIntegrations)).toBe(true);
     }
@@ -231,6 +243,7 @@ describe("Saga authoring contract (issue #57)", () => {
     expect([...byName.keys()].sort()).toEqual([
       "echo",
       "hello",
+      "hello-parent",
       "ninjaone-echo-digest",
       "ninjaone-orgs",
       "system.smoke",
@@ -241,6 +254,7 @@ describe("Saga authoring contract (issue #57)", () => {
       { stable: digestSaga, parse: parseDigestInput },
       { stable: smokeSaga, parse: parseSmokeInput },
       { stable: helloSaga, parse: parseHelloInput },
+      { stable: helloParentSaga, parse: parseHelloParentInput },
     ];
     for (const { stable, parse } of expected) {
       const def = byName.get(stable.name);

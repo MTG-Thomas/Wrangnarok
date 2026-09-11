@@ -22,6 +22,7 @@ import { stepRetryLimit, UUID } from "./domain";
 import type { EchoInput, NinjaOrgsResult } from "./domain";
 import type { EchoConnection } from "./integrations/echo";
 import type { NinjaConnection, NinjaSecrets } from "./integrations/ninjaone";
+import type { SagaChildren } from "./children";
 
 /** Durable Operation API surfaced to Saga authors. Deliberately smaller than
  * the native WorkflowStep: do() for retry-unit work, sleep() for explicit
@@ -115,6 +116,10 @@ export interface SagaEventContext {
   readonly integrations: SagaIntegrations;
   readonly db: D1Database;
   readonly secrets: SagaSecrets;
+  /** Nested-invocation handle (RUN-02, ADR 018): dispatch a child Saga by
+   * stable UUID or exact name and await its typed JSON result. Usable ONLY
+   * inside step.do() callbacks, like ctx.integrations/ctx.db/ctx.secrets. */
+  readonly children: SagaChildren;
 }
 
 /** Minimal object-schema descriptor, hand-derived from the TypeScript
@@ -515,6 +520,7 @@ const FORBIDDEN_OUTSIDE_STEPS: ReadonlyArray<{ pattern: RegExp; hint: string }> 
   { pattern: /randomUUID/, hint: "randomUUID" },
   { pattern: /AbortSignal/, hint: "AbortSignal" },
   { pattern: /ctx\s*\.\s*integrations/, hint: "ctx.integrations" },
+  { pattern: /ctx\s*\.\s*children/, hint: "ctx.children" },
   { pattern: /ctx\s*\.\s*db\b/, hint: "ctx.db" },
   { pattern: /ctx\s*\.\s*secrets/, hint: "ctx.secrets" },
   { pattern: /this\s*\.\s*env/, hint: "this.env" },

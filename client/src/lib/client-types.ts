@@ -60,10 +60,22 @@ export interface SagasResponse {
 /** Detail shape for GET /api/executions/:id. */
 export interface ExecutionDetail extends ExecutionSummary {
   runtimeStatus: string | null;
+  parentExecutionId: string | null;
+  parentStep: string | null;
+  children: ExecutionChild[];
   input: unknown;
   result: unknown;
   error: unknown;
   operations: OperationSummary[];
+}
+
+/** One direct child Execution (RUN-02 lineage, ADR 018). */
+export interface ExecutionChild {
+  executionId: string;
+  sagaId: string;
+  sagaName: string;
+  status: string;
+  createdAt: string;
 }
 
 /** Application status values served by the Wrangnarök Worker (ADR 017). */
