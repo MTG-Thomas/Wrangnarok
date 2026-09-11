@@ -23,7 +23,7 @@ Total: 47 capability rows — 17 Partial, 28 Missing, 2 Gated.
 | AUTH-02 | Enforce resource roles, claims and explicit delegated authorization end to end | 3 | Missing | AUTH-01 | new |
 | AUTH-03 | Manage scoped machine credentials and verify delegated human identity parity | 3 | Partial | AUTH-01, AUTH-02 | new |
 | SEC-01 | Enforce execution-scoped secret registration and universal output scrubbing | 3 | Partial | — | new |
-| CON-01 | Manage Integration definitions and scoped Connection mappings through authorized APIs | 3 | Partial | AUTH-02, SEC-01 | new |
+| CON-01 | Manage Integration definitions and scoped Connection mappings through authorized APIs | 3 | Complete (pending review) | AUTH-02, SEC-01 | #146 |
 | CON-02 | Expose scoped configuration and secret-reference APIs to authors and operators | 3 | Missing | AUTH-02, SEC-01, CON-01 | new |
 | SEC-02 | Support genuinely per-Organization credentials behind the accepted secret-storage tripwire | 3 | Gated | SEC-01, CON-01 | new |
 | OAUTH-01 | Complete OAuth authorization, centralized refresh and credential health lifecycle | 3 | Partial | CON-01, SEC-02, AUTH-03 | new |
@@ -350,9 +350,9 @@ Related Wrangnarok issues: #110
 
 ## CON-01: Manage Integration definitions and scoped Connection mappings through authorized APIs
 
-Phase 3; **Partial**; existing issue: new
+Phase 3; **Complete (pending review)**; existing issue: #146
 
-Local status: Typed echo/NinjaOne definitions and exact-org Connection lookup exist. There is no admin Connection UI/CRUD, generic config schema or connectivity/status management.
+Local status: Typed echo/NinjaOne definitions carry non-secret config schema, defaults, required-secret names, and health copy. Exact-org Connection lookup plus the authorized management boundary (list/create/read/update/delete plus read-only test) exist with stable Connection identity, managed-versus-loose ownership, and per-Organization scoping. The `/connections` admin screen and typed client calls use the same Worker routes. No per-tenant secret values: views carry required-secret names only, responses are scrubbed, and the SEC-02 tripwire stays shut. Upstream 424 adaptation: declared-missing requirements keep the existing ExecutionHistory 424 on the submit path; the management test route also serves 424 for a missing mapping (no global/default fallback in either place).
 
 Depends: AUTH-02, SEC-01
 
