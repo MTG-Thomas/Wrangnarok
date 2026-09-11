@@ -1,0 +1,617 @@
+// SPDX-License-Identifier: AGPL-3.0
+// DEV-01 (issue #140): versioned SDK contract drift tests plus local
+// happy/denied/error examples. Runs in real workerd via
+// @cloudflare/vitest-plugin; D1/Workflow bindings are never replaced, only
+// outbound vendor HTTP is intercepted. No production deployment.
+import { env } from "cloudflare:workers";
+import { introspectWorkflowInstance, reset } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import worker from "../src/index";
+import type { Bindings } from "../src/bindings";
+import { executionId, helloSaga } from "../src/domain";
+import {
+  createSdkClient,
+  describeContract,
+  inspectSaga,
+  localCatalog,
+  parseExecutionDetail,
+  parseHistoryPage,
+  parseSagaCatalog,
+  parseSdkError,
+  scaffoldSaga,
+  SdkError,
+  SDK_DOC_PATH,
+  SDK_ERROR_CODES,
+  SDK_VERSION,
+  validateAgainstSchema,
+} from "../src/sdk";
+import { SAGA_CATALOG } from "../src/sagas";
+import migration1 from "../migrations/0001_initial.sql?raw";
+import migration2 from "../migrations/0002_cancelling.sql?raw";
+import seed from "../scripts/seed-local.sql?raw";
+
+const bindings = env as unknown as Bindings;
+const TOKEN = "a".repeat(64);
+const principal = { orgId: "00000000-0000-4000-8000-000000000001", userId: "00000000-0000-4000-8000-000000000002" };
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json", ...extra };
+}
+
+describe("SDK contract version and descriptor (issue #140)", () => {
+  afterEach(async () => {
+    await reset();
+  });
+  it("pins the contract version and serves it over GET /api/sdk", async () => {
+    expect(SDK_VERSION).toBe("1");
+    expect(SDK_DOC_PATH).toBe("/api/sdk");
+    const descriptor = describeContract();
+    expect(descriptor.contract).toBe("wrangnarok.sdk");
+    expect(descriptor.version).toBe(SDK_VERSION);
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining(["GET /api/sdk", "GET /api/sagas", "POST /api/executions"]),
+    );
+    for (const capability of descriptor.capabilities) {
+      expect(["supported", "git-owned", "tracked"]).toContain(capability.status);
+    }
+    // Resource-management SDK commands stay tracked to their owning parity
+    // issues; the descriptor must never declare them complete.
+    const resources = descriptor.capabilities.find((entry) => entry.name === "resource-management");
+    expect(resources?.status).toBe("tracked");
+  });
+
+  it("serves the same descriptor through the authenticated Worker route", async () => {
+    await bindings.DB.exec(migration1);
+    await bindings.DB.exec(migration2);
+    await bindings.DB.exec(seed);
+    const denied = await worker.fetch(new Request("http://local.test/api/sdk"), bindings);
+    expect(denied.status).toBe(401);
+    const ok = await worker.fetch(new Request("http://local.test/api/sdk", { headers: authHeaders() }), bindings);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual(describeContract());
+  });
+
+  it("keeps SDK_ERROR_CODES covering every served error code", async () => {
+    await bindings.DB.exec(migration1);
+    await bindings.DB.exec(migration2);
+    await bindings.DB.exec(seed);
+    // Force representative failures through the real routes and assert each
+    // served code is in the contract list.
+    const unauth = await worker.fetch(new Request("http://local.test/api/sagas"), bindings);
+    expect(SDK_ERROR_CODES).toContain(((await unauth.json()) as { error: { code: string } }).error.code);
+    const badJson = await worker.fetch(
+      new Request("http://local.test/api/executions", {
+        method: "POST",
+        headers: authHeaders({ "Idempotency-Key": "sdk-drift-test-0001" }),
+        body: "{not json",
+      }),
+      bindings,
+    );
+    expect(SDK_ERROR_CODES).toContain(((await badJson.json()) as { error: { code: string } }).error.code);
+    const badInput = await worker.fetch(
+      new Request("http://local.test/api/executions", {
+        method: "POST",
+        headers: authHeaders({ "Idempotency-Key": "sdk-drift-test-0002" }),
+        body: JSON.stringify({ sagaId: helloSaga.id, input: { name: "" } }),
+      }),
+      bindings,
+    );
+    expect(SDK_ERROR_CODES).toContain(((await badInput.json()) as { error: { code: string } }).error.code);
+    const notFound = await worker.fetch(
+      new Request(`http://local.test/api/executions/${"f".repeat(64)}`, { headers: authHeaders() }),
+      bindings,
+    );
+    expect(SDK_ERROR_CODES).toContain(((await notFound.json()) as { error: { code: string } }).error.code);
+  });
+});
+
+describe("SDK offline authoring helpers", () => {
+  it("scaffolds a defineSaga module with stable identity markers", () => {
+    const scaffolded = scaffoldSaga({
+      name: "hello-again",
+      id: "395e15f0-3627-41f6-8922-008ce37e3b99",
+      description: "A fresh author scaffold.",
+    });
+    expect(scaffolded.files).toHaveLength(1);
+    const file = scaffolded.files[0];
+    expect(file?.path).toBe("src/sagas/hello-again.ts");
+    for (const marker of [
+      "defineSaga",
+      "requiredIntegrations",
+      'step.do("prepare-input-v1"',
+      "prepareExecution",
+      "executeSaga",
+      "395e15f0-3627-41f6-8922-008ce37e3b99",
+    ]) {
+      expect(file?.content).toContain(marker);
+    }
+    expect(scaffolded.next.join("\n")).toContain("sagas.manifest.json");
+    expect(() => scaffoldSaga({ name: "Bad Name", id: "not-a-uuid", description: "x" })).toThrow(SdkError);
+    expect(() => scaffoldSaga({ name: "ok", id: "not-a-uuid", description: "x" })).toThrow(/stable UUID/);
+  });
+
+  it("inspects the offline catalog by id and exact name only", () => {
+    const catalog = localCatalog();
+    expect(catalog).toHaveLength(SAGA_CATALOG.length);
+    const hello = inspectSaga(catalog, "hello");
+    expect(hello.id).toBe(helloSaga.id);
+    expect(inspectSaga(catalog, helloSaga.id)).toEqual(hello);
+    expect(() => inspectSaga(catalog, "no-such-saga")).toThrow(/No Saga named/);
+    expect(() => inspectSaga(catalog, "395e15f0-3627-41f6-8922-008ce37e3b00")).toThrow(/stable id/);
+  });
+
+  it("validates inputs against served schemas before submit", () => {
+    const hello = inspectSaga(localCatalog(), "hello");
+    expect(validateAgainstSchema({ name: "Ada" }, hello.inputSchema)).toEqual({ ok: true });
+    expect(validateAgainstSchema({}, hello.inputSchema).ok).toBe(false);
+    expect(validateAgainstSchema({ name: 7 }, hello.inputSchema).ok).toBe(false);
+    expect(validateAgainstSchema({ nickname: "Ada" }, hello.inputSchema).ok).toBe(false);
+    expect(validateAgainstSchema("anything", undefined)).toEqual({ ok: true });
+  });
+
+  it("resolves the SDK scaffold offline with no network", () => {
+    const scaffolded = scaffoldSaga({
+      name: "cli-check",
+      id: "395e15f0-3627-41f6-8922-008ce37e3b98",
+      description: "CLI parity check.",
+      revision: "cli-check-v1",
+    });
+    for (const marker of ["defineSaga", "requiredIntegrations", 'step.do("prepare-input-v1"']) {
+      expect(scaffolded.files[0]?.content).toContain(marker);
+    }
+  });
+
+  it("surfaces SDK error codes for unknown refs without network", async () => {
+    const client = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: (async () => {
+        throw new Error("offline");
+      }) as typeof fetch,
+    });
+    // Offline catalog helpers fail before any fetch.
+    expect(() => inspectSaga([], "hello")).toThrow(/No Saga named/);
+    await expect(client.inspectSaga("no-such-saga")).rejects.toMatchObject({ code: "SDK_CLIENT_NETWORK" });
+  });
+});
+
+describe("SDK automation client: local happy/denied/error examples", () => {
+  beforeEach(async () => {
+    await bindings.DB.exec(migration1);
+    await bindings.DB.exec(migration2);
+    await bindings.DB.exec(seed);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== "http://127.0.0.1:8788/echo") throw new Error("Unexpected outbound request");
+      return Response.json({ message: "hello" });
+    });
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await reset();
+  });
+
+  it("lists, inspects, submits, polls, and diagnoses a happy Execution", async () => {
+    const key = "sdk-client-happy-001";
+    const id = await executionId(principal, key);
+    await using instance = await introspectWorkflowInstance(bindings.HELLO_WORKFLOW, id);
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) =>
+      worker.fetch(
+        new Request(url, { ...(init ?? {}), headers: authHeaders(init?.headers as Record<string, string>) }),
+        {
+          ...bindings,
+        },
+      )) as typeof fetch;
+    const client = createSdkClient({ base: "http://local.test", token: TOKEN, fetchImpl, pollMs: 0 });
+    const sagas = await client.listSagas();
+    expect(parseSagaCatalog({ sagas })).toHaveLength(SAGA_CATALOG.length);
+    const hello = await client.inspectSaga("hello");
+    expect(hello.inputSchema).toBeDefined();
+    const submitted = await client.submitExecution({ saga: "hello", input: { name: "Ada" }, key });
+    expect(submitted).toMatchObject({ executionId: id, status: "Succeeded" });
+    await instance.waitForStatus("complete");
+    const settled = await client.getExecution(id);
+    expect(parseExecutionDetail(JSON.parse(JSON.stringify(settled)))).toMatchObject({
+      status: "Succeeded",
+      result: { greeting: "Hello, Ada!", name: "Ada" },
+    });
+    const diagnosis = await client.diagnoseExecution(id);
+    expect(diagnosis.hint).toBeNull();
+    const page = await client.listHistory({});
+    expect(parseHistoryPage(JSON.parse(JSON.stringify(page))).executions.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the same caller policy as the UI: denied callers get 401/404, never data", async () => {
+    const key = "sdk-client-denied-001";
+    const id = await executionId(principal, key);
+    await using instance = await introspectWorkflowInstance(bindings.HELLO_WORKFLOW, id);
+    const authed = (async (url: string | URL | Request, init?: RequestInit) =>
+      worker.fetch(
+        new Request(url, { ...(init ?? {}), headers: authHeaders(init?.headers as Record<string, string>) }),
+        {
+          ...bindings,
+        },
+      )) as typeof fetch;
+    const client = createSdkClient({ base: "http://local.test", token: TOKEN, fetchImpl: authed, pollMs: 0 });
+    await client.submitExecution({ saga: "hello", input: { name: "Bo" }, key, wait: false });
+    await instance.waitForStatus("complete");
+    // No token: 401 UNAUTHORIZED.
+    const anonFetch = (async (url: string | URL | Request, init?: RequestInit) =>
+      worker.fetch(new Request(url, init ?? {}), { ...bindings })) as typeof fetch;
+    const anon = createSdkClient({ base: "http://local.test", token: "wrong-token", fetchImpl: anonFetch });
+    await expect(anon.getExecution(id)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    // Foreign owner with a valid token shape: 404 EXECUTION_NOT_FOUND, never a leak.
+    const foreignFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const headers = authHeaders(init?.headers as Record<string, string>);
+      return worker.fetch(new Request(url, { ...(init ?? {}), headers }), {
+        ...bindings,
+        LAB_USER_ID: "00000000-0000-4000-8000-000000000003",
+      });
+    }) as typeof fetch;
+    const foreign = createSdkClient({ base: "http://local.test", token: TOKEN, fetchImpl: foreignFetch });
+    await expect(foreign.getExecution(id)).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
+    const error = await foreign.getExecution(id).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(SdkError);
+    expect(
+      (
+        await parseSdkError(
+          new Response(JSON.stringify({ error: { code: "FORBIDDEN", message: "No." } }), { status: 403 }),
+        )
+      ).code,
+    ).toBe("FORBIDDEN");
+  });
+
+  it("surfaces validation and contract errors with stable codes", async () => {
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) =>
+      worker.fetch(
+        new Request(url, { ...(init ?? {}), headers: authHeaders(init?.headers as Record<string, string>) }),
+        {
+          ...bindings,
+        },
+      )) as typeof fetch;
+    const client = createSdkClient({ base: "http://local.test", token: TOKEN, fetchImpl, pollMs: 0 });
+    await expect(client.inspectSaga("no-such-saga")).rejects.toMatchObject({ code: "SDK_SAGA_NOT_FOUND" });
+    await expect(client.getExecution("abc")).rejects.toMatchObject({ code: "SDK_INVALID_REF" });
+    await expect(
+      client.submitExecution({ saga: "hello", input: { name: "" }, key: "sdk-client-error-001" }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(client.getContract()).resolves.toMatchObject({ version: SDK_VERSION });
+  });
+});
+
+describe("SDK client branches over stub fetch (issue #140)", () => {
+  function stub(scenarios: unknown[]) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, init: init ?? {} });
+      const next = scenarios.shift();
+      if (next instanceof Error) throw next;
+      if (next === undefined) throw new Error(`Unexpected fetch: ${url}`);
+      return next as Response;
+    }) as typeof fetch;
+    return { calls, fetchImpl };
+  }
+
+  function json(value: unknown, status = 200): Response {
+    return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+  }
+
+  const catalog = {
+    sagas: [
+      {
+        id: helloSaga.id,
+        name: "hello",
+        revision: "hello-v1",
+        description: "hi",
+        requiredIntegrations: [],
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+          additionalProperties: false,
+        },
+      },
+    ],
+  };
+
+  function detail(overrides: Record<string, unknown> = {}) {
+    const id = "a".repeat(64);
+    return {
+      executionId: id,
+      sagaId: helloSaga.id,
+      sagaName: "hello",
+      sagaRevision: "hello-v1",
+      orgId: "org",
+      userId: "user",
+      status: "Succeeded",
+      dispatchConfirmed: true,
+      createdAt: "2026-09-11T00:00:00.000Z",
+      startedAt: "2026-09-11T00:00:01.000Z",
+      completedAt: "2026-09-11T00:00:02.000Z",
+      runtimeStatus: null,
+      input: { name: "Ada" },
+      result: { greeting: "Hello, Ada!", name: "Ada" },
+      error: null,
+      operations: [
+        {
+          name: "prepare-input-v1",
+          status: "Succeeded",
+          startedAt: "2026-09-11T00:00:01.000Z",
+          completedAt: "2026-09-11T00:00:02.000Z",
+          result: { name: "Ada" },
+          error: null,
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("rejects bad client options before any fetch", () => {
+    expect(() => createSdkClient({ base: "not-a-url", token: "tok" })).toThrow(/http\(s\)/);
+    expect(() => createSdkClient({ base: "http://local.test", token: "" })).toThrow(/bearer token/);
+    expect(() => createSdkClient({ base: "http://local.test///", token: "tok" })).not.toThrow();
+  });
+
+  it("forwards Access credentials and resolves sagas by UUID without listing", async () => {
+    const { calls, fetchImpl } = stub([json(detail({ status: "Running" }))]);
+    const client = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      access: { clientId: "id", clientSecret: "secret" },
+      fetchImpl,
+    });
+    const seen = await client.getExecution("a".repeat(64));
+    expect(seen.status).toBe("Running");
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers["CF-Access-Client-Id"]).toBe("id");
+    const uuidClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    const listed = stub([json(catalog)]);
+    const byUuid = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: listed.fetchImpl });
+    expect((await byUuid.inspectSaga(helloSaga.id)).name).toBe("hello");
+    expect(uuidClient).toBeDefined();
+  });
+
+  it("flags ambiguous catalog names instead of guessing", async () => {
+    const dupes = {
+      sagas: [
+        { id: helloSaga.id, name: "dup", revision: "v1", description: "a", requiredIntegrations: [] },
+        {
+          id: "395e15f0-3627-41f6-8922-008ce37e3b98",
+          name: "dup",
+          revision: "v1",
+          description: "b",
+          requiredIntegrations: [],
+        },
+      ],
+    };
+    const { fetchImpl } = stub([json(dupes), json(dupes)]);
+    const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    await expect(client.inspectSaga("dup")).rejects.toMatchObject({ code: "SDK_SAGA_AMBIGUOUS" });
+    expect(() =>
+      inspectSaga(
+        [
+          { id: helloSaga.id, name: "dup", revision: "v1", description: "a", requiredIntegrations: [] },
+          {
+            id: "395e15f0-3627-41f6-8922-008ce37e3b98",
+            name: "dup",
+            revision: "v1",
+            description: "b",
+            requiredIntegrations: [],
+          },
+        ],
+        "dup",
+      ),
+    ).toThrow(/pass a stable UUID/);
+  });
+
+  it("submits with generated keys, receipts, and stable submit errors", async () => {
+    const id = "b".repeat(64);
+    const { calls, fetchImpl } = stub([
+      json(catalog),
+      json({ executionId: id, replayed: true, statusUrl: `/api/executions/${id}` }, 202),
+    ]);
+    const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    const receipt = await client.submitExecution({ saga: "hello", wait: false });
+    expect(receipt).toMatchObject({ executionId: id, replayed: true });
+    const sentHeaders = calls[1]?.init.headers as Record<string, string> | undefined;
+    expect(typeof sentHeaders?.["Idempotency-Key"]).toBe("string");
+    expect((sentHeaders?.["Idempotency-Key"] ?? "").length).toBeGreaterThan(16);
+    const badKey = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    await expect(badKey.submitExecution({ saga: helloSaga.id, key: "short" })).rejects.toMatchObject({
+      code: "SDK_INVALID_REF",
+    });
+    const noId = stub([json({ replayed: false }, 202)]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: noId.fetchImpl }).submitExecution({
+        saga: helloSaga.id,
+        key: "sdk-branch-test-0001",
+        wait: false,
+      }),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+    const html = stub([json(catalog), new Response("nope", { status: 202 })]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: html.fetchImpl }).submitExecution({
+        saga: "hello",
+        key: "sdk-branch-test-0002",
+        wait: false,
+      }),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+    const denied = stub([json({ error: { code: "INVALID_INPUT", message: "bad" } }, 400)]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: denied.fetchImpl }).submitExecution({
+        saga: helloSaga.id,
+        key: "sdk-branch-test-0003",
+        wait: false,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    const bare = stub([new Response(JSON.stringify({ nope: true }), { status: 400 })]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: bare.fetchImpl }).submitExecution({
+        saga: helloSaga.id,
+        key: "sdk-branch-test-0004",
+        wait: false,
+      }),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+  });
+
+  it("times out a slow poll and wraps network failures", async () => {
+    const id = "e".repeat(64);
+    const running = stub([
+      json({ executionId: id, replayed: false, statusUrl: `/api/executions/${id}` }, 202),
+      json(detail({ executionId: id, status: "Running" })),
+    ]);
+    const slow = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: running.fetchImpl,
+      timeoutMs: 0,
+      pollMs: 0,
+      sleep: async () => {},
+    });
+    await expect(slow.submitExecution({ saga: helloSaga.id, key: "sdk-branch-timeout-001" })).rejects.toMatchObject({
+      code: "SDK_CLIENT_TIMEOUT",
+    });
+    const down = stub([new Error("boom")]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: down.fetchImpl }).listSagas(),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_NETWORK" });
+  });
+
+  it("cancels with exact IDs and guards the cancel shape", async () => {
+    const id = "c".repeat(64);
+    const { calls, fetchImpl } = stub([json({ executionId: id, status: "Cancelled", cancelled: true })]);
+    const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    expect(await client.cancelExecution(id)).toMatchObject({ status: "Cancelled", cancelled: true });
+    expect(calls[0]?.url).toBe(`http://local.test/api/executions/${id}/cancel`);
+    await expect(client.cancelExecution("abc")).rejects.toMatchObject({ code: "SDK_INVALID_REF" });
+    const malformed = stub([json({ nope: true })]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: malformed.fetchImpl }).cancelExecution(id),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+  });
+
+  it("lists history with filters, cursors, and saga resolution", async () => {
+    const page = {
+      executions: [{ executionId: "d".repeat(64), sagaId: helloSaga.id, status: "Failed" }],
+      hasMore: false,
+    };
+    const { calls, fetchImpl } = stub([json(catalog), json(page)]);
+    const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    const seen = await client.listHistory({
+      status: "Failed,TimedOut",
+      saga: "hello",
+      from: "2026-09-01",
+      to: "2026-09-10",
+      limit: 5,
+    });
+    expect(seen.executions).toHaveLength(1);
+    const url = calls[1]?.url ?? "";
+    expect(url).toContain("status=Failed%2CTimedOut");
+    expect(url).toContain("startDate=2026-09-01");
+    expect(url).toContain("endDate=2026-09-10");
+    const unknown = stub([json(catalog)]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: unknown.fetchImpl }).listHistory({
+        saga: "missing",
+      }),
+    ).rejects.toMatchObject({ code: "SDK_SAGA_NOT_FOUND" });
+  });
+
+  it("diagnoses every known failure code and returns null hints otherwise", async () => {
+    const codes = [
+      "INTEGRATION_REQUIREMENT_UNSATISFIED",
+      "ECHO_VENDOR_TIMEOUT",
+      "NINJA_VENDOR_TIMEOUT",
+      "NINJA_UNAUTHORIZED",
+      "NINJA_NOT_CONFIGURED",
+      "EXECUTION_CANCELLED",
+      "DISPATCH_UNCONFIRMED",
+    ];
+    for (const code of codes) {
+      const { fetchImpl } = stub([json(detail({ error: { code, message: code } }))]);
+      const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+      const diagnosis = await client.diagnoseExecution("a".repeat(64));
+      expect(typeof diagnosis.hint).toBe("string");
+    }
+    const { fetchImpl } = stub([json(detail({ error: { code: "SOME_OTHER_CODE", message: "x" } }))]);
+    const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    expect((await client.diagnoseExecution("a".repeat(64))).hint).toBeNull();
+  });
+
+  it("rejects contract skew and malformed descriptors", async () => {
+    const skewed = stub([json({ contract: "wrangnarok.sdk", version: "999" })]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: skewed.fetchImpl }).getContract(),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+    const html = stub([new Response("nope", { status: 200 })]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: html.fetchImpl }).getContract(),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+  });
+
+  it("parses failed responses without ever throwing", async () => {
+    expect((await parseSdkError(new Response("nope", { status: 500 }))).code).toBe("SDK_CLIENT_MISMATCH");
+    expect((await parseSdkError(json({ nope: true }, 400))).code).toBe("SDK_CLIENT_MISMATCH");
+    expect((await parseSdkError(json({ error: { code: "NOPE", message: "" } }, 400))).code).toBe("SDK_CLIENT_MISMATCH");
+    const shaped = await parseSdkError(json({ error: { code: "FORBIDDEN", message: "No." } }, 403));
+    expect(shaped.status).toBe(403);
+    expect(shaped.toJSON()).toEqual({ error: { code: "FORBIDDEN", message: "No." } });
+  });
+
+  it("guards every wire shape against drift", () => {
+    expect(() => parseSagaCatalog({})).toThrow(/unexpected shape/);
+    expect(() => parseSagaCatalog({ sagas: [{ id: 1 }] })).toThrow(/unexpected shape/);
+    expect(() => parseSagaCatalog(null)).toThrow(/unexpected shape/);
+    expect(() => parseExecutionDetail(null)).toThrow(/unexpected shape/);
+    expect(() => parseExecutionDetail({ ...detail(), operations: [{ name: 1 }] })).toThrow(/unexpected shape/);
+    expect(() => parseExecutionDetail({ ...detail(), operations: "x" })).toThrow(/unexpected shape/);
+    expect(() => parseHistoryPage({})).toThrow(/unexpected shape/);
+    expect(() => parseHistoryPage({ executions: [{ sagaId: 1 }], hasMore: false })).toThrow(/unexpected shape/);
+    expect(() => parseHistoryPage({ executions: [], hasMore: false, nextCursor: 7 })).toThrow(/unexpected shape/);
+    expect(parseHistoryPage({ executions: [], hasMore: false }).nextCursor).toBeNull();
+    expect(parseHistoryPage({ executions: [], hasMore: false, nextCursor: "c" }).nextCursor).toBe("c");
+  });
+
+  it("validates every schema branch offline", () => {
+    expect(validateAgainstSchema("x", { type: "object", properties: {} })).toEqual({
+      ok: false,
+      error: "Input must be a JSON object.",
+    });
+    expect(validateAgainstSchema({ extra: 1 }, { type: "object", properties: {} })).toEqual({ ok: true });
+    expect(
+      validateAgainstSchema({ extra: 1 }, { type: "object", properties: {}, additionalProperties: false }),
+    ).toEqual({ ok: false, error: 'Unknown input field "extra".' });
+    expect(validateAgainstSchema({}, { type: "object", properties: {}, required: ["a"] })).toEqual({
+      ok: false,
+      error: 'Missing required input field "a".',
+    });
+    const schema = {
+      type: "object" as const,
+      properties: {
+        s: { type: "string" },
+        n: { type: "number" },
+        b: { type: "boolean" },
+        a: { type: "array" },
+        o: { type: "object" },
+        w: { type: "weird" },
+      },
+    };
+    expect(validateAgainstSchema({ s: 1 }, schema).ok).toBe(false);
+    expect(validateAgainstSchema({ n: "x" }, schema).ok).toBe(false);
+    expect(validateAgainstSchema({ b: 1 }, schema).ok).toBe(false);
+    expect(validateAgainstSchema({ a: {} }, schema).ok).toBe(false);
+    expect(validateAgainstSchema({ o: [] }, schema).ok).toBe(false);
+    expect(validateAgainstSchema({ w: 1 }, schema).ok).toBe(false);
+    expect(validateAgainstSchema({ s: "x", n: 1, b: true, a: [], o: {} }, schema)).toEqual({ ok: true });
+  });
+
+  it("rejects bad scaffold input on every field", () => {
+    const good = { name: "ok", id: helloSaga.id, description: "d" };
+    expect(scaffoldSaga(good).files).toHaveLength(1);
+    expect(() => scaffoldSaga({ ...good, name: "Bad Name" })).toThrow(/simple slug/);
+    expect(() => scaffoldSaga({ ...good, id: "x" })).toThrow(/stable UUID/);
+    expect(() => scaffoldSaga({ ...good, description: "" })).toThrow(/1-280/);
+    expect(() => scaffoldSaga({ ...good, revision: "" })).toThrow(/diagnostic marker/);
+    expect(localCatalog()).toHaveLength(SAGA_CATALOG.length);
+  });
+});
