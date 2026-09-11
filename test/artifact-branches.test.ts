@@ -96,11 +96,8 @@ it("bounds retention days to 1-3650 integers", () => {
   }
 });
 
-it("grants the admin bypass only to the configured user with the header", () => {
-  const caller = { userId: "u-1", orgId: "o-1" };
-  const adminHeaders = new Headers({ "X-Wrangnarok-Admin": "true" });
-  expect(isAdminCaller(caller, adminHeaders, "u-1")).toBe(true);
-  expect(isAdminCaller(caller, adminHeaders, "u-2")).toBe(false);
-  expect(isAdminCaller(caller, adminHeaders, undefined)).toBe(false);
-  expect(isAdminCaller(caller, new Headers(), "u-1")).toBe(false);
+it("grants the admin bypass to instance and org admins only", () => {
+  expect(isAdminCaller({ isInstanceAdmin: true, isOrgAdmin: false })).toBe(true);
+  expect(isAdminCaller({ isInstanceAdmin: false, isOrgAdmin: true })).toBe(true);
+  expect(isAdminCaller({ isInstanceAdmin: false, isOrgAdmin: false })).toBe(false);
 });

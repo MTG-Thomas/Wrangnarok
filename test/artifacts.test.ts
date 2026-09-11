@@ -2,16 +2,17 @@
 // Generated Artifacts (FILE-02, issue #158): upload with same-filename
 // versioning, list/preview/download/rename/delete, and the canonical versus
 // attachment-binding access split, proven against real local D1 + R2 in
-// workerd. Applies the full migration chain (0001 + 0007) so the artifact
-// schema composes with the existing tables.
+// workerd. Applies the full migration chain (0001 + 0007 + 0008 + 0010)
+// so the artifact schema composes with the org-membership gate (AUTH-01).
 import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import migration1 from "../migrations/0001_initial.sql?raw";
-import migration7 from "../migrations/0007_artifacts.sql?raw";
-import seed from "../scripts/seed-local.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
+import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
+import migration10 from "../migrations/0010_artifacts.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);
@@ -74,7 +75,22 @@ async function uploadArtifact(
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration7);
-  await bindings.DB.exec(seed);
+  await bindings.DB.exec(migration8);
+  await bindings.DB.exec(migration10);
+  // AUTH-01 membership gate: the LAB fixture identity (USER) bootstraps to
+  // admin of ORG inside authenticate on first use. OTHER_USER holds an
+  // ordinary membership so artifact denials prove artifact policy (403),
+  // never org strangerhood (membership 404). OTHER_ORG stays unknown.
+  const stamp = new Date().toISOString();
+  await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?)").bind(ORG, "Local demo").run();
+  await bindings.DB.prepare("INSERT INTO users(user_id,status,created_at) VALUES (?,'active',?)")
+    .bind(OTHER_USER, stamp)
+    .run();
+  await bindings.DB.prepare(
+    "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+  )
+    .bind(ORG, OTHER_USER, "member", "active", "ordinary", stamp, stamp)
+    .run();
 });
 
 afterEach(async () => {
@@ -141,11 +157,12 @@ it("downloads with attachment disposition and lists with pagination", async () =
 
 it("enforces the canonical access matrix: 404 foreign, 403 same-org non-creator, admin bypass", async () => {
   const { id } = await uploadArtifact("secret.md", "creator bytes");
-  // Foreign org: 404, never a leak (detail, bytes, rename, delete).
+  // Foreign org: 404, never a leak (detail, bytes, rename, delete). The
+  // membership gate answers unknown orgs before artifact policy runs.
   expect((await call(`/api/artifacts/${id}`, "GET", { orgId: OTHER_ORG })).status).toBe(404);
   expect((await call(`/api/artifacts/${id}/preview`, "GET", { orgId: OTHER_ORG })).status).toBe(404);
   expect((await call(`/api/artifacts/${id}/download`, "GET", { orgId: OTHER_ORG })).status).toBe(404);
-  // Same org, different creator, no admin header: 403 on canonical access.
+  // Same org, different creator, ordinary member: 403 on canonical access.
   expect((await call(`/api/artifacts/${id}`, "GET", { userId: OTHER_USER })).status).toBe(403);
   expect((await call(`/api/artifacts/${id}/preview`, "GET", { userId: OTHER_USER })).status).toBe(403);
   expect((await call(`/api/artifacts/${id}/download`, "GET", { userId: OTHER_USER })).status).toBe(403);
@@ -155,44 +172,24 @@ it("enforces the canonical access matrix: 404 foreign, 403 same-org non-creator,
     userId: OTHER_USER,
   });
   expect(deniedRename.status).toBe(403);
-  // Claiming admin without the deployment-configured ADMIN_USER_ID: still 403.
-  const fakeAdmin = await call(`/api/artifacts/${id}`, "GET", {
+  // Admin bypass (AUTH-01 composition): promote the member to org admin and
+  // the same canonical reads, renames, and deletes succeed with no header.
+  const stamp = new Date().toISOString();
+  await bindings.DB.prepare("UPDATE org_memberships SET role='admin',updated_at=? WHERE org_id=? AND user_id=?")
+    .bind(stamp, ORG, OTHER_USER)
+    .run();
+  expect((await call(`/api/artifacts/${id}`, "GET", { userId: OTHER_USER })).status).toBe(200);
+  const adminRename = await call(`/api/artifacts/${id}/rename`, "POST", {
+    body: JSON.stringify({ name: "admin-renamed.md" }),
+    contentType: "application/json",
     userId: OTHER_USER,
-    headers: { "X-Wrangnarok-Admin": "true" },
   });
-  expect(fakeAdmin.status).toBe(403);
-  // Real admin bypass: the configured ADMIN_USER_ID plus the header reads,
-  // renames, and deletes another creator's row.
-  const adminEnv = { ...bindings, ADMIN_USER_ID: OTHER_USER };
-  const adminRead = await worker.fetch(
-    new Request(`http://local.test/api/artifacts/${id}`, { headers: { ...headers(), "X-Wrangnarok-Admin": "true" } }),
-    { ...adminEnv, LAB_ORG_ID: ORG, LAB_USER_ID: OTHER_USER },
-  );
-  expect(adminRead.status).toBe(200);
-  const adminRename = await worker.fetch(
-    new Request(`http://local.test/api/artifacts/${id}/rename`, {
-      method: "POST",
-      headers: { ...headers({ "Content-Type": "application/json", "X-Wrangnarok-Admin": "true" }) },
-      body: JSON.stringify({ name: "admin-renamed.md" }),
-    }),
-    { ...adminEnv, LAB_ORG_ID: ORG, LAB_USER_ID: OTHER_USER },
-  );
   expect(adminRename.status).toBe(200);
-  const adminDelete = await worker.fetch(
-    new Request(`http://local.test/api/artifacts/${id}`, {
-      method: "DELETE",
-      headers: { ...headers(), "X-Wrangnarok-Admin": "true" },
-    }),
-    { ...adminEnv, LAB_ORG_ID: ORG, LAB_USER_ID: OTHER_USER },
-  );
-  expect(adminDelete.status).toBe(200);
-  // Deleted: creator sees 404, admin sees 410 (gone vs never-existed).
-  expect((await call(`/api/artifacts/${id}`)).status).toBe(404);
-  const gone = await worker.fetch(
-    new Request(`http://local.test/api/artifacts/${id}`, { headers: { ...headers(), "X-Wrangnarok-Admin": "true" } }),
-    { ...adminEnv, LAB_ORG_ID: ORG, LAB_USER_ID: OTHER_USER },
-  );
-  expect(gone.status).toBe(410);
+  expect((await call(`/api/artifacts/${id}`, "DELETE", { userId: OTHER_USER })).status).toBe(200);
+  // Deleted: the fixture identity bootstraps to org admin, so it sees 410
+  // (gone vs never-existed). Ordinary members see 404 on deleted rows.
+  expect((await call(`/api/artifacts/${id}`)).status).toBe(410);
+  expect((await call(`/api/artifacts/${id}`, "GET", { userId: OTHER_USER })).status).toBe(410);
 });
 
 it("binds attachments, lists triples without bytes, and separates binding from canonical access", async () => {

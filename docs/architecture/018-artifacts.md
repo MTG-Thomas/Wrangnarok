@@ -23,11 +23,11 @@ Artifact rename (upstream `chat.py:388-432` evidence) is a metadata write on the
 
 Project constraint 7 requires documenting why each new primitive is needed. Artifact bytes are opaque, arbitrarily large (up to 5 MiB per surface), and must survive independently of D1 row lifetimes while remaining deletable per retention. D1 value caps make it the wrong venue for bytes; the Worker has no filesystem; KV is eventually consistent and capped per value. R2 is the Cloudflare-native object store for exactly this shape, with a local Miniflare implementation so tests run credential-free.
 
-### 3. Canonical versus attachment-binding access
+### 3. Canonical versus attachment-binding access (composed with AUTH-01)
 
-Two separate gates, tested independently:
+Two separate gates, tested independently, both behind the AUTH-01 membership gate (every request resolves the CallerCtx first; strangers get the membership 404 before artifact policy runs):
 
-- **Canonical access** (metadata, bytes, rename, delete): the row must sit in the caller's Organization (else 404), and the caller must be the creator or an admin (else 403). Admin is explicit and deployment-configured: the caller presents `X-Wrangnarok-Admin: true` AND matches the one configured `ADMIN_USER_ID`. There is no self-asserted admin, no role table yet (AUTH-02 owns roles); the header-plus-configured-user pair is the narrow, auditable bypass. Deleted rows answer 404 to non-admins and 410 to admins (gone versus never-existed).
+- **Canonical access** (metadata, bytes, rename, delete): the row must sit in the caller's resolved Organization (else 404 via the AUTH-01 membership gate), and the caller must be the creator or an admin (else 403). Admin composes with AUTH-01 (ADR 015): instance admins (the deployment `ADMIN_USER_IDS` list, install state never in Git) and Organization admins (the membership row) bypass the creator check. There is no self-asserted admin and no separate artifact role table (finer roles belong to AUTH-02). Deleted rows answer 404 to non-admins and 410 to admins (gone versus never-existed).
 - **Attachment-binding access** (chat/conversation readers): a binding names the (scope, refId) an Artifact backs. Listing bindings answers the triple only — never bytes, never canonical metadata — so a chat reader resolves which Artifact backs an attachment without gaining byte access. Byte reads always re-pass the canonical gate.
 
 ### 4. Retention and cleanup
@@ -37,7 +37,7 @@ Expiry is pinned by `Artifact.created_at` (upstream invariant), never last acces
 - Preview lists what WOULD be deleted (no writes, bounded to 100 with a truncation flag).
 - Run deletes one bounded batch with per-row outcomes (deleted ids, failed id+code pairs, remaining count). R2 deletes precede the D1 deleted-marker so an interruption leaves an active row the next run picks up (R2 deletes are idempotent), never a deleted marker over surviving bytes.
 - Upload completion is verified: bytes land in R2 before the version row commits; a failed R2 write deletes the Artifact row so no orphan metadata survives.
-- Safe default: 90 days (upstream default), range 1–3650. Policy changes and cleanup runs are admin-only.
+- Safe default: 90 days (upstream default), range 1–3650. Policy changes and cleanup runs are admin-only (instance or Organization admin per the resolved CallerCtx).
 
 Still-referenced artifacts are NOT preserved: cleanup deletes expired rows even when bindings exist (bindings cascade). Preserving referenced artifacts would be an explicit adaptation, recorded here as rejected — the upstream invariant is expiry-by-created_at with cascading chat bindings.
 
@@ -49,6 +49,6 @@ Still-referenced artifacts are NOT preserved: cleanup deletes expired rows even 
 
 ## Consequences
 
-- `migrations/0007_artifacts.sql` owns the schema; `src/artifacts.ts` owns the domain; `src/index.ts` routes mirror the apps style (one explicit matcher per route).
+- `migrations/0010_artifacts.sql` owns the schema; `src/artifacts.ts` owns the domain; `src/index.ts` routes mirror the apps style (one explicit matcher per route).
 - The SDK contract gains the artifact routes, error codes, and a `generated-artifacts: supported` capability; `docs/sdk-capability-map.md` flips `files, artifacts` to Partial.
 - The parity map marks FILE-02 Partial: the lifecycle ships; AUTH-02 roles (finer than creator/admin), FILE-01 signed-URL parity, and AI-03 chat attachment surfacing remain with their owners.

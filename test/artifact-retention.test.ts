@@ -8,15 +8,15 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import migration1 from "../migrations/0001_initial.sql?raw";
-import migration7 from "../migrations/0007_artifacts.sql?raw";
-import seed from "../scripts/seed-local.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
+import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
+import migration10 from "../migrations/0010_artifacts.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);
 const ORG = "00000000-0000-4000-8000-000000000001";
 const USER = "00000000-0000-4000-8000-000000000002";
 const OTHER_USER = "00000000-0000-4000-8000-000000000003";
-const ADMIN = OTHER_USER;
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${TOKEN}`, ...extra };
@@ -29,17 +29,16 @@ function call(
 ) {
   const requestHeaders: Record<string, string> = headers();
   if (init.contentType !== undefined) requestHeaders["Content-Type"] = init.contentType;
-  if (init.admin === true) requestHeaders["X-Wrangnarok-Admin"] = "true";
-  // The admin bypass binds to the configured ADMIN_USER_ID: admin calls act
-  // as that user, never as the ordinary creator.
-  const userId = init.userId ?? (init.admin === true ? ADMIN : USER);
+  // Admin calls act as the fixture admin (USER bootstraps to org admin on
+  // first use); ordinary calls act as USER unless overridden.
+  const userId = init.userId ?? USER;
   return worker.fetch(
     new Request(`http://local.test${path}`, {
       method,
       headers: requestHeaders,
       ...(init.body === undefined ? {} : { body: init.body }),
     }),
-    { ...bindings, ADMIN_USER_ID: ADMIN, LAB_ORG_ID: ORG, LAB_USER_ID: userId },
+    { ...bindings, LAB_ORG_ID: ORG, LAB_USER_ID: userId },
   );
 }
 
@@ -59,7 +58,22 @@ async function backdate(id: string, createdAt: string): Promise<void> {
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration7);
-  await bindings.DB.exec(seed);
+  await bindings.DB.exec(migration8);
+  await bindings.DB.exec(migration10);
+  // AUTH-01 membership gate: the LAB fixture identity (USER) bootstraps to
+  // admin of ORG inside authenticate on first use. OTHER_USER holds an
+  // ordinary membership so artifact denials prove artifact policy (403),
+  // never org strangerhood (membership 404). OTHER_ORG stays unknown.
+  const stamp = new Date().toISOString();
+  await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?)").bind(ORG, "Local demo").run();
+  await bindings.DB.prepare("INSERT INTO users(user_id,status,created_at) VALUES (?,'active',?)")
+    .bind(OTHER_USER, stamp)
+    .run();
+  await bindings.DB.prepare(
+    "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+  )
+    .bind(ORG, OTHER_USER, "member", "active", "ordinary", stamp, stamp)
+    .run();
 });
 
 afterEach(async () => {
@@ -71,10 +85,11 @@ afterEach(async () => {
 it("defaults to 90 days and lets only the admin change the window", async () => {
   const current = (await (await call("/api/artifacts/retention")).json()) as { retention: { maxAgeDays: number } };
   expect(current.retention.maxAgeDays).toBe(90);
-  // Non-admin change refuses with RETENTION_FORBIDDEN, never a silent write.
+  // Non-admin (ordinary member) change refuses with RETENTION_FORBIDDEN.
   const denied = await call("/api/artifacts/retention", "PUT", {
     body: JSON.stringify({ maxAgeDays: 7 }),
     contentType: "application/json",
+    userId: OTHER_USER,
   });
   expect(denied.status).toBe(403);
   expect(((await denied.json()) as { error: { code: string } }).error.code).toBe("RETENTION_FORBIDDEN");
@@ -108,8 +123,8 @@ it("previews without writing and runs one bounded batch with per-row outcomes", 
   expect(preview.cleanup.candidates.map((entry) => entry.id)).toEqual([oldId]);
   expect(preview.cleanup.truncated).toBe(false);
   expect((await call(`/api/artifacts/${oldId}`)).status).toBe(200);
-  // Non-admin run refuses.
-  expect((await call("/api/artifacts/cleanup/run", "POST")).status).toBe(403);
+  // Non-admin (ordinary member) run refuses.
+  expect((await call("/api/artifacts/cleanup/run", "POST", { userId: OTHER_USER })).status).toBe(403);
   // Admin run deletes the expired row with a per-row receipt; the fresh row survives.
   const run = (await (await call("/api/artifacts/cleanup/run", "POST", { admin: true })).json()) as {
     cleanup: { deleted: string[]; failed: unknown[]; remaining: number };
@@ -117,7 +132,7 @@ it("previews without writing and runs one bounded batch with per-row outcomes", 
   expect(run.cleanup.deleted).toEqual([oldId]);
   expect(run.cleanup.failed).toEqual([]);
   expect(run.cleanup.remaining).toBe(0);
-  expect((await call(`/api/artifacts/${oldId}`)).status).toBe(404);
+  expect((await call(`/api/artifacts/${oldId}`)).status).toBe(410);
   expect((await call(`/api/artifacts/${freshId}`)).status).toBe(200);
   expect(await bindings.ARTIFACTS!.get(`artifacts/${oldId}/v1`)).toBeNull();
   expect(await bindings.ARTIFACTS!.get(`artifacts/${freshId}/v1`)).not.toBeNull();

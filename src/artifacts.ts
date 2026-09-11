@@ -10,12 +10,12 @@
 // retention policy. No Portable bundle embeds runtime bytes (OPS-03 owns the
 // encrypted full-backup exception).
 //
-// Ownership and access (ADR 018 section 3):
+// Ownership and access (ADR 018 section 3, composed with AUTH-01):
 // - Canonical access (metadata, bytes, rename, delete): the Artifact row must
-//   sit in the caller's Organization, and the caller must be the creator or an
-//   admin. Admin is explicit: the caller presents the
-//   `X-Wrangnarok-Admin: true` header AND the deployment configured one
-//   ADMIN_USER_ID that matches the caller, never a self-asserted claim.
+//   sit in the caller's resolved Organization (membership gate first), and
+//   the caller must be the creator or an admin. Admin is the resolved
+//   CallerCtx: instance admins (ADMIN_USER_IDS) plus Organization admins
+//   (membership row). No self-asserted header, no separate role table.
 // - Attachment-binding access (CHAT_BINDING_* codes): a binding row names the
 //   (scope, refId) the bytes were attached to. Listing bindings answers only
 //   the binding triple (artifactId, scope, refId) so a chat reader learns
@@ -188,13 +188,18 @@ export function parseRetentionDays(value: unknown): number {
   return value;
 }
 
-/** Explicit admin bypass (ADR 018 section 3): the deployment configures one
- * ADMIN_USER_ID; only that user presenting X-Wrangnarok-Admin: true bypasses
- * the creator check. Everything else is deny-by-absence. */
-export function isAdminCaller(caller: Principal, headers: Headers, adminUserId: string | undefined): boolean {
-  if (!adminUserId) return false;
-  if (headers.get("X-Wrangnarok-Admin") !== "true") return false;
-  return caller.userId.toLowerCase() === adminUserId.toLowerCase();
+/** Explicit admin bypass (ADR 018 section 3, composed with AUTH-01): the
+ * resolved CallerCtx carries the answer. Instance admins (the deployment
+ * ADMIN_USER_IDS list, install state never in Git) and Organization admins
+ * (the membership row) bypass the creator check. Everything else is
+ * deny-by-absence. */
+export interface ArtifactAdminCtx {
+  readonly isInstanceAdmin: boolean;
+  readonly isOrgAdmin: boolean;
+}
+
+export function isAdminCaller(ctx: ArtifactAdminCtx): boolean {
+  return ctx.isInstanceAdmin || ctx.isOrgAdmin;
 }
 
 interface ArtifactRow {
