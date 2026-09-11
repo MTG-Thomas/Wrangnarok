@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 // Administrative audit trail and operational notifications (OPS-01, issue
-// #172; ADR 018).
+// #172; ADR 020).
 //
-// Two D1 tables (migration 0010_ops.sql), Worker + D1 only — no Queue,
+// Two D1 tables (migration 0018_ops.sql), Worker + D1 only — no Queue,
 // Durable Object, KV, or WebSocket is earned by this slice. Clients poll
 // durable state; reconnects re-read the authoritative rows, never a stream.
 //

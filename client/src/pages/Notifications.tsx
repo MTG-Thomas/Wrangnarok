@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Operational notifications inbox (OPS-01, issue #172; ADR 018). Lists the
+// Operational notifications inbox (OPS-01, issue #172; ADR 020). Lists the
 // caller's own personal rows plus same-Organization org-scoped rows with
 // durable status, progress, and dismiss behavior. Refresh re-reads the
 // authoritative D1 rows (poll, never a stream); refresh stops on unmount.

@@ -1,4 +1,4 @@
-# ADR 018: Administrative audit trail and operational notifications (OPS-01 slice)
+# ADR 020: Administrative audit trail and operational notifications (OPS-01 slice)
 
 - **Status:** Accepted (2026-09-11; gates issue #172, OPS-01)
 - **Date:** 2026-09-11
@@ -18,7 +18,7 @@ Wrangnarök has neither: ExecutionHistory records runs, not user/role/config mut
 
 Worker + D1 only. No Queue, Durable Object, KV, or WebSocket is earned by this slice: the first delivery is durable D1 state plus client polling (polling is the accepted first slice for live updates, same posture as OBS-02). What ships:
 
-### 1. Audit events (`audit_events` D1 table, migration `0010_ops.sql`)
+### 1. Audit events (`audit_events` D1 table, migration `0018_ops.sql`)
 
 One row per consequential event: `actor_user_id`, `org_id`, dotted `action`, `target_type`, `target_id`, `outcome` (`success`/`failure`), scrubbed `detail_json`, `created_at`.
 
@@ -40,7 +40,7 @@ Ordinary Execution submits, form submissions, reads, and unauthenticated 401s ar
 
 **Retention (explicit):** no automatic deletion in v1. Audit rows accumulate under the D1 per-database size bound; scheduled cleanup/export belongs to OPS-03. This is stated here so growth is a tracked cost, not a surprise.
 
-### 2. Notifications (`notifications` D1 table, migration `0010_ops.sql`)
+### 2. Notifications (`notifications` D1 table, migration `0018_ops.sql`)
 
 Durable rows (not ephemeral TTLs — D1 has no key expiry, and durability is the point): `id` (UUID), `org_id`, owning `user_id`, `scope` (`personal`|`org`), `category`, `title`, `body`, `status` (upstream vocabulary: `pending`/`running`/`awaiting_action`/`completed`/`failed`/`cancelled`), nullable `progress_percent` (0-100, `NULL` = indeterminate), scrubbed `detail_json` (carries `{appId, jobId, revision}` for job-linked rows), timestamps, `dismissed_at`.
 

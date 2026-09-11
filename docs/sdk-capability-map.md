@@ -74,7 +74,7 @@ contract.
 | Upstream router | Wrangnarok mapping | Status |
 | --- | --- | --- |
 | `cli.py` (CLI-facing API surface) | `scripts/wrangnarok.mjs` over the same `/api/*` routes as the UI | Supported for Sagas/Executions; Tracked for entity modules |
-| `audit.py` (admin audit log) | `GET /api/audit` + `audit` CLI command (`src/ops.ts`, ADR 018) | Supported (adapted: org-scoped reads until AUTH-02 roles; no superuser gate yet) |
+| `audit.py` (admin audit log) | `GET /api/audit` + `audit` CLI command (`src/ops.ts`, ADR 020) | Supported (adapted: org-scoped reads until AUTH-02 roles; no superuser gate yet) |
 | `notifications.py` (notification inbox) | `GET/DELETE /api/notifications[/:id]` + `notifications`/`notification`/`dismiss-notification` CLI commands | Supported (adapted: durable D1 rows instead of Redis TTLs; poll instead of WebSocket; no upload-lock endpoints) |
 | `docs.py` (`GET /api/llms.txt`: full platform docs as one document) | `GET /api/sdk` (versioned contract descriptor) + `docs/sdk.md` + `AGENTS.md` | Partial (adapted: a versioned contract plus author docs instead of one concatenated document) |
 | `decorator_properties.py` (workflow decorator metadata) | `CatalogEntry` + `IoSchema` + `validateSagaDefinition` | Supported (identity/discovery only; operational policy stays out of source per upstream finding 3) |

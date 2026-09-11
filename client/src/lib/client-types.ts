@@ -140,7 +140,7 @@ export interface AppDetail extends AppSummary {
   activeDeployment: AppDeployment | null;
 }
 
-/** One administrative audit event (GET /api/audit; OPS-01, ADR 018). */
+/** One administrative audit event (GET /api/audit; OPS-01, ADR 020). */
 export interface AuditEvent {
   id: string;
   orgId: string;
@@ -160,7 +160,7 @@ export interface AuditResponse {
   nextCursor: string | null;
 }
 
-/** One operational notification (GET /api/notifications; OPS-01, ADR 018). */
+/** One operational notification (GET /api/notifications; OPS-01, ADR 020). */
 export interface AppNotification {
   id: string;
   orgId: string;

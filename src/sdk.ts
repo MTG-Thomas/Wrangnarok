@@ -1234,7 +1234,7 @@ export function describeContract(): SdkContractDescriptor {
         name: "ops-audit-notifications",
         status: "supported",
         detail:
-          "Administrative audit trail (GET /api/audit) plus operational notifications inbox with dismiss (ADR 018).",
+          "Administrative audit trail (GET /api/audit) plus operational notifications inbox with dismiss (ADR 020).",
       },
       {
         name: "author-tables",

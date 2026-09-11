@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Administrative audit trail (OPS-01, issue #172; ADR 018). Lists the
+// Administrative audit trail (OPS-01, issue #172; ADR 020). Lists the
 // Organization-scoped audit events newest-first with server-side
 // action-prefix/outcome/search/date filters plus cursor traversal. Audit rows
 // are management mutations and policy denies with actor/outcome attribution;

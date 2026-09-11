@@ -20,7 +20,7 @@ import {
 } from "../src/ops";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
-import migration10 from "../migrations/0010_ops.sql?raw";
+import migration18 from "../migrations/0018_ops.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -33,7 +33,7 @@ const other = { orgId: ORG, userId: OTHER_USER };
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration6);
-  await bindings.DB.exec(migration10);
+  await bindings.DB.exec(migration18);
   await bindings.DB.exec(seed);
 });
 

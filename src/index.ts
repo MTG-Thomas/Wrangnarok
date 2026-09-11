@@ -689,7 +689,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         throw error;
       }
     }
-    // Administrative audit trail (OPS-01, ADR 018): Organization-scoped event
+    // Administrative audit trail (OPS-01, ADR 020): Organization-scoped event
     // list with action-prefix, outcome, search, date, and cursor filters.
     // No per-row detail route (upstream has none either).
     if (url.pathname === "/api/audit" && request.method === "GET") {
@@ -699,7 +699,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         scrubValueWithDeploymentSecrets(await listAudit(env.DB, caller, parseAuditQuery(url.searchParams)), env),
       );
     }
-    // Operational notifications (OPS-01, ADR 018): durable personal/org inbox
+    // Operational notifications (OPS-01, ADR 020): durable personal/org inbox
     // with dismiss behavior. List is the caller's own personal rows plus
     // same-org org-scoped rows; reconnects re-read D1, never a stream.
     if (url.pathname === "/api/notifications" && request.method === "GET") {
