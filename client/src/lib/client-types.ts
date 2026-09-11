@@ -139,3 +139,20 @@ export interface AppDetail extends AppSummary {
   jobs: AppJob[];
   activeDeployment: AppDeployment | null;
 }
+
+/** Row shape for GET /api/config (CON-02, ADR 018): typed values for this
+ * Organization; secret rows answer "[SECRET]", never values. */
+export interface ConfigEntry {
+  id: string;
+  key: string;
+  type: string;
+  value: unknown;
+  description: string | null;
+  managedBy: string | null;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface ConfigListResponse {
+  configs: ConfigEntry[];
+}
