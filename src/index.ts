@@ -88,6 +88,7 @@ import {
 } from "./endpoints";
 import type { EndpointRow } from "./endpoints";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
+import { deleteConfig, listConfigs, parseUpdateConfigInput, setConfig, updateConfig } from "./config";
 import {
   consumeUploadToken,
   createLocation,
@@ -214,7 +215,7 @@ function bearerToken(request: Request): string | null {
   const match = /^Bearer (.+)$/.exec(header);
   return match?.[1] ?? null;
 }
-/** Public TRG-02 deliveries (issue #138, ADR 018): vendor-facing webhook and
+/** Public TRG-02 deliveries (issue #138, ADR 019): vendor-facing webhook and
  * endpoint receivers. Authenticated by credential (per-endpoint key or HMAC
  * secret), never by the operator session — so they run BEFORE the
  * authenticated /api/* gate below. Name resolution is global by name (names
@@ -310,7 +311,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   // Assets and needs no auth; only /api/* is authenticated JSON.
   if (!url.pathname.startsWith("/api/")) {
     // Public vendor receivers live outside /api/* precisely so they do not
-    // require the operator session (ADR 018): /hooks/:name for webhooks.
+    // require the operator session (ADR 019): /hooks/:name for webhooks.
     if (url.pathname.startsWith("/hooks/")) {
       try {
         const delivered = await handlePublicDelivery(request, env);
@@ -1305,6 +1306,53 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
       await deleteTable(env.DB, caller, table);
       return json({ deleted: true });
+    }
+    // Scoped configuration (CON-02, ADR 020): typed key/value rows for the
+    // caller's own Organization. Secret rows answer "[SECRET]" on every read
+    // surface and provision only references — values resolve transiently at
+    // the Integration Action boundary and never persist, log, or return.
+    // One explicit matcher per route, mirroring the tables style: boring and
+    // greppable beats a shared capture.
+    if (url.pathname === "/api/config" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ configs: await listConfigs(env.DB, caller) });
+    }
+    if (url.pathname === "/api/config" && request.method === "POST") {
+      requireJson(request);
+      const body: unknown = await boundedJson(request.body);
+      if (!object(body))
+        throw new Fault(400, "INVALID_CONFIG", "Config writes need { key, type, value?, description? }.");
+      const record = body as Record<string, unknown>;
+      return json(
+        {
+          config: await setConfig(
+            env.DB,
+            caller,
+            { key: record.key, type: record.type, value: record.value, description: record.description },
+            env as unknown as Record<string, string | undefined>,
+          ),
+        },
+        201,
+      );
+    }
+    const configOne = /^\/api\/config\/([0-9a-fA-F-]{36})$/.exec(url.pathname);
+    if (configOne?.[1]) {
+      if (request.method === "PUT") {
+        requireJson(request);
+        return json({
+          config: await updateConfig(
+            env.DB,
+            caller,
+            configOne[1],
+            parseUpdateConfigInput(await boundedJson(request.body)),
+            env as unknown as Record<string, string | undefined>,
+          ),
+        });
+      }
+      if (request.method === "DELETE") {
+        await deleteConfig(env.DB, caller, configOne[1]);
+        return json({ deleted: true });
+      }
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).

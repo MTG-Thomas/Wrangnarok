@@ -54,6 +54,15 @@ describe("SDK contract version and descriptor (issue #140)", () => {
     // DEV-02 (issue #141): local preview is a supported capability; the new
     // error codes stay in the contract list.
     expect(descriptor.capabilities.find((entry) => entry.name === "local-preview")?.status).toBe("supported");
+    // CON-02 (issue #147): scoped config is a supported capability with its
+    // routes in the descriptor and its codes in the contract list.
+    expect(descriptor.capabilities.find((entry) => entry.name === "author-config")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining(["GET /api/config", "POST /api/config", "PUT /api/config/:id"]),
+    );
+    for (const code of ["CONFIG_REQUIREMENT_UNSATISFIED", "SECRET_NOT_CONFIGURED", "MANAGED_RESOURCE"]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
     for (const code of ["STABLE_IDENTITY_REMAP_REQUIRED", "SYNC_CONFLICT", "INVALID_GIT_TARGET", "DEPLOY_BLOCKED"]) {
       expect(SDK_ERROR_CODES).toContain(code);
     }

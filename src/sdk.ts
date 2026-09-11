@@ -114,6 +114,19 @@ export const SDK_ERROR_CODES = [
   "INVALID_ACTION",
   "INVALID_GRANT",
   "INVALID_GRANTEE",
+  "INVALID_CONFIG",
+  "INVALID_CONFIG_KEY",
+  "INVALID_CONFIG_TYPE",
+  "INVALID_CONFIG_VALUE",
+  "INVALID_CONFIG_ID",
+  "INVALID_CONFIG_UPDATE",
+  "INVALID_CONFIG_DESCRIPTION",
+  "CONFIG_NOT_FOUND",
+  "CONFIG_CONFLICT",
+  "CONFIG_REQUIREMENT_UNSATISFIED",
+  "CREDENTIAL_IN_VALUE",
+  "SECRET_NOT_CONFIGURED",
+  "SECRET_SCHEMA_MISMATCH",
   "INVALID_JOB_ID",
   "JOB_NOT_FOUND",
   "APP_NOT_LIVE",
@@ -437,6 +450,70 @@ export function parsePreview(value: unknown): SdkPreview {
   return preview as unknown as SdkPreview;
 }
 
+// --- Scoped config (CON-02, ADR 020) -----------------------------------------
+// Typed key/value rows for the caller's own Organization. Secret rows answer
+// "[SECRET]" on every read surface; secret values never cross the wire.
+
+/** Upstream list-masking parity: secret values never serialize. */
+export const SDK_SECRET_MASK = "[SECRET]";
+
+export interface SdkConfigEntry {
+  readonly id: string;
+  readonly key: string;
+  readonly type: string;
+  readonly value: unknown;
+  readonly description: string | null;
+  readonly managedBy: string | null;
+  readonly updatedAt: string;
+  readonly updatedBy: string;
+}
+
+function isConfigEntry(value: unknown): value is SdkConfigEntry {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.key === "string" &&
+    typeof value.type === "string" &&
+    "value" in value &&
+    (value.description === null || typeof value.description === "string") &&
+    (value.managedBy === null || typeof value.managedBy === "string") &&
+    typeof value.updatedAt === "string" &&
+    typeof value.updatedBy === "string"
+  );
+}
+
+/** Guard a GET /api/config payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseConfigList(value: unknown): readonly SdkConfigEntry[] {
+  if (!isRecord(value) || !Array.isArray(value.configs) || !value.configs.every(isConfigEntry)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The config list has an unexpected shape.");
+  }
+  return value.configs;
+}
+
+/** Guard a POST /api/config or PUT /api/config/:id payload. Throws
+ * SDK_CLIENT_MISMATCH on drift. */
+export function parseConfigEntry(value: unknown): SdkConfigEntry {
+  if (!isRecord(value) || !isConfigEntry(value.config)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The config entry has an unexpected shape.");
+  }
+  return value.config;
+}
+
+export interface SdkSetConfigOptions {
+  readonly key: string;
+  readonly type: string;
+  readonly value?: unknown;
+  readonly description?: string;
+}
+
+export interface SdkUpdateConfigOptions {
+  readonly id: string;
+  readonly key?: string;
+  readonly type?: string;
+  readonly value?: unknown;
+  readonly description?: string;
+}
+
 // --- Offline authoring helpers ----------------------------------------------
 
 const SAGA_SLUG = /^[a-z0-9][a-z0-9.-]*$/;
@@ -732,6 +809,17 @@ export interface SdkClient {
   cancelExecution(id: string): Promise<SdkCancelReceipt>;
   listHistory(query?: SdkHistoryQuery): Promise<SdkHistoryPage>;
   diagnoseExecution(id: string): Promise<SdkDiagnosis>;
+  /** CON-02 scoped config (GET /api/config): typed rows for this
+   * Organization; secret rows answer "[SECRET]", never values. */
+  listConfigs(): Promise<readonly SdkConfigEntry[]>;
+  /** CON-02 scoped config (POST /api/config): set a non-secret value or
+   * provision a secret reference (upsert by key; managed rows refuse). */
+  setConfig(options: SdkSetConfigOptions): Promise<SdkConfigEntry>;
+  /** CON-02 scoped config (PUT /api/config/:id): omitted secret values
+   * preserve the reference. */
+  updateConfig(options: SdkUpdateConfigOptions): Promise<SdkConfigEntry>;
+  /** CON-02 scoped config (DELETE /api/config/:id). */
+  deleteConfig(id: string): Promise<void>;
   getContract(): Promise<SdkContractDescriptor>;
 }
 
@@ -914,6 +1002,57 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
         error: detail.error,
         hint: hintFor(detail.error),
       };
+    },
+    async listConfigs(): Promise<readonly SdkConfigEntry[]> {
+      const response = await guard(() => fetchImpl(`${base}/api/config`, { headers }), "config list");
+      return parseConfigList(await readJson(response, "config list"));
+    },
+    async setConfig(options: SdkSetConfigOptions): Promise<SdkConfigEntry> {
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/config`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              key: options.key,
+              type: options.type,
+              ...(options.value === undefined ? {} : { value: options.value }),
+              ...(options.description === undefined ? {} : { description: options.description }),
+            }),
+          }),
+        "config set",
+      );
+      return parseConfigEntry(await readJson(response, "config set"));
+    },
+    async updateConfig(options: SdkUpdateConfigOptions): Promise<SdkConfigEntry> {
+      if (!STABLE_UUID.test(options.id)) {
+        throw new SdkError("SDK_INVALID_REF", "Config updates need the exact config UUID.");
+      }
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/config/${options.id}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({
+              ...(options.key === undefined ? {} : { key: options.key }),
+              ...(options.type === undefined ? {} : { type: options.type }),
+              ...(options.value === undefined ? {} : { value: options.value }),
+              ...(options.description === undefined ? {} : { description: options.description }),
+            }),
+          }),
+        "config update",
+      );
+      return parseConfigEntry(await readJson(response, "config update"));
+    },
+    async deleteConfig(id: string): Promise<void> {
+      if (!STABLE_UUID.test(id)) {
+        throw new SdkError("SDK_INVALID_REF", "Config deletes need the exact config UUID.");
+      }
+      const response = await guard(
+        () => fetchImpl(`${base}/api/config/${id}`, { method: "DELETE", headers }),
+        "config delete",
+      );
+      await readJson(response, "config delete");
     },
     async getContract(): Promise<SdkContractDescriptor> {
       const response = await guard(() => fetchImpl(`${base}${SDK_DOC_PATH}`, { headers }), "sdk contract");
@@ -1236,6 +1375,22 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/tables/:name/grants",
         description: "Revoke one action grant (owner-only).",
       },
+      { method: "GET", path: "/api/config", description: "Typed config rows for this Organization (secrets masked)." },
+      {
+        method: "POST",
+        path: "/api/config",
+        description: "Set a non-secret value or provision a secret reference (upsert by key).",
+      },
+      {
+        method: "PUT",
+        path: "/api/config/:id",
+        description: "Update one config row by ID; omitted secret values preserve the reference.",
+      },
+      {
+        method: "DELETE",
+        path: "/api/config/:id",
+        description: "Delete one config row by ID (managed rows refuse).",
+      },
       { method: "GET", path: "/api/endpoints", description: "Operator endpoint inventory (this Organization)." },
       {
         method: "POST",
@@ -1316,16 +1471,22 @@ export function describeContract(): SdkContractDescriptor {
           "Author Tables over D1 (TABLE-02 query/count/batch slice): declarations, deny-by-absence per-action grants, bounded keyset queries, scoped counts with skip_count, all-or-denied batches. Realtime subscriptions stay deferred.",
       },
       {
+        name: "author-config",
+        status: "supported",
+        detail:
+          "Scoped config over D1 (CON-02, ADR 020): typed string/int/bool/json rows plus secret references, org-only resolution, [SECRET] list masking, managed-row ownership. No global tier.",
+      },
+      {
         name: "endpoint-triggers",
         status: "supported",
         detail:
-          "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 018): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
+          "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 019): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
       },
       {
         name: "resource-management",
         status: "tracked",
         detail:
-          "Author Tables/files/forms/config/agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md); the scoped browser app runtime is the separate app-runtime capability.",
+          "Author Tables/files/forms/agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md); the scoped browser app runtime is the separate app-runtime capability.",
       },
     ],
     docs: [
