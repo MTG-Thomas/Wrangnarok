@@ -107,7 +107,11 @@ describe("MVP slice contracts", () => {
     // #151): an already-settled engine (finite state) confirms logical
     // cancel; a missing instance is reported separately; everything else
     // (transient/control-plane, unknown codes, non-Errors) is ambiguous.
-    expect(classifyTerminateError(new Error("WorkflowError: (instance.cannot_terminate) Cannot terminate instance since its on a finite state"))).toBe("already-settled");
+    expect(
+      classifyTerminateError(
+        new Error("WorkflowError: (instance.cannot_terminate) Cannot terminate instance since its on a finite state"),
+      ),
+    ).toBe("already-settled");
     expect(classifyTerminateError(new Error("instance.not_found"))).toBe("not-found");
     expect(classifyTerminateError(new Error("WorkflowError: something new broke"))).toBe("ambiguous");
     expect(classifyTerminateError(new Error("boom"))).toBe("ambiguous");
