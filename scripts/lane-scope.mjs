@@ -42,7 +42,7 @@ try {
       .filter(Boolean)
       .map((f) => `M  ${f}`)
       .join("\n");
-} catch (e) {
+} catch {
   console.error("lane-scope: git status failed");
   process.exit(2);
 }
