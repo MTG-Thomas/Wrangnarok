@@ -265,6 +265,33 @@ function printCancel(outcome) {
   else console.log(`${outcome.executionId} ${outcome.status} (already in progress; another request won the race)`);
 }
 
+// OBS-02 (issue #153): scoped log tail + operator search rendering. One line
+// per row (seq, level, saga, message); loaded-slice counts are never totals.
+function printLogs(page, { pages }) {
+  if (emit(page)) return;
+  for (const row of page.logs ?? []) {
+    console.log(`#${row.seq}\t${row.level}\t${row.sagaName}\t${row.message}`);
+  }
+  if (page.hasMore)
+    console.log(`# ${(page.logs ?? []).length} loaded across ${pages} page(s); more available server-side.`);
+  else console.log(`# ${(page.logs ?? []).length} loaded (complete under these filters).`);
+}
+
+// OBS-02 merge helper (mirrors mergeLogPages in src/logs.ts): dedupe a
+// freshly polled page by seq and keep deterministic seq order. Pure.
+function mergeLogRows(existing, page) {
+  const seen = new Set(existing.map((entry) => entry.seq));
+  const merged = [...existing];
+  for (const entry of page) {
+    if (!seen.has(entry.seq)) {
+      seen.add(entry.seq);
+      merged.push(entry);
+    }
+  }
+  merged.sort((a, b) => a.seq - b.seq);
+  return merged;
+}
+
 const HELP = `wrangnarok: thin CLI over the Worker HTTP API (no Saga logic here).
 
 Usage: node scripts/wrangnarok.mjs [global flags] <command> [args]
@@ -295,6 +322,15 @@ Commands:
                                           Query Execution summaries (server filters,
                                           cursor traversal; loaded counts are not totals)
   cancel --id HEX                         Cancel one Execution (exact ID only)
+  logs --id HEX [--level L[,L2]] [--limit N] [--cursor CURSOR] [--follow]
+                                          Scoped log tail for one Execution
+                                          (DEBUG hidden unless asked; --follow
+                                          polls from the cursor, dedupes by seq)
+  log-search [--level L[,L2]] [--saga NAME|UUID] [--saga-name NAME]
+             [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--all]
+                                          Operator search across the caller's
+                                          own rows (date/level/Saga filters,
+                                          cursor traversal)
   orgs                                    List visible Organizations
   org-create --name NAME                  Create an Organization (instance admin)
   org-disable/--enable --id UUID          Disable/enable an Organization (instance admin)
@@ -568,6 +604,95 @@ export async function runCommand(ctx, deps = {}) {
         "execution cancel",
       );
     }
+    case "logs": {
+      // Scoped tail for one Execution (OBS-02). Without --follow this is one
+      // page (plus --all cursor traversal). With --follow it keeps polling
+      // from the returned cursor and merges by seq, so a disconnect backfills
+      // from durable state and replayed rows dedupe. D1 is the source of
+      // truth; the stream is never it. Test hook: deps.maxFollowPasses caps
+      // passes (selftest uses 2); production passes no cap.
+      const id = checkExecutionId(ctx.id);
+      const levels = (ctx.levelFilter ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const level of levels) {
+        if (!["DEBUG", "INFO", "WARN", "ERROR", "PROGRESS"].includes(level)) {
+          fail("USAGE", "--level must be DEBUG|INFO|WARN|ERROR|PROGRESS (comma-separated ok).");
+        }
+      }
+      const collected = [];
+      let cursor = ctx.cursor;
+      let pages = 0;
+      let hasMore;
+      let passes = 0;
+      for (;;) {
+        const params = new URLSearchParams();
+        if (levels.length > 0) params.set("level", levels.join(","));
+        if (ctx.limit) params.set("limit", String(ctx.limit));
+        if (cursor) params.set("cursor", cursor);
+        const suffix = params.size > 0 ? `?${params.toString()}` : "";
+        const data = await readJson(
+          await fetchImpl(`${ctx.base}/api/executions/${id}/logs${suffix}`, { headers: full.headers }),
+          "log tail",
+        );
+        if (!Array.isArray(data.logs)) fail("SERVER_MISMATCH", "log tail has no logs array.");
+        const merged = mergeLogRows(collected, data.logs);
+        collected.length = 0;
+        collected.push(...merged);
+        pages += 1;
+        passes += 1;
+        hasMore = data.hasMore === true;
+        cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
+        if (!ctx.follow) {
+          if (!ctx.all || !hasMore || !cursor) break;
+          continue;
+        }
+        if (deps.maxFollowPasses !== undefined && passes >= deps.maxFollowPasses) break;
+        await sleep(ctx.pollMs);
+      }
+      return { logs: collected, hasMore, nextCursor: cursor ?? null, pages };
+    }
+    case "log-search": {
+      // Operator search across the caller's own rows (OBS-02): date/level/Saga
+      // filters plus cursor traversal. --all preserves filters per page.
+      const levels = (ctx.levelFilter ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const level of levels) {
+        if (!["DEBUG", "INFO", "WARN", "ERROR", "PROGRESS"].includes(level)) {
+          fail("USAGE", "--level must be DEBUG|INFO|WARN|ERROR|PROGRESS (comma-separated ok).");
+        }
+      }
+      const sagaId = ctx.sagaFilter ? await resolveSagaId(full, ctx.sagaFilter) : undefined;
+      const collected = [];
+      let cursor;
+      let pages = 0;
+      let hasMore;
+      for (;;) {
+        const params = new URLSearchParams();
+        if (levels.length > 0) params.set("level", levels.join(","));
+        if (sagaId) params.set("sagaId", sagaId);
+        if (ctx.sagaNameFilter) params.set("sagaName", ctx.sagaNameFilter);
+        if (ctx.from) params.set("startDate", ctx.from);
+        if (ctx.to) params.set("endDate", ctx.to);
+        if (ctx.limit) params.set("limit", String(ctx.limit));
+        if (cursor) params.set("cursor", cursor);
+        const suffix = params.size > 0 ? `?${params.toString()}` : "";
+        const data = await readJson(
+          await fetchImpl(`${ctx.base}/api/logs${suffix}`, { headers: full.headers }),
+          "log search",
+        );
+        if (!Array.isArray(data.logs)) fail("SERVER_MISMATCH", "log search has no logs array.");
+        collected.push(...data.logs);
+        pages += 1;
+        hasMore = data.hasMore === true;
+        cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
+        if (!ctx.all || !hasMore || !cursor) break;
+      }
+      return { logs: collected, hasMore, nextCursor: cursor ?? null, pages };
+    }
     case "orgs": {
       return readJson(await fetchImpl(`${ctx.base}/api/orgs`, { headers: full.headers }), "org list");
     }
@@ -711,18 +836,27 @@ async function main() {
     scaffoldId: command === "scaffold" ? arg("id") : undefined,
     scaffoldDescription: command === "scaffold" ? arg("description") : undefined,
     scaffoldRevision: command === "scaffold" ? arg("revision") : undefined,
-    sagaFilter: command === "history" || command === "org-executions" ? arg("saga") : undefined,
+    sagaFilter:
+      command === "history" || command === "log-search" || command === "org-executions" ? arg("saga") : undefined,
+    sagaNameFilter: command === "log-search" ? arg("saga-name") : undefined,
     id:
-      command === "detail" || command === "cancel" || command === "diagnose" || orgCommands.has(command)
+      command === "detail" ||
+      command === "cancel" ||
+      command === "diagnose" ||
+      command === "logs" ||
+      orgCommands.has(command)
         ? arg("id")
         : undefined,
     key: command === "submit" ? arg("key") : undefined,
     input: command === "submit" || command === "preview" ? readInput() : undefined,
     statusFilter: command === "history" || command === "org-executions" ? arg("status") : undefined,
+    levelFilter: command === "logs" || command === "log-search" ? arg("level") : undefined,
+    cursor: command === "logs" ? arg("cursor") : undefined,
     limit: limit === undefined ? undefined : Number(limit),
-    from: command === "history" ? arg("from") : undefined,
-    to: command === "history" ? arg("to") : undefined,
-    all: command === "history" ? flag("all") : false,
+    from: command === "history" || command === "log-search" ? arg("from") : undefined,
+    to: command === "history" || command === "log-search" ? arg("to") : undefined,
+    all: command === "history" || command === "log-search" ? flag("all") : false,
+    follow: command === "logs" ? flag("follow") : false,
     wait: command === "submit" ? !flag("no-wait") : flag("wait"),
     name: command === "org-create" ? arg("name") : undefined,
     user: command === "invite" || command === "member-update" || userCommands.has(command) ? arg("user") : undefined,
@@ -756,6 +890,7 @@ async function main() {
     return;
   } else if (command === "detail") printDetail(result);
   else if (command === "cancel") printCancel(result);
+  else if (command === "logs" || command === "log-search") printLogs(result, { pages: result.pages ?? 1 });
   else if (parsed.json) console.log(JSON.stringify(result));
   else if (typeof result.status === "string") console.log(`${result.executionId} ${result.status}`);
   else console.log(`${result.executionId} accepted (replayed: ${result.replayed === true})`);
@@ -1024,6 +1159,89 @@ async function selftest() {
     const result = await runCommand({ ...base, command: "contract" }, { fetchImpl: stub.fetch, ...noSleep });
     check("contract version", result.version === "1");
     check("contract url", stub.calls[0].url === "http://local.test/api/sdk");
+  }
+
+  // logs tails one Execution with level/limit filters; --follow polls from
+  // the cursor and merges by seq so disconnect replays dedupe.
+  {
+    const id = "b".repeat(64);
+    const stub = stubFetch([
+      jsonResponse({ logs: [{ seq: 1, level: "INFO", message: "hi" }], hasMore: false, nextCursor: null }),
+    ]);
+    const result = await runCommand(
+      { ...base, command: "logs", id, levelFilter: "INFO", limit: 10 },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("logs tail", result.logs.length === 1 && result.pages === 1);
+    check("logs query", stub.calls[0].url === `http://local.test/api/executions/${id}/logs?level=INFO&limit=10`);
+  }
+  {
+    const id = "c".repeat(64);
+    const stub = stubFetch([
+      jsonResponse({ logs: [{ seq: 1, level: "INFO", message: "one" }], hasMore: true, nextCursor: "cur-1" }),
+      jsonResponse({
+        logs: [
+          { seq: 1, level: "INFO", message: "one" },
+          { seq: 2, level: "INFO", message: "two" },
+        ],
+        hasMore: false,
+        nextCursor: null,
+      }),
+    ]);
+    const result = await runCommand(
+      { ...base, command: "logs", id, follow: true },
+      { fetchImpl: stub.fetch, ...noSleep, maxFollowPasses: 2 },
+    );
+    check("logs follow dedupes", result.logs.length === 2 && result.logs[1].seq === 2);
+    check("logs follow resumes", stub.calls[1].url.includes("cursor=cur-1"));
+  }
+  {
+    const id = "d".repeat(64);
+    const stub = stubFetch([]);
+    let error = null;
+    const exit = process.exit;
+    process.exit = (code) => {
+      throw new Error(`exit:${code}`);
+    };
+    try {
+      await runCommand({ ...base, command: "logs", id, levelFilter: "Bogus" }, { fetchImpl: stub.fetch, ...noSleep });
+    } catch (e) {
+      error = e;
+    } finally {
+      process.exit = exit;
+    }
+    check("logs level gate", /exit:2/.test(String(error)) && stub.calls.length === 0);
+  }
+
+  // log-search forwards date/level/Saga filters and traverses cursors.
+  {
+    const uuid = "395e15f0-3627-41f6-8922-008ce37e3b35";
+    const stub = stubFetch([
+      jsonResponse({ sagas: [{ id: uuid, name: "hello", revision: "hello-v1" }] }),
+      jsonResponse({ logs: [{ seq: 1 }], hasMore: true, nextCursor: "cursor-2" }),
+      jsonResponse({ logs: [{ seq: 2 }], hasMore: false, nextCursor: null }),
+    ]);
+    const result = await runCommand(
+      {
+        ...base,
+        command: "log-search",
+        levelFilter: "INFO,PROGRESS",
+        sagaFilter: "hello",
+        from: "2026-09-01",
+        to: "2026-09-10",
+        limit: 1,
+        all: true,
+      },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("log-search traversal", result.logs.length === 2 && result.pages === 2);
+    check(
+      "log-search query keeps filters",
+      stub.calls[1].url.includes("level=INFO%2CPROGRESS") &&
+        stub.calls[1].url.includes(`sagaId=${uuid}`) &&
+        stub.calls[1].url.includes("startDate=2026-09-01"),
+    );
+    check("log-search cursor", stub.calls[2].url.includes("cursor=cursor-2"));
   }
 
   // preview resolves the Saga name, posts the parsed input, and returns the

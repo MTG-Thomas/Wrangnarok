@@ -68,6 +68,7 @@ import {
 import { SAGA_CATALOG } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
+import { listExecutionLogs, parseLogSearchQuery, parseLogTailQuery, searchExecutionLogs } from "./logs";
 import { scrubValueWithDeploymentSecrets } from "./secrets";
 import { logRequest } from "./usage";
 export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
@@ -149,10 +150,15 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const isOrgPath =
       url.pathname === "/api/orgs" || url.pathname.startsWith("/api/orgs/") || url.pathname.startsWith("/api/users/");
     const isOrgHistory = /^\/api\/orgs\/[0-9a-fA-F-]{36}\/executions$/.test(url.pathname) && request.method === "GET";
-    // Query strings are deny-by-default: only the history list routes take
-    // them, and only their allowlisted keys (anything else is UNSUPPORTED_QUERY).
-    const historyList = url.pathname === "/api/executions" || isOrgHistory;
-    if (url.search && !(historyList && request.method === "GET"))
+    // Query strings are deny-by-default: only the history list routes, the
+    // OBS-02 log tail, and the OBS-02 log search take them, each with its own
+    // allowlisted keys (anything else is UNSUPPORTED_QUERY).
+    const queryAllowed =
+      (url.pathname === "/api/executions" && request.method === "GET") ||
+      isOrgHistory ||
+      (url.pathname === "/api/logs" && request.method === "GET") ||
+      (/^\/api\/executions\/[a-f0-9]{64}\/logs$/.test(url.pathname) && request.method === "GET");
+    if (url.search && !queryAllowed)
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (isOrgPath) {
       const orgRoute = await routeOrgs(request, env, ctx, url);
@@ -344,6 +350,29 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         503,
         "CANCELLATION_UNCONFIRMED",
         "Cancellation could not be confirmed. Retry the same cancel request.",
+      );
+    }
+    if (url.pathname === "/api/logs" && request.method === "GET") {
+      // Operator log search (OBS-02): the caller's own rows only, filterable
+      // by date/level/Saga, cursor-paginated in seq order. D1 is the source
+      // of truth; this is a polling view, never a live stream.
+      return json(
+        scrubValueWithDeploymentSecrets(
+          await searchExecutionLogs(env.DB, caller, parseLogSearchQuery(url.searchParams)),
+          env,
+        ),
+      );
+    }
+    const logTail = /^\/api\/executions\/([a-f0-9]{64})\/logs$/.exec(url.pathname);
+    if (logTail?.[1] && request.method === "GET") {
+      // Scoped read/tail for one Execution (OBS-02): owner-only, DEBUG hidden
+      // unless explicitly requested, cursor-paginated in seq order. Reconnect
+      // backfills by refetching from the last seen cursor (see mergeLogPages).
+      return json(
+        scrubValueWithDeploymentSecrets(
+          await listExecutionLogs(env.DB, caller, logTail[1], parseLogTailQuery(url.searchParams)),
+          env,
+        ),
       );
     }
     const match = /^\/api\/executions\/([a-f0-9]{64})$/.exec(url.pathname);

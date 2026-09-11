@@ -56,6 +56,11 @@ export const SDK_ERROR_CODES = [
   "UNSUPPORTED_QUERY",
   "INVALID_STATUS",
   "INVALID_SAGA_ID",
+  "INVALID_SAGA_NAME",
+  "INVALID_START_DATE",
+  "INVALID_END_DATE",
+  "INVALID_DATE_RANGE",
+  "INVALID_LEVEL",
   "INVALID_LIMIT",
   "INVALID_CURSOR",
   "INTEGRATION_REQUIREMENT_UNSATISFIED",
@@ -204,6 +209,40 @@ export interface SdkHistoryPage {
   readonly nextCursor: string | null;
 }
 
+export type SdkLogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "PROGRESS";
+
+export interface SdkLogEntry {
+  readonly seq: number;
+  readonly executionId: string;
+  readonly sagaId: string;
+  readonly sagaName: string;
+  readonly orgId: string;
+  readonly userId: string;
+  readonly level: SdkLogLevel;
+  readonly message: string;
+  readonly data: unknown;
+  readonly createdAt: string;
+}
+
+export interface SdkLogPage {
+  readonly logs: readonly SdkLogEntry[];
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
+}
+
+export interface SdkLogTailQuery {
+  readonly level?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface SdkLogSearchQuery extends SdkLogTailQuery {
+  readonly saga?: string;
+  readonly sagaName?: string;
+  readonly from?: string;
+  readonly to?: string;
+}
+
 export interface SdkSubmitReceipt {
   readonly executionId: string;
   readonly replayed: boolean;
@@ -302,6 +341,34 @@ export function parseHistoryPage(value: unknown): SdkHistoryPage {
   }
   return {
     executions: value.executions as unknown as readonly SdkExecutionSummary[],
+    hasMore: value.hasMore,
+    nextCursor: (nextCursor ?? null) as string | null,
+  };
+}
+
+/** Guard a GET /api/executions/:id/logs or GET /api/logs payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseLogPage(value: unknown): SdkLogPage {
+  if (!isRecord(value) || !Array.isArray(value.logs) || typeof value.hasMore !== "boolean") {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The log page has an unexpected shape.");
+  }
+  for (const entry of value.logs) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.seq !== "number" ||
+      typeof entry.executionId !== "string" ||
+      typeof entry.message !== "string" ||
+      typeof entry.level !== "string" ||
+      typeof entry.createdAt !== "string"
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The log page has an unexpected shape.");
+    }
+  }
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && nextCursor !== null && typeof nextCursor !== "string") {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The log page has an unexpected shape.");
+  }
+  return {
+    logs: value.logs as unknown as readonly SdkLogEntry[],
     hasMore: value.hasMore,
     nextCursor: (nextCursor ?? null) as string | null,
   };
@@ -652,6 +719,11 @@ export interface SdkClient {
   getExecution(id: string): Promise<SdkExecutionDetail>;
   cancelExecution(id: string): Promise<SdkCancelReceipt>;
   listHistory(query?: SdkHistoryQuery): Promise<SdkHistoryPage>;
+  /** OBS-02 scoped tail for one Execution (GET /api/executions/:id/logs).
+   * Polling view over durable rows; reconnect by refetching from nextCursor. */
+  tailLogs(id: string, query?: SdkLogTailQuery): Promise<SdkLogPage>;
+  /** OBS-02 operator search across the caller's own rows (GET /api/logs). */
+  searchLogs(query?: SdkLogSearchQuery): Promise<SdkLogPage>;
   diagnoseExecution(id: string): Promise<SdkDiagnosis>;
   getContract(): Promise<SdkContractDescriptor>;
 }
@@ -824,6 +896,32 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       const response = await guard(() => fetchImpl(`${base}/api/executions${suffix}`, { headers }), "history");
       return parseHistoryPage(await readJson(response, "history"));
     },
+    async tailLogs(id: string, query: SdkLogTailQuery = {}): Promise<SdkLogPage> {
+      checkExecutionId(id);
+      const params = new URLSearchParams();
+      if (query.level !== undefined) params.set("level", query.level);
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
+      if (query.cursor !== undefined) params.set("cursor", query.cursor);
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const response = await guard(
+        () => fetchImpl(`${base}/api/executions/${id}/logs${suffix}`, { headers }),
+        "log tail",
+      );
+      return parseLogPage(await readJson(response, "log tail"));
+    },
+    async searchLogs(query: SdkLogSearchQuery = {}): Promise<SdkLogPage> {
+      const params = new URLSearchParams();
+      if (query.level !== undefined) params.set("level", query.level);
+      if (query.saga !== undefined) params.set("sagaId", await resolveSagaId(query.saga));
+      if (query.sagaName !== undefined) params.set("sagaName", query.sagaName);
+      if (query.from !== undefined) params.set("startDate", query.from);
+      if (query.to !== undefined) params.set("endDate", query.to);
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
+      if (query.cursor !== undefined) params.set("cursor", query.cursor);
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const response = await guard(() => fetchImpl(`${base}/api/logs${suffix}`, { headers }), "log search");
+      return parseLogPage(await readJson(response, "log search"));
+    },
     async diagnoseExecution(id: string): Promise<SdkDiagnosis> {
       const detail = await this.getExecution(id);
       return {
@@ -892,6 +990,18 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/executions/:id",
         description: "Execution detail with Operations, result, and safe error.",
       },
+      {
+        method: "GET",
+        path: "/api/executions/:id/logs",
+        description:
+          "OBS-02 scoped log tail for one Execution (level, limit, cursor; DEBUG hidden unless asked). Polling view over durable rows.",
+      },
+      {
+        method: "GET",
+        path: "/api/logs",
+        description:
+          "OBS-02 operator log search across the caller's own rows (level, sagaId, sagaName, startDate, endDate, limit, cursor).",
+      },
       { method: "POST", path: "/api/executions/:id/cancel", description: "Owner-only cancellation (exact ID)." },
       {
         method: "GET",
@@ -958,6 +1068,12 @@ export function describeContract(): SdkContractDescriptor {
         detail: "Offline validateAgainstSchema plus server parse; the server remains authoritative.",
       },
       { name: "execute-status-cancel", status: "supported", detail: "Submit, poll, detail, history, and cancel." },
+      {
+        name: "author-logs",
+        status: "supported",
+        detail:
+          "OBS-02 bounded author logs/progress (tailLogs/searchLogs over GET /api/executions/:id/logs and GET /api/logs; SEC-01 scrubbed, DEBUG hidden unless asked, cursor-poll reconnect).",
+      },
       {
         name: "authored-apps",
         status: "supported",
