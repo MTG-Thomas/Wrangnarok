@@ -266,21 +266,34 @@ export interface HistoryPage {
 }
 const HISTORY_COLUMNS =
   "id,saga_id,saga_name,saga_revision,org_id,user_id,dispatched,status,created_at,started_at,completed_at";
-/** ExecutionHistory listing (Phase 2, issue #76): org/requester-scoped
- * summaries in (created_at DESC, id DESC) order, with optional status/saga
- * filters and cursor pagination. Summaries only — input/result never ride
+/** ExecutionHistory listing (Phase 2, issues #76 then #152): org/requester-scoped
+ * summaries in (created_at DESC, id DESC) order, with status (single or
+ * comma-separated multi), sagaId, exact sagaName, and ISO startDate/endDate
+ * bounds, plus cursor pagination. Summaries only — input/result never ride
  * the list. Never claim completeness when more rows exist: hasMore plus a
  * nextCursor carry the rest. */
 export async function listHistory(db: D1Database, caller: Principal, query: HistoryQuery): Promise<HistoryPage> {
   const clauses = ["org_id=?", "user_id=?"];
   const binds: (string | number)[] = [caller.orgId, caller.userId];
-  if (query.status !== undefined) {
-    clauses.push("status=?");
-    binds.push(query.status);
+  if (query.statuses.length > 0) {
+    clauses.push(`status IN (${query.statuses.map(() => "?").join(",")})`);
+    binds.push(...query.statuses);
   }
   if (query.sagaId !== undefined) {
     clauses.push("saga_id=?");
     binds.push(query.sagaId);
+  }
+  if (query.sagaName !== undefined) {
+    clauses.push("saga_name=?");
+    binds.push(query.sagaName);
+  }
+  if (query.startAt !== undefined) {
+    clauses.push("created_at>=?");
+    binds.push(query.startAt);
+  }
+  if (query.endBefore !== undefined) {
+    clauses.push("created_at<?");
+    binds.push(query.endBefore);
   }
   if (query.cursor !== undefined) {
     clauses.push("((created_at < ?) OR (created_at = ? AND id < ?))");
