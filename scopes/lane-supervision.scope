@@ -7,7 +7,10 @@ scripts/lane-scope.mjs
 docs/migration-ledger.md
 docs/architecture/011-solutions-contract.md
 migrations/0010_solutions_activation.sql
+migrations/0021_endpoints.sql
 src/solutions.ts
+test/endpoints.test.ts
+test/endpoint-branches.test.ts
 test/solutions-activation.test.ts
 test/solutions-install.test.ts
 test/solutions-validation.test.ts
