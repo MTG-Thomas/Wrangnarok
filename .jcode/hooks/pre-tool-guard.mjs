@@ -5,26 +5,41 @@
 import { readFileSync } from "node:fs";
 
 const tool = process.env.JCODE_HOOK_TOOL_NAME ?? "";
-let input = "";
-try {
-  input = readFileSync(0, "utf8");
-} catch {
-  input = process.env.JCODE_HOOK_TOOL_INPUT ?? "";
+
+function readInput() {
+  try {
+    return readFileSync(0, "utf8");
+  } catch {
+    return process.env.JCODE_HOOK_TOOL_INPUT ?? "";
+  }
 }
+
+const input = readInput();
 
 function block(reason) {
   process.stderr.write(`blocked by wrangnarok pre_tool guard: ${reason}\n`);
   process.exit(2);
 }
 
-if (tool === "bash") {
-  let command = "";
+function bashCommand(raw) {
   try {
-    command = JSON.parse(input).command ?? "";
+    return String(JSON.parse(raw).command ?? "");
   } catch {
-    command = input;
+    return String(raw);
   }
-  const cmd = String(command);
+}
+
+function toolFilePath(raw) {
+  try {
+    const body = JSON.parse(raw);
+    return String(body.file_path ?? body.filePath ?? "");
+  } catch {
+    return "";
+  }
+}
+
+if (tool === "bash") {
+  const cmd = bashCommand(input);
   // Production deploy guard: only dry runs are allowed from agent sessions.
   if (/\bwrangler\s+deploy\b/.test(cmd) && !/--dry-run/.test(cmd)) {
     block("wrangler deploy without --dry-run (production deploys need explicit human approval).");
@@ -40,14 +55,9 @@ if (tool === "bash") {
 }
 
 if (tool === "write" || tool === "edit" || tool === "apply_patch") {
-  let filePath = "";
-  try {
-    filePath = JSON.parse(input).file_path ?? JSON.parse(input).filePath ?? "";
-  } catch {
-    filePath = "";
-  }
+  const filePath = toolFilePath(input);
   // Local secret files are gitignored but must never gain committed credentials.
-  if (/\.dev\.vars/.test(String(filePath))) {
+  if (/\.dev\.vars/.test(filePath)) {
     block(`writes to ${filePath} (local secret file; human manages it via npm run setup:local).`);
   }
 }
