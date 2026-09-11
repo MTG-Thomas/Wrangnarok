@@ -1,4 +1,4 @@
-# ADR 016: Authored Applications — independent vs Solution-owned lifecycle, ownership, recovery, build security
+# ADR 017: Authored Applications — independent vs Solution-owned lifecycle, ownership, recovery, build security
 
 - **Status:** Accepted (2026-09-11; gates APP-01 per issue #159)
 - **Date:** 2026-09-11

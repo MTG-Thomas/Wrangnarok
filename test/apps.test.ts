@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Authored Applications (APP-01, issue #159; ADR 016): independent-app
+// Authored Applications (APP-01, issue #159; ADR 017): independent-app
 // lifecycle, ownership, recovery, and authorized asset serving, proven
 // against real local D1 in workerd. Applies the full migration chain
 // (0001 + 0006) so the apps schema composes with the existing tables.

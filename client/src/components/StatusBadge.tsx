@@ -11,7 +11,7 @@ const KNOWN_STATUSES: ReadonlySet<string> = new Set<string>([
   "Cancelling",
   "Cancelled",
   "TimedOut",
-  // Authored-app lifecycle (APP-01, ADR 016): lowercase lifecycle + job states.
+  // Authored-app lifecycle (APP-01, ADR 017): lowercase lifecycle + job states.
   "created",
   "ready",
   "building",

@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Authored Applications (APP-01, issue #159; ADR 016).
+// Authored Applications (APP-01, issue #159; ADR 017).
 //
 // An Application is an Organization-scoped, author-owned record: stable UUID
 // identity (ADR 002 rules), a human name, a route slug unique per
 // Organization, an ownership marker, and an active_deployment_id pointer.
 //
-// Ownership (ADR 016 section 1, same shape as ADR 011 Connections):
+// Ownership (ADR 017 section 1, same shape as ADR 011 Connections):
 // independent rows (managed_by NULL) live through the app API below; the
 // trusted author edits source, validates, builds, and deploys with no
 // draft/preview/publish step (independent V2 has none). Solution-owned rows
 // (managed_by = <bundle_id>@<version>) arrive via bundle install and reject
 // live mutation with MANAGED_RESOURCE. Legacy V1 draft/publish is
-// documented in ADR 016, never implemented.
+// documented in ADR 017, never implemented.
 //
-// Build security (ADR 016 section 6, the gating decision): validation is
+// Build security (ADR 017 section 6, the gating decision): validation is
 // shape-only and the v1 deploy job compiles declarations to a stored bundle
 // WITHOUT executing author source or installing packages. Nothing here
 // imports, evaluates, or bundles untrusted code; doing so needs its own ADR
@@ -88,7 +88,7 @@ export const APP_MAX_FILES = 50;
 export const APP_MAX_FILE_BYTES = 4096;
 export const APP_MAX_DEPS = 20;
 
-/** Static dependency allowlist (ADR 016 section 3): declared pins resolve
+/** Static dependency allowlist (ADR 017 section 3): declared pins resolve
  * here, never against a registry. Anything unlisted fails validation with
  * DEPENDENCY_UNRESOLVED and blocks build. */
 export const APP_DEP_ALLOWLIST: Readonly<Record<string, readonly string[]>> = Object.freeze({
@@ -142,7 +142,7 @@ export function parseAppId(value: string): string {
   return value.toLowerCase();
 }
 
-/** Shape-only source validation (ADR 016 section 6): path allowlists, byte
+/** Shape-only source validation (ADR 017 section 6): path allowlists, byte
  * bounds, dependency-pin allowlist. Never imports or executes the source. */
 export function validateAppSource(files: unknown, deps: unknown): { files: AppFile[]; deps: AppDependency[] } {
   const failures: FieldFailure[] = [];
@@ -454,7 +454,7 @@ export async function validateApp(db: D1Database, caller: Principal, id: string)
  * validate-gated). The job runs synchronously in v1 (shape-only compile, no
  * execution): it re-validates, resolves pins, hashes content, stages the
  * deployment row, and moves active_deployment_id only on success. A failed
- * build leaves the prior pointer untouched (ADR 016 section 5). */
+ * build leaves the prior pointer untouched (ADR 017 section 5). */
 export async function startBuild(db: D1Database, caller: Principal, id: string): Promise<AppJob> {
   const row = await loadApp(db, caller, parseAppId(id));
   if (!row) throw invalid("APP_NOT_FOUND", "App not found.", 404);
@@ -477,7 +477,7 @@ export async function startBuild(db: D1Database, caller: Principal, id: string):
   try {
     // Shape-only compile: re-validate declarations, resolve pins against the
     // static allowlist, hash content, stage the bundle. No import, no eval,
-    // no package install (ADR 016 section 6).
+    // no package install (ADR 017 section 6).
     const checked = validateAppSource(current.files, current.dependencies);
     const bundle = JSON.stringify({ files: checked.files, dependencies: checked.deps });
     const contentHash = await hash(`wrangnarok.app.v1|${row.id}|${current.revision}|${bundle}`);
@@ -497,7 +497,7 @@ export async function startBuild(db: D1Database, caller: Principal, id: string):
       throw invalid("BUILD_SUPERSEDED", "A newer build superseded this one.", 409);
     }
     // Upstream parity: superseded compiled artifacts are deleted — keep only
-    // the active row. No retained-history rollback UI (ADR 016 section 4).
+    // the active row. No retained-history rollback UI (ADR 017 section 4).
     await db.prepare("DELETE FROM app_deployments WHERE app_id=? AND id<>?").bind(row.id, deploymentId).run();
     await db
       .prepare("UPDATE app_jobs SET status='succeeded', finished_at=? WHERE id=?")
@@ -541,7 +541,7 @@ export async function jobDetail(db: D1Database, caller: Principal, id: string, j
   return job;
 }
 
-/** Parked-old-app slug swap recovery (ADR 016 section 4): exchange the slugs
+/** Parked-old-app slug swap recovery (ADR 017 section 4): exchange the slugs
  * of two apps in the same Organization, fenced on both current slugs. A lost
  * race surfaces SLUG_CONFLICT, never a silent double-claim. */
 export async function swapSlugs(
@@ -597,7 +597,7 @@ export async function deleteApp(db: D1Database, caller: Principal, id: string): 
   await db.prepare("DELETE FROM apps WHERE id=?").bind(row.id).run();
 }
 
-/** Serve one asset file from the ACTIVE deployment only (ADR 016 section 5).
+/** Serve one asset file from the ACTIVE deployment only (ADR 017 section 5).
  * Same Organization caller; foreign rows answer 404. Serves stored bundle
  * data, never platform code. */
 export async function serveAsset(

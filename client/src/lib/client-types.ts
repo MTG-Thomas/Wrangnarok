@@ -66,10 +66,10 @@ export interface ExecutionDetail extends ExecutionSummary {
   operations: OperationSummary[];
 }
 
-/** Application status values served by the Wrangnarök Worker (ADR 016). */
+/** Application status values served by the Wrangnarök Worker (ADR 017). */
 export type AppStatus = "created" | "ready" | "building" | "live" | "failed";
 
-/** Ownership marker (ADR 016 section 1): independent rows live through the
+/** Ownership marker (ADR 017 section 1): independent rows live through the
  * app API; solution-owned rows reject live mutation with MANAGED_RESOURCE. */
 export type AppOwnerKind = "independent" | "solution";
 
@@ -114,7 +114,7 @@ export interface AppRevision {
   createdAt: string;
 }
 
-/** Deploy job receipt (ADR 016 section 2): the async job the author inspects. */
+/** Deploy job receipt (ADR 017 section 2): the async job the author inspects. */
 export interface AppJob {
   id: string;
   revision: number;

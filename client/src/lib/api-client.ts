@@ -207,7 +207,7 @@ async function putJson(path: string, body: unknown): Promise<unknown> {
   return (await response.json()) as unknown;
 }
 
-/** GET /api/apps — Applications for this Organization (ADR 016). */
+/** GET /api/apps — Applications for this Organization (ADR 017). */
 export async function listApps(): Promise<AppsResponse> {
   const data = await get("/api/apps");
   if (typeof data !== "object" || data === null || !Array.isArray((data as { apps?: unknown }).apps)) {

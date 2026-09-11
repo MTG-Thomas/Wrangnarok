@@ -218,7 +218,7 @@ Related Wrangnarok issues: #57, #119
 
 Phase 5; **Partial**; existing issue: new
 
-Local status: Git-owned TS plus Wrangler local development works. It is not upstream local-source preview with authenticated environment resources, sync/watch or hosted Git/package management.
+Local status: No-registration local preview (`POST /api/dev/preview`, ADR 016) plus explicit sync/Git/lock/deploy validation (`src/dev.ts`) and the Python-dependency compatibility inventory (`docs/dev-compatibility.md`). Preview is read-only by construction (no D1 writes, no dispatch; opt-in same-org Connection-presence check only). Hosted Git/package management stays out of scope.
 
 Depends: DEV-01, SOL-01
 
@@ -718,7 +718,7 @@ Upstream evidence (paths relative to upstream repo root):
 
 Phase 4+5; **Partial**; existing issue: #159
 
-Local status: ADR 016 accepts the lifecycle/ownership/recovery/build-security contract. Independent apps ship end to end on Worker + D1: create, edit source declarations, validate (422 + field failures), build through a validate-gated async deploy job, inspect jobs, slug-swap recovery, delete, and authorized active-deployment asset serving (same-Organization, no-store + ETag). Solution-owned rows reject live mutation with MANAGED_RESOURCE; legacy V1 draft/publish is documented, never implemented; no retained-history rollback UI (redeploy or parked-app swap only); failed builds preserve the prior active deployment. Validation and the v1 build are shape-only: no author code is executed and no packages are installed (follow-up ADR with venue/isolation/cost gate required before any execution). The Applications UI (/apps, /apps/:id) drives the same routes. Remaining: Solution-owned app reconciliation through bundle install (SOL-02), the browser App SDK runtime (APP-02), multi-route apps, custom domains, and build logs beyond the safe job error.
+Local status: ADR 017 accepts the lifecycle/ownership/recovery/build-security contract. Independent apps ship end to end on Worker + D1: create, edit source declarations, validate (422 + field failures), build through a validate-gated async deploy job, inspect jobs, slug-swap recovery, delete, and authorized active-deployment asset serving (same-Organization, no-store + ETag). Solution-owned rows reject live mutation with MANAGED_RESOURCE; legacy V1 draft/publish is documented, never implemented; no retained-history rollback UI (redeploy or parked-app swap only); failed builds preserve the prior active deployment. Validation and the v1 build are shape-only: no author code is executed and no packages are installed (follow-up ADR with venue/isolation/cost gate required before any execution). The Applications UI (/apps, /apps/:id) drives the same routes. Remaining: Solution-owned app reconciliation through bundle install (SOL-02), the browser App SDK runtime (APP-02), multi-route apps, custom domains, and build logs beyond the safe job error.
 
 Depends: AUTH-02, DEV-02, SOL-01
 

@@ -17,7 +17,25 @@ import {
   swapSlugs,
   validateApp,
 } from "./apps";
-import { boundedJson, canTransition, Fault, parseHistoryQuery, parseKey, parseSubmission } from "./domain";
+import { previewEnvironment, previewLocal } from "./dev";
+import {
+  boundedJson,
+  canTransition,
+  digestSaga,
+  echoSaga,
+  Fault,
+  helloSaga,
+  ninjaSaga,
+  parseDigestInput,
+  parseHelloInput,
+  parseHistoryQuery,
+  parseInput,
+  parseKey,
+  parseNinjaOrgsInput,
+  parseSmokeInput,
+  parseSubmission,
+  smokeSaga,
+} from "./domain";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import { SAGA_CATALOG } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
@@ -141,6 +159,55 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
       return json({ form: name, ...accepted }, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
     }
+    if (url.pathname === "/api/dev/preview" && request.method === "POST") {
+      // DEV-02 no-registration local preview (ADR 017): read-only by
+      // construction. Runs the authoritative server parse against the static
+      // Git-owned Catalog with no D1 writes and no Workflow dispatch. The
+      // environment section is off by default; opting in only SELECTs
+      // Connection presence for the caller's own Organization (never
+      // foreign rows, never secret values). Production resources are never
+      // touched: this route performs no writes and no vendor calls.
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      const body: unknown = await boundedJson(request.body);
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(400, "INVALID_SUBMISSION", "Preview needs a stable Saga UUID and its input only.");
+      }
+      const record = body as Record<string, unknown>;
+      if (Object.keys(record).some((key) => !["sagaId", "input", "checkEnvironment"].includes(key))) {
+        throw new Fault(400, "INVALID_SUBMISSION", "Preview needs a stable Saga UUID and its input only.");
+      }
+      const parsers = new Map<string, (value: unknown) => unknown>([
+        [echoSaga.id, parseInput],
+        [ninjaSaga.id, parseNinjaOrgsInput],
+        [digestSaga.id, parseDigestInput],
+        [smokeSaga.id, parseSmokeInput],
+        [helloSaga.id, parseHelloInput],
+      ]);
+      const { meta, parsed, requiredIntegrations } = previewLocal(SAGA_CATALOG, parsers, record.sagaId, record.input);
+      const withEnv = record.checkEnvironment === true;
+      if (
+        record.checkEnvironment !== undefined &&
+        record.checkEnvironment !== true &&
+        record.checkEnvironment !== false
+      ) {
+        throw new Fault(400, "INVALID_SUBMISSION", "checkEnvironment must be true or omitted/false.");
+      }
+      const environment = withEnv ? await previewEnvironment(env.DB, caller.orgId, requiredIntegrations) : [];
+      return json({
+        preview: {
+          saga: meta,
+          input: parsed,
+          environmentChecked: withEnv,
+          environment,
+          persisted: false,
+          dispatched: false,
+        },
+      });
+    }
     if (url.pathname === "/api/executions" && request.method === "GET") {
       // ExecutionHistory querying (Phase 2): status/sagaId filters plus
       // cursor pagination over org-scoped summaries. The parser rejects
@@ -221,7 +288,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         })),
       });
     }
-    // Authored Applications (APP-01, ADR 016): independent-app lifecycle
+    // Authored Applications (APP-01, ADR 017): independent-app lifecycle
     // (create/edit/validate/build/inspect/swap/delete) plus authorized
     // active-deployment asset serving. Solution-owned rows reject live
     // mutation with MANAGED_RESOURCE; foreign-Organization rows 404. One

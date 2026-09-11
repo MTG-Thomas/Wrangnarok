@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-// Applications pages (APP-01, issue #159; ADR 016). Layout borrowed (not
+// Applications pages (APP-01, issue #159; ADR 017). Layout borrowed (not
 // verbatim) from client/src/pages/ExecutionHistory.tsx (token form,
 // loading/error/empty states, truncated-mono ID + tooltip table pattern).
 //
