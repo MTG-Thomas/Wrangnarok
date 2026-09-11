@@ -11,39 +11,33 @@ import { join } from "node:path";
 // 2026-09-10: the bundle is ~62 KiB; 100 KiB leaves room for real features
 // while catching an accidental heavy dependency. Raise deliberately (with
 // the reason recorded), never to make a red run green.
-// 2026-09-11 (APP-01 + SEC-01 merge, issue #159): 120 KiB. The authored-apps
-// surface (12 routes plus the apps domain: lifecycle, fenced activation,
-// slug swap, authorized asset serving) plus the merged SEC-01 secret-scrub
-// module (src/secrets.ts with scrub call sites, no new dependencies) measure
-// ~114 KiB combined. Same deliberate feature headroom as the 110 KiB raise,
-// not dependency bloat: package.json is unchanged versus main.
 // 2026-09-11 (AUTH-01, issue #142): 145 KiB. The Organization and user
 // lifecycle surface (src/orgs.ts: membership gate on every /api/* request,
 // 9 admin routes plus the org history list, cascading-delete preview, LAB
 // fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
 // shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
 // 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
-// 2026-09-11 (TABLE-02 query/count/batch slice, issue #154): 180 KiB. The
-// author-Tables surface (16 routes plus the tables domain: declarations,
-// per-action grants, bounded keyset queries, scoped counts, all-or-denied
-// batches) plus the SDK contract entries stacks on the AUTH-01 surface with
-// the same deliberate feature headroom, not dependency bloat: package.json
-// is unchanged versus main. Combined measures ~174 KiB.
 // 2026-09-11 (TRG-02, issue #138): 210 KiB. The endpoint/webhook Trigger
 // surface (src/endpoints.ts: key/HMAC verification, rate limits, challenge,
 // delivery protocol, operator management; 3 public plus 6 management routes
 // in src/index.ts) stacks on the TABLE-02 surface with the same deliberate
 // feature headroom, not dependency bloat: package.json is unchanged versus
 // main. Combined measures ~203 KiB.
-// 2026-09-11 (APP-02, issue #160): 250 KiB. The app-runtime surface (20
+// 2026-09-11 (CON-01, issue #146): 230 KiB. The Connection management surface
+// (7 routes: integrations discovery, connections CRUD, read-only test; plus
+// src/connections.ts, config-schema validation, SDK descriptor entries)
+// stacks on the TRG-02 surface above and measures ~226 KiB combined with the
+// same deliberate feature headroom, not dependency bloat: package.json is
+// unchanged versus main.
+// 2026-09-11 (APP-02, issue #160): 270 KiB. The app-runtime surface (20
 // routes plus the app-runtime domain: grants, visible Tables with bounded
 // reads, versioned files with single-use tokens, scoped invoke, handshake)
 // adds ~42 KiB of hand-written feature code with no new dependencies —
 // measured 158740 bytes pre-merge after a shrink pass (shared rejectQuery
-// guard, compacted SDK descriptor), stacked here on the TRG-02 surface.
+// guard, compacted SDK descriptor), stacked here on the CON-01 surface.
 // Same deliberate feature headroom as the earlier raises, not dependency
 // bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 250 * 1024;
+const BUDGET_BYTES = 270 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
