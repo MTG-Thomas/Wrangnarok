@@ -10,7 +10,13 @@ import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
-import { testConnection } from "../src/connections";
+import {
+  createConnection,
+  deleteConnection,
+  getConnection,
+  testConnection,
+  updateConnection,
+} from "../src/connections";
 import { ECHO_INTEGRATION_ID, NINJA_INTEGRATION_ID } from "../src/domain";
 import { buildOrgCtx } from "../src/saga";
 import { resolveConnection } from "../src/executions";
@@ -537,5 +543,35 @@ describe("Connection management branches (CON-01 coverage)", () => {
     });
     expect(bad.status).toBe(502);
     expect(await bad.json()).toMatchObject({ test: { ok: false, code: "SECRET_NOT_CONFIGURED" } });
+  });
+
+  it("rejects malformed ids through the direct module boundary", async () => {
+    // The UUID-shaped route matcher keeps these arms off the HTTP path;
+    // direct calls pin the same 404 contract without touching D1.
+    const caller = { orgId: ORG, userId: USER };
+    await expect(getConnection(bindings.DB, caller, "not-a-uuid")).rejects.toMatchObject({
+      code: "UNKNOWN_INTEGRATION",
+    });
+    await expect(createConnection(bindings.DB, caller, "not-a-uuid", { config: {} })).rejects.toMatchObject({
+      code: "UNKNOWN_INTEGRATION",
+    });
+    await expect(updateConnection(bindings.DB, caller, "not-a-uuid", {})).rejects.toMatchObject({
+      code: "UNKNOWN_INTEGRATION",
+    });
+    await expect(deleteConnection(bindings.DB, caller, "not-a-uuid")).rejects.toMatchObject({
+      code: "UNKNOWN_INTEGRATION",
+    });
+  });
+
+  it("probes ninja without a client id binding", async () => {
+    await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
+      .bind("00000000-0000-4000-8000-000000000114", ORG, NINJA_INTEGRATION_ID, "https://probe.ninja.invalid/api")
+      .run();
+    // NINJA_CLIENT_ID unset: the probe still runs with an empty handle and
+    // the token host answers, proving the id is a handle, never a secret.
+    const tested = await testConnection(bindings.DB, { orgId: ORG, userId: USER }, NINJA_INTEGRATION_ID, {
+      NINJA_CLIENT_SECRET: "test-client-secret-sentinel",
+    });
+    expect(tested).toMatchObject({ ok: true });
   });
 });
