@@ -3,6 +3,7 @@ import {
   boundedJson,
   canTransition,
   canTransitionOperation,
+  classifyTerminateError,
   decodeHistoryCursor,
   digestSaga,
   echoSaga,
@@ -100,6 +101,20 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Cancelling", "Cancelling")).toBe(false);
     expect(canTransition("Cancelling", "TimedOut")).toBe(false);
     expect(canTransition("Cancelling", "Running")).toBe(false);
+  });
+  it("classifies native terminate outcomes and fails closed to ambiguous", () => {
+    // Exact native codes mapped from the local REST layer (RUN-04, issue
+    // #151): an already-settled engine (finite state) confirms logical
+    // cancel; a missing instance is reported separately; everything else
+    // (transient/control-plane, unknown codes, non-Errors) is ambiguous.
+    expect(classifyTerminateError(new Error("WorkflowError: (instance.cannot_terminate) Cannot terminate instance since its on a finite state"))).toBe("already-settled");
+    expect(classifyTerminateError(new Error("instance.not_found"))).toBe("not-found");
+    expect(classifyTerminateError(new Error("WorkflowError: something new broke"))).toBe("ambiguous");
+    expect(classifyTerminateError(new Error("boom"))).toBe("ambiguous");
+    expect(classifyTerminateError("instance.cannot_terminate")).toBe("already-settled");
+    expect(classifyTerminateError(undefined)).toBe("ambiguous");
+    expect(classifyTerminateError(null)).toBe("ambiguous");
+    expect(classifyTerminateError(42)).toBe("ambiguous");
   });
   it("restricts operation transitions to Running plus terminal states", () => {
     expect(canTransitionOperation("Running", "Succeeded")).toBe(true);
