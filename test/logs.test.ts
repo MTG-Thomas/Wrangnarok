@@ -21,10 +21,13 @@ import {
   parseLogTailQuery,
 } from "../src/logs";
 import { createSdkClient, parseLogPage } from "../src/sdk";
+import { ensureLabFixture } from "../src/orgs";
 import { clearAllExecutionSecrets, registerExecutionSecrets } from "../src/secrets";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
-import migration7 from "../migrations/0007_execution_logs.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
+import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
+import migration9 from "../migrations/0009_execution_logs.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -78,6 +81,11 @@ beforeEach(async () => {
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(seed);
   await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration8);
+  await bindings.DB.exec(migration9);
+  // AUTH-01 membership gate: the LAB fixture caller needs an active
+  // membership row or every /api/* request fails closed.
+  await ensureLabFixture(bindings.DB, principal.orgId, principal.userId);
   clearAllExecutionSecrets();
   vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
     throw new Error("OBS-02 must not fetch");
