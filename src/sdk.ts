@@ -85,6 +85,14 @@ export const SDK_ERROR_CODES = [
   "BUILD_FAILED",
   "SLUG_CONFLICT",
   "MANAGED_RESOURCE",
+  "UNKNOWN_INTEGRATION",
+  "CONNECTION_NOT_FOUND",
+  "CONNECTION_EXISTS",
+  "CONNECTION_DISABLED",
+  "CONNECTION_SCHEMA_INVALID",
+  "INVALID_CONNECTION",
+  "SECRET_NOT_CONFIGURED",
+  "CONNECTION_TEST_FAILED",
   "INVALID_SWAP",
   "INVALID_TABLE",
   "TABLE_CONFLICT",
@@ -987,7 +995,6 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/apps/:id/assets/*",
         description: "Serve one active-deployment file.",
       },
-
       {
         method: "GET",
         path: "/api/file-locations",
@@ -1057,6 +1064,33 @@ export function describeContract(): SdkContractDescriptor {
         method: "POST",
         path: "/api/file-policies/test",
         description: "Evaluate a hypothetical access triple, issuing nothing.",
+      },
+      {
+        method: "GET",
+        path: "/api/integrations",
+        description: "Portable Integration definitions with schema, defaults, and health (CON-01; no org state).",
+      },
+      { method: "GET", path: "/api/connections", description: "This Organization's Connection mappings (CON-01)." },
+      { method: "POST", path: "/api/connections", description: "Create a loose Connection mapping (CON-01)." },
+      {
+        method: "GET",
+        path: "/api/connections/:integrationId",
+        description: "Read one Connection mapping for this Organization (CON-01).",
+      },
+      {
+        method: "PUT",
+        path: "/api/connections/:integrationId",
+        description: "Update a loose Connection mapping; managed rows reject MANAGED_RESOURCE (CON-01).",
+      },
+      {
+        method: "DELETE",
+        path: "/api/connections/:integrationId",
+        description: "Delete a loose Connection mapping (CON-01).",
+      },
+      {
+        method: "POST",
+        path: "/api/connections/:integrationId/test",
+        description: "Read-only connectivity test: no writes, no dispatch (CON-01).",
       },
       { method: "GET", path: "/api/tables", description: "Tables visible to this caller in this Organization." },
       { method: "POST", path: "/api/tables", description: "Create a Table declaration (owner: the creator)." },
@@ -1165,6 +1199,12 @@ export function describeContract(): SdkContractDescriptor {
         status: "supported",
         detail:
           "No-registration local preview (POST /api/dev/preview): authoritative parse, no D1 writes, no dispatch; opt-in read-only environment check. Sync/Git/lock/deploy guidance lives in docs/dev-preview.md (DEV-02).",
+      },
+      {
+        name: "connection-management",
+        status: "supported",
+        detail:
+          "Non-secret Connection mappings: list, create, read, update, delete, and read-only test through the authorized Worker API (CON-01). Managed rows reject live mutation with MANAGED_RESOURCE.",
       },
       {
         name: "author-tables",
