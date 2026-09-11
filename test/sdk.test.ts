@@ -234,7 +234,9 @@ describe("SDK automation client: local happy/denied/error examples", () => {
     expect(diagnosis.hint).toBeNull();
     const page = await client.listHistory({});
     expect(parseHistoryPage(JSON.parse(JSON.stringify(page))).executions.length).toBeGreaterThan(0);
-  });
+    // NOTE: live-workflow polling under parallel workers can exceed the 5s
+    // default; the 30s budget only absorbs contention, it weakens no assertion.
+  }, 30000);
 
   it("keeps the same caller policy as the UI: denied callers get 401/404, never data", async () => {
     const key = "sdk-client-denied-001";

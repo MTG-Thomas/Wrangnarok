@@ -27,6 +27,7 @@ import migration4 from "../migrations/0004_solutions_install.sql?raw";
 import migration5 from "../migrations/0005_forms.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
 import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
+import migration9 from "../migrations/0009_resource_roles.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -107,6 +108,7 @@ beforeEach(async () => {
   await bindings.DB.exec(migration5);
   await bindings.DB.exec(migration7);
   await bindings.DB.exec(migration8);
+  await bindings.DB.exec(migration9);
   // Fixture caller bootstraps to admin of org A inside authenticate; the
   // ordinary identity holds org-A membership too (member), so collection
   // routes gate cleanly. External/stranger stay strangers until invited.
@@ -160,6 +162,22 @@ it("runs the multi-org allowed/denied matrix for ordinary/admin/external users",
   expect(await call("/api/orgs", "GET", USER_STRANGER)).toMatchObject({ status: 200, body: { orgs: [] } });
   // Ordinary member reads catalog and submits in their own org…
   expect(await call("/api/sagas", "GET", USER_ORDINARY, undefined, orgB)).toMatchObject({ status: 200 });
+  // AUTH-02 (ADR 018): deny by absence — the ordinary submit needs a grant.
+  // The admin creates a wildcard execute role first (role control plane).
+  const matrixRole = await call(`/api/orgs/${orgB}/roles`, "POST", USER_ADMIN, { name: "matrix-runners" });
+  expect(matrixRole.status).toBe(201);
+  expect(
+    await call(`/api/orgs/${orgB}/roles/${matrixRole.body.id as string}/grants`, "POST", USER_ADMIN, {
+      resourceKind: "saga",
+      resourceId: "*",
+      action: "execute",
+    }),
+  ).toMatchObject({ status: 201 });
+  expect(
+    await call(`/api/orgs/${orgB}/roles/${matrixRole.body.id as string}/assignments`, "POST", USER_ADMIN, {
+      userId: USER_ORDINARY,
+    }),
+  ).toMatchObject({ status: 201 });
   const submit = await worker.fetch(
     new Request("http://local.test/api/executions", {
       method: "POST",
@@ -358,6 +376,21 @@ it("previews cascading deletes with retained ExecutionHistory and refuses manage
 
 it("keeps in-flight jobs visible to org admins after a member is revoked", async () => {
   const orgB = await seedSecondOrg();
+  // AUTH-02 (ADR 018): the ordinary submit needs an execute grant first.
+  const inflightRole = await call(`/api/orgs/${orgB}/roles`, "POST", USER_ADMIN, { name: "inflight-runners" });
+  expect(inflightRole.status).toBe(201);
+  expect(
+    await call(`/api/orgs/${orgB}/roles/${inflightRole.body.id as string}/grants`, "POST", USER_ADMIN, {
+      resourceKind: "saga",
+      resourceId: "*",
+      action: "execute",
+    }),
+  ).toMatchObject({ status: 201 });
+  expect(
+    await call(`/api/orgs/${orgB}/roles/${inflightRole.body.id as string}/assignments`, "POST", USER_ADMIN, {
+      userId: USER_ORDINARY,
+    }),
+  ).toMatchObject({ status: 201 });
   const submit = await worker.fetch(
     new Request("http://local.test/api/executions", {
       method: "POST",
@@ -788,4 +821,7 @@ it("pins admin validation, error, and filter branches", async () => {
     ORG_A,
   );
   expect(disabledAdmin).toMatchObject({ isInstanceAdmin: true });
-});
+  // NOTE: this test makes ~60 sequential workerd requests and runs ~4.5s
+  // even solo with coverage; the 30s budget only absorbs parallel-worker
+  // contention, it weakens no assertion.
+}, 30000);
