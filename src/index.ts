@@ -3,6 +3,7 @@ import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
 import { boundedJson, canTransition, Fault, parseHistoryQuery, parseKey, parseSubmission } from "./domain";
 import { SAGA_CATALOG } from "./sagas";
+import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import { logRequest } from "./usage";
 export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
@@ -53,6 +54,11 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // Static Git-owned Catalog (ADR 002): discovery metadata only.
       // D1 Execution rows mirror saga_id/name/revision but never drive behavior.
       return json({ sagas: SAGA_CATALOG });
+    if (url.pathname === SDK_DOC_PATH && request.method === "GET")
+      // DEV-01 versioned SDK contract (issue #140): machine-readable
+      // descriptor of the public author/automation surface. Authenticated
+      // like every other /api/* route; drift is pinned by test/sdk.test.ts.
+      return json(describeContract());
     if (url.pathname === "/api/executions" && request.method === "POST") {
       const key = parseKey(request.headers.get("Idempotency-Key"));
       if (
