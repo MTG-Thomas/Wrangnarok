@@ -823,7 +823,6 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       if (!table) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
       await deleteTable(env.DB, caller, table);
       return json({ deleted: true });
-
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
     // /api/* path reports UNIMPLEMENTED (never a generic NOT_FOUND).
