@@ -1,0 +1,127 @@
+
+> wrangnarok@0.0.0 test:coverage
+> vitest run --coverage ; echo EXIT:$?
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90mC:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01[39m
+      [2mCoverage enabled with [22m[33mistanbul[39m
+
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:102:1[22m[2m[2m > [22m[2mruns the NinjaOne census through the echo Integration end to end
+[22m[39mWRANGNAROK_REQUEST {"method":"POST","route":"POST /api/executions","status":202,"durationMs":37}
+
+[90mstdout[2m | test/echo-secretfields.test.ts[2m:90:1[22m[2m[2m > [22m[2mcarries no secret-like material through echo API surfaces
+[22m[39mWRANGNAROK_REQUEST {"method":"POST","route":"POST /api/executions","status":202,"durationMs":35}
+
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:102:1[22m[2m[2m > [22m[2mruns the NinjaOne census through the echo Integration end to end
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/executions/09c44396830b5f3eccdff30b0d8f48911063e6518dec4438c68a1f945af8d34d","status":200,"durationMs":12}
+
+[90mstdout[2m | test/echo-secretfields.test.ts[2m:90:1[22m[2m[2m > [22m[2mcarries no secret-like material through echo API surfaces
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/executions/5b09b0f198666da0194fdd9257683e0d88818b29cc97afc8d603e9474e2f0977","status":200,"durationMs":11}
+
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:145:1[22m[2m[2m > [22m[2mfails loud on NinjaOne auth without ever calling echo
+[22m[39mWRANGNAROK_REQUEST {"method":"POST","route":"POST /api/executions","status":202,"durationMs":23}
+
+[90mstdout[2m | test/echo-secretfields.test.ts[2m:90:1[22m[2m[2m > [22m[2mcarries no secret-like material through echo API surfaces
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/sagas","status":200,"durationMs":1}
+
+[90mstdout[2m | test/echo-secretfields.test.ts[2m:90:1[22m[2m[2m > [22m[2mcarries no secret-like material through echo API surfaces
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/executions","status":200,"durationMs":3}
+
+[90mstdout[2m | test/echo-secretfields.test.ts[2m:90:1[22m[2m[2m > [22m[2mcarries no secret-like material through echo API surfaces
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/executions/5b09b0f198666da0194fdd9257683e0d88818b29cc97afc8d603e9474e2f0977","status":200,"durationMs":8}
+
+uncaught exception; source = Uncaught (in promise); stack = NonRetryableError: NINJA_UNAUTHORIZED
+    at Object.run (C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/src/sagas/digest.ts:175:13)
+    at executeSaga (C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/src/sagas/shared.ts:38:20)
+uncaught exception; exception = workerd/api/actor-state.c++:1197: failed: broken.outputGateBroken; jsg.Error: Aborting engine: A step threw a NonRetryableError
+stack: 7ff6c4549690
+uncaught exception; exception = workerd/api/actor-state.c++:1197: failed: broken.outputGateBroken; jsg.Error: Aborting engine: A step threw a NonRetryableError
+stack: 7ff6c4549690
+ [32m✓[39m test/echo-secretfields.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1279[2mms[22m[39m
+   [33m[2m✓[22m[39m carries no secret-like material through echo API surfaces [33m 1189[2mms[22m[39m
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:145:1[22m[2m[2m > [22m[2mfails loud on NinjaOne auth without ever calling echo
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/executions/09c44396830b5f3eccdff30b0d8f48911063e6518dec4438c68a1f945af8d34d","status":200,"durationMs":13}
+
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:160:1[22m[2m[2m > [22m[2mnever auto-retries a failing echo of the digest
+[22m[39mWRANGNAROK_REQUEST {"method":"POST","route":"POST /api/executions","status":202,"durationMs":24}
+
+uncaught exception; source = Uncaught (in promise); stack = NonRetryableError: ECHO_INTEGRATION_FAILED
+    at Object.run (C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/src/sagas/digest.ts:175:13)
+    at executeSaga (C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/src/sagas/shared.ts:38:20)
+uncaught exception; exception = workerd/api/actor-state.c++:1197: failed: broken.outputGateBroken; jsg.Error: Aborting engine: A step threw a NonRetryableError
+stack: 7ff6c4549690
+uncaught exception; exception = workerd/api/actor-state.c++:1197: failed: broken.outputGateBroken; jsg.Error: Aborting engine: A step threw a NonRetryableError
+stack: 7ff6c4549690
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:160:1[22m[2m[2m > [22m[2mnever auto-retries a failing echo of the digest
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/executions/09c44396830b5f3eccdff30b0d8f48911063e6518dec4438c68a1f945af8d34d","status":200,"durationMs":13}
+
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:178:1[22m[2m[2m > [22m[2msurfaces a slow NinjaOne vendor as TimedOut through the explicit timeout step
+[22m[39mWRANGNAROK_REQUEST {"method":"POST","route":"POST /api/executions","status":202,"durationMs":22}
+
+uncaught exception; source = Uncaught (in promise); stack = NonRetryableError: NINJA_VENDOR_TIMEOUT
+    at Object.run (C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/src/sagas/digest.ts:175:13)
+    at executeSaga (C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/src/sagas/shared.ts:38:20)
+uncaught exception; exception = workerd/api/actor-state.c++:1197: failed: broken.outputGateBroken; jsg.Error: Aborting engine: A step threw a NonRetryableError
+stack: 7ff6c4549690
+uncaught exception; exception = workerd/api/actor-state.c++:1197: failed: broken.outputGateBroken; jsg.Error: Aborting engine: A step threw a NonRetryableError
+stack: 7ff6c4549690
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:178:1[22m[2m[2m > [22m[2msurfaces a slow NinjaOne vendor as TimedOut through the explicit timeout step
+[22m[39mWRANGNAROK_REQUEST {"method":"GET","route":"GET /api/executions/09c44396830b5f3eccdff30b0d8f48911063e6518dec4438c68a1f945af8d34d","status":200,"durationMs":12}
+
+uncaught exception; source = Uncaught (in promise); stack = Error: Engine was never started
+    at Engine.getStatus (file:///C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/node_modules/miniflare/dist/src/workers/workflows/binding.worker.js:14493:15)
+uncaught exception; source = Uncaught (in promise); stack = Error: Engine was never started
+    at Engine.getStatus (file:///C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/node_modules/miniflare/dist/src/workers/workflows/binding.worker.js:14493:15)
+uncaught exception; source = Uncaught (in promise); stack = Error: instance.not_found
+    at WorkflowBinding.get (file:///C:/Users/ThomasBray/AppData/Local/Temp/opencode/parity-con-01/node_modules/miniflare/dist/src/workers/workflows/binding.worker.js:15150:13)
+uncaught exception; exception = workerd/io/io-context.c++:1642: failed: jsg.Error: The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response. Refer to: https://developers.cloudflare.com/workers/observability/errors/
+stack: 7ff6c4549690
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:199:1[22m[2m[2m > [22m[2mcancels a Pending digest execution on its own Workflow binding
+[22m[39mWRANGNAROK_REQUEST {"method":"POST","route":"POST /api/executions/09c44396830b5f3eccdff30b0d8f48911063e6518dec4438c68a1f945af8d34d/cancel","status":200,"durationMs":25}
+
+[90mstdout[2m | test/ninja-echo-digest.test.ts[2m:199:1[22m[2m[2m > [22m[2mcancels a Pending digest execution on its own Workflow binding
+[22m[39mWRANGNAROK_REQUEST {"method":"POST","route":"POST /api/executions","status":409,"durationMs":4}
+
+ [32m✓[39m test/ninja-echo-digest.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 7762[2mms[22m[39m
+   [33m[2m✓[22m[39m runs the NinjaOne census through the echo Integration end to end [33m 1221[2mms[22m[39m
+   [33m[2m✓[22m[39m surfaces a slow NinjaOne vendor as TimedOut through the explicit timeout step [33m 6146[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m8 passed[39m[22m[90m (8)[39m
+[2m   Start at [22m 16:35:37
+[2m   Duration [22m 15.01s[2m (transform 3.96s, setup 0ms, import 4.55s, tests 9.04s, environment 0ms)[22m
+
+[34m % [39m[2mCoverage report from [22m[33mistanbul[39m
+------------------|---------|----------|---------|---------|--------------------
+File              | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s  
+------------------|---------|----------|---------|---------|--------------------
+All files         |   25.47 |    18.97 |   28.85 |   27.21 |                    
+ src              |   20.33 |    13.72 |    25.4 |   22.07 |                    
+  access.ts       |    1.42 |        0 |       0 |    1.75 | 25-117             
+  apps.ts         |    3.86 |        0 |       0 |    4.36 | 100-637            
+  auth.ts         |   72.22 |    66.66 |     100 |   91.66 | 26                 
+  connections.ts  |     0.8 |        0 |       0 |    0.94 | 35-36,56-378       
+  dev.ts          |    5.51 |        0 |       0 |    6.14 | ...386-395,421-444 
+  domain.ts       |   62.04 |    35.38 |   70.37 |   63.63 | ...473,478-481,499 
+  executions.ts   |   69.14 |    61.29 |    92.3 |   74.41 | ...348-349,352-353 
+  forms.ts        |    8.21 |        0 |       0 |    9.09 | 54-164             
+  index.ts        |   32.12 |    26.22 |    62.5 |   34.63 | ...289-292,347-470 
+  migration.ts    |       0 |        0 |       0 |       0 | 58-383             
+  saga.ts         |   30.31 |    34.64 |   56.52 |   32.35 | ...449-506,530-538 
+  sdk.ts          |     3.2 |        0 |       0 |    3.75 | ...91-565,612-1031 
+  secrets.ts      |   82.25 |    66.66 |      80 |   94.11 | 117-122,152        
+  solutions.ts    |       0 |        0 |       0 |       0 | 37-474             
+  usage.ts        |   28.57 |        0 |      25 |   28.57 | 45-62,84-92        
+ src/integrations |    53.3 |    58.42 |   57.89 |   53.03 |                    
+  echo.ts         |      72 |     61.9 |     100 |   80.95 | 21,34-35,52        
+  index.ts        |   40.19 |     57.4 |   36.36 |   41.41 | ...172,187,258-341 
+  ninjaone.ts     |   63.52 |    59.01 |   83.33 |   60.25 | ...169,179,189-190 
+ src/sagas        |   41.32 |    29.56 |   36.84 |   42.92 |                    
+  digest.ts       |   87.87 |    65.62 |   88.88 |    91.8 | 54,76,123,148-149  
+  echo.ts         |   59.09 |       35 |   71.42 |   63.41 | ...5,81-91,108-116 
+  hello.ts        |       4 |        0 |       0 |    4.16 | 41-90              
+  index.ts        |     100 |      100 |     100 |     100 |                    
+  ninjaorgs.ts    |    2.38 |        0 |       0 |    2.56 | 40-129             
+  shared.ts       |   73.33 |       60 |     100 |   76.92 | 24,47-48           
+  smoke.ts        |    2.08 |        0 |       0 |    2.17 | 46-160             
+------------------|---------|----------|---------|---------|--------------------

@@ -17,7 +17,12 @@ import { join } from "node:path";
 // module (src/secrets.ts with scrub call sites, no new dependencies) measure
 // ~114 KiB combined. Same deliberate feature headroom as the 110 KiB raise,
 // not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 120 * 1024;
+// 2026-09-11 (CON-01, issue #146): 150 KiB. The Connection management surface
+// (7 routes: integrations discovery, connections CRUD, read-only test; plus
+// src/connections.ts, config-schema validation, SDK descriptor entries)
+// measures ~139 KiB. Same deliberate feature headroom, not dependency bloat:
+// package.json is unchanged versus main.
+const BUDGET_BYTES = 150 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
