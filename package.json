@@ -27,7 +27,11 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "mailbox": "node scripts/mailbox-cli.mjs",
-    "mailbox:selftest": "node scripts/mailbox-cli.mjs selftest"
+    "mailbox:selftest": "node scripts/mailbox-cli.mjs selftest",
+    "preview:smoke": "node scripts/smoke-preview.mjs",
+    "preview:smoke:selftest": "node scripts/smoke-preview.mjs selftest",
+    "preview:token": "node scripts/mint-preview-token.mjs",
+    "preview:token:selftest": "node scripts/mint-preview-token.mjs selftest"
   },
   "dependencies": {
     "react": "19.2.8",

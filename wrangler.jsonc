@@ -120,5 +120,58 @@
         },
       ],
     },
+    // PR preview environment (ADR 004): one shared disposable Worker on
+    // workers.dev plus its own disposable D1. Last-wins across PRs at
+    // experiment scale; each run plants an ephemeral LAB_TOKEN and smokes
+    // system.smoke against the preview URL. HUMAN SETUP REQUIRED: create
+    // the database once (`wrangler d1 create wrangnarok-preview`) and paste
+    // its ID below — until then any --env preview command fails closed.
+    "preview": {
+      "name": "wrangnarok-preview",
+      "workers_dev": true,
+      "vars": {
+        "ENVIRONMENT": "preview",
+        "LAB_ENABLED": "true",
+        // Demo principal, same non-secret fixture IDs as local tests.
+        // LAB_TOKEN alone arrives per run via `wrangler secret put`.
+        "LAB_ORG_ID": "00000000-0000-4000-8000-000000000001",
+        "LAB_USER_ID": "00000000-0000-4000-8000-000000000002",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "wrangnarok-preview",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "workflows": [
+        {
+          "binding": "ECHO_WORKFLOW",
+          "name": "wrangnarok-echo-v1-preview",
+          "class_name": "EchoWorkflow",
+        },
+        {
+          "binding": "NINJA_WORKFLOW",
+          "name": "wrangnarok-ninjaone-orgs-v1-preview",
+          "class_name": "NinjaOrgsWorkflow",
+        },
+        {
+          "binding": "DIGEST_WORKFLOW",
+          "name": "wrangnarok-ninjaone-echo-digest-v1-preview",
+          "class_name": "NinjaEchoDigestWorkflow",
+        },
+        {
+          "binding": "SMOKE_WORKFLOW",
+          "name": "wrangnarok-smoke-v1-preview",
+          "class_name": "SmokeWorkflow",
+        },
+        {
+          "binding": "HELLO_WORKFLOW",
+          "name": "wrangnarok-hello-v1-preview",
+          "class_name": "HelloWorkflow",
+        },
+      ],
+    },
   },
 }
