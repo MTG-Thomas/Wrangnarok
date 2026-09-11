@@ -3,7 +3,7 @@ src/files.ts
 src/bindings.ts
 src/index.ts
 src/sdk.ts
-migrations/0007_files.sql
+migrations/0019_files.sql
 test/files.test.ts
 test/files-branches.test.ts
 test/files-ui.test.tsx
