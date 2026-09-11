@@ -12,7 +12,7 @@
 // Organization always comes from the auth context plus X-Organization-Id
 // scope selection (ADR 015); passing --org fails loudly (legacy guard).
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const TERMINAL = ["Succeeded", "Failed", "TimedOut", "Cancelled"];
 const EXECUTION_ID = /^[a-f0-9]{64}$/;
@@ -288,6 +288,56 @@ function printCancel(outcome) {
   else console.log(`${outcome.executionId} ${outcome.status} (already in progress; another request won the race)`);
 }
 
+function printArtifacts(artifacts, hasMore) {
+  if (emit({ artifacts, hasMore })) return;
+  for (const entry of artifacts ?? []) {
+    console.log(`${String(entry.id).slice(0, 8)}\t${entry.name}\tv${entry.version}\t${entry.status}`);
+  }
+  if (hasMore) console.log(`# ${artifacts?.length ?? 0} loaded; more available server-side.`);
+  else console.log(`# ${artifacts?.length ?? 0} loaded (complete under these filters).`);
+}
+
+function printArtifact(artifact) {
+  if (emit({ artifact })) return;
+  console.log(`${artifact.id} ${artifact.name} v${artifact.version} ${artifact.status}`);
+  for (const entry of artifact.versions ?? [])
+    console.log(`  v${entry.version} ${entry.mime} ${entry.sizeBytes} bytes`);
+  for (const entry of artifact.bindings ?? []) console.log(`  bound ${entry.scope}:${entry.refId}`);
+}
+
+function printDownload(result) {
+  if (emit(result)) return;
+  console.log(result.out ? `downloaded ${result.bytes} bytes to ${result.out}` : `downloaded ${result.bytes} bytes`);
+}
+
+function printBinding(binding) {
+  if (emit({ binding })) return;
+  console.log(`bound ${binding.artifactId} ${binding.scope}:${binding.refId}`);
+}
+
+function printUnbound() {
+  if (emit({ deleted: true })) return;
+  console.log("unbound");
+}
+
+function printBindings(bindings) {
+  if (emit({ bindings })) return;
+  for (const entry of bindings ?? []) console.log(`${entry.artifactId} ${entry.scope}:${entry.refId}`);
+  if ((bindings ?? []).length === 0) console.log("(no bindings)");
+}
+
+function printRetention(retention) {
+  if (emit({ retention })) return;
+  console.log(`retention: ${retention.maxAgeDays} days`);
+}
+
+function printCleanup(cleanup) {
+  if (emit({ cleanup })) return;
+  for (const id of cleanup.deleted ?? []) console.log(`deleted ${id}`);
+  for (const entry of cleanup.failed ?? []) console.log(`failed ${entry.id} ${entry.code}`);
+  console.log(`remaining: ${cleanup.remaining ?? 0}`);
+}
+
 const HELP = `wrangnarok: thin CLI over the Worker HTTP API (no Saga logic here).
 
 Usage: node scripts/wrangnarok.mjs [global flags] <command> [args]
@@ -318,6 +368,18 @@ Commands:
                                           Query Execution summaries (server filters,
                                           cursor traversal; loaded counts are not totals)
   cancel --id HEX                         Cancel one Execution (exact ID only)
+  artifacts [--limit N]                   List Artifact summaries (no bytes)
+  artifact --id UUID                      Fetch one Artifact (versions + bindings)
+  upload --name NAME [--mime TYPE] [--file PATH]
+                                          Upload bytes (same name versions the row)
+  download --id UUID [--out PATH]         Fetch current-version bytes
+  rename --id UUID --name NAME            Rename the canonical record
+  bind --id UUID --scope S --ref REF      Bind to an execution/workspace/conversation
+  unbind --id UUID --scope S --ref REF    Remove one attachment binding
+  bindings --scope S --ref REF            List attachment triples (no bytes)
+  retention [--days N]                    Read (or, with --days, set*) the policy
+  cleanup [--run]                         Preview (or, with --run, execute*) cleanup
+                                          * admin only (instance/org admin membership)
   orgs                                    List visible Organizations
   org-create --name NAME                  Create an Organization (instance admin)
   org-disable/--enable --id UUID          Disable/enable an Organization (instance admin)
@@ -599,6 +661,122 @@ export async function runCommand(ctx, deps = {}) {
         "execution cancel",
       );
     }
+    case "artifacts": {
+      const params = new URLSearchParams();
+      if (ctx.limit !== undefined) params.set("limit", String(ctx.limit));
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return readJson(await fetchImpl(`${ctx.base}/api/artifacts${suffix}`, { headers: full.headers }), "artifacts");
+    }
+    case "artifact": {
+      if (!ctx.artifactId || !STABLE_UUID.test(ctx.artifactId)) fail("USAGE", "artifact needs --id UUID.");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/artifacts/${ctx.artifactId}`, { headers: full.headers }),
+        "artifact",
+      );
+    }
+    case "upload": {
+      // Bytes ride the raw body; name/mime ride the allowlisted query keys.
+      if (!ctx.artifactName) fail("USAGE", "upload needs --name NAME.");
+      const params = new URLSearchParams({
+        name: ctx.artifactName,
+        mime: ctx.artifactMime ?? "application/octet-stream",
+      });
+      const bytes = ctx.artifactFile ? readFileSync(ctx.artifactFile) : Buffer.from(ctx.artifactText ?? "", "utf-8");
+      if (bytes.length === 0) fail("USAGE", "upload needs non-empty bytes (--file PATH or --text TEXT).");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/artifacts?${params.toString()}`, {
+          method: "PUT",
+          headers: { ...full.headers, "Content-Type": "application/octet-stream" },
+          body: bytes,
+        }),
+        "artifact upload",
+      );
+    }
+    case "download": {
+      if (!ctx.artifactId || !STABLE_UUID.test(ctx.artifactId)) fail("USAGE", "download needs --id UUID.");
+      const response = await fetchImpl(`${ctx.base}/api/artifacts/${ctx.artifactId}/download`, {
+        headers: full.headers,
+      });
+      if (!response.ok) {
+        const code = (await response.json().catch(() => ({})))?.error?.code ?? "UNKNOWN";
+        fail("SERVER_REJECTED", `artifact download failed: HTTP ${response.status} ${code}.`);
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (ctx.artifactOut) writeFileSync(ctx.artifactOut, buffer);
+      return { bytes: buffer.length, out: ctx.artifactOut ?? null };
+    }
+    case "rename": {
+      if (!ctx.artifactId || !STABLE_UUID.test(ctx.artifactId)) fail("USAGE", "rename needs --id UUID.");
+      if (!ctx.artifactName) fail("USAGE", "rename needs --name NAME.");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/artifacts/${ctx.artifactId}/rename`, {
+          method: "POST",
+          headers: full.headers,
+          body: JSON.stringify({ name: ctx.artifactName }),
+        }),
+        "artifact rename",
+      );
+    }
+    case "bind":
+    case "unbind": {
+      if (!ctx.artifactId || !STABLE_UUID.test(ctx.artifactId)) fail("USAGE", `${ctx.command} needs --id UUID.`);
+      if (!ctx.bindingScope || !ctx.bindingRef) fail("USAGE", `${ctx.command} needs --scope S and --ref REF.`);
+      const body = JSON.stringify({ scope: ctx.bindingScope, refId: ctx.bindingRef });
+      if (ctx.command === "bind") {
+        return readJson(
+          await fetchImpl(`${ctx.base}/api/artifacts/${ctx.artifactId}/bindings`, {
+            method: "POST",
+            headers: full.headers,
+            body,
+          }),
+          "artifact bind",
+        );
+      }
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/artifacts/${ctx.artifactId}/bindings`, {
+          method: "DELETE",
+          headers: full.headers,
+          body,
+        }),
+        "artifact unbind",
+      );
+    }
+    case "bindings": {
+      if (!ctx.bindingScope || !ctx.bindingRef) fail("USAGE", "bindings needs --scope S and --ref REF.");
+      const params = new URLSearchParams({ scope: ctx.bindingScope, refId: ctx.bindingRef });
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/artifacts/bindings?${params.toString()}`, { headers: full.headers }),
+        "artifact bindings",
+      );
+    }
+    case "retention": {
+      if (ctx.retentionDays === undefined) {
+        return readJson(await fetchImpl(`${ctx.base}/api/artifacts/retention`, { headers: full.headers }), "retention");
+      }
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/artifacts/retention`, {
+          method: "PUT",
+          headers: { ...full.headers },
+          body: JSON.stringify({ maxAgeDays: ctx.retentionDays }),
+        }),
+        "retention set",
+      );
+    }
+    case "cleanup": {
+      if (!ctx.cleanupRun) {
+        return readJson(
+          await fetchImpl(`${ctx.base}/api/artifacts/cleanup/preview`, { headers: full.headers }),
+          "cleanup preview",
+        );
+      }
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/artifacts/cleanup/run`, {
+          method: "POST",
+          headers: { ...full.headers },
+        }),
+        "cleanup run",
+      );
+    }
     case "orgs": {
       return readJson(await fetchImpl(`${ctx.base}/api/orgs`, { headers: full.headers }), "org list");
     }
@@ -801,6 +979,23 @@ async function main() {
     to: command === "history" ? arg("to") : undefined,
     all: command === "history" ? flag("all") : false,
     wait: command === "submit" ? !flag("no-wait") : flag("wait"),
+    artifactId:
+      command === "artifact" ||
+      command === "download" ||
+      command === "rename" ||
+      command === "bind" ||
+      command === "unbind"
+        ? arg("id")
+        : undefined,
+    artifactName: command === "upload" || command === "rename" ? arg("name") : undefined,
+    artifactMime: command === "upload" ? arg("mime") : undefined,
+    artifactFile: command === "upload" ? arg("file") : undefined,
+    artifactText: command === "upload" ? arg("text") : undefined,
+    artifactOut: command === "download" ? arg("out") : undefined,
+    bindingScope: command === "bind" || command === "unbind" || command === "bindings" ? arg("scope") : undefined,
+    bindingRef: command === "bind" || command === "unbind" || command === "bindings" ? arg("ref") : undefined,
+    retentionDays: command === "retention" && arg("days") !== undefined ? Number(arg("days")) : undefined,
+    cleanupRun: command === "cleanup" ? flag("run") : false,
     name: command === "org-create" ? arg("name") : undefined,
     user: command === "invite" || command === "member-update" || userCommands.has(command) ? arg("user") : undefined,
     role: command === "invite" || command === "member-update" ? arg("role") : undefined,
@@ -850,6 +1045,16 @@ async function main() {
     return;
   } else if (command === "detail") printDetail(result);
   else if (command === "cancel") printCancel(result);
+  else if (command === "artifacts") printArtifacts(result.artifacts, result.hasMore);
+  else if (command === "artifact") printArtifact(result.artifact);
+  else if (command === "upload") printArtifact(result.artifact);
+  else if (command === "download") printDownload(result);
+  else if (command === "rename") printArtifact(result.artifact);
+  else if (command === "bind") printBinding(result.binding);
+  else if (command === "unbind") printUnbound();
+  else if (command === "bindings") printBindings(result.bindings);
+  else if (command === "retention") printRetention(result.retention);
+  else if (command === "cleanup") printCleanup(result.cleanup);
   else if (parsed.json) console.log(JSON.stringify(result));
   else if (typeof result.status === "string") console.log(`${result.executionId} ${result.status}`);
   else console.log(`${result.executionId} accepted (replayed: ${result.replayed === true})`);
@@ -1118,6 +1323,46 @@ async function selftest() {
     const result = await runCommand({ ...base, command: "contract" }, { fetchImpl: stub.fetch, ...noSleep });
     check("contract version", result.version === "1");
     check("contract url", stub.calls[0].url === "http://local.test/api/sdk");
+  }
+
+  // artifacts list forwards the limit filter only.
+  {
+    const stub = stubFetch([jsonResponse({ artifacts: [], hasMore: false })]);
+    const result = await runCommand({ ...base, command: "artifacts", limit: 5 }, { fetchImpl: stub.fetch, ...noSleep });
+    check("artifacts query", stub.calls[0].url === "http://local.test/api/artifacts?limit=5");
+    check("artifacts empty", result.artifacts.length === 0 && result.hasMore === false);
+  }
+
+  // upload sends octet-stream bytes with name/mime query keys.
+  {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const stub = stubFetch([jsonResponse({ artifact: { id, name: "n.md", version: 1, status: "active" } }, 201)]);
+    const result = await runCommand(
+      { ...base, command: "upload", artifactName: "n.md", artifactMime: "text/markdown", artifactText: "hi" },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("upload url", stub.calls[0].url === "http://local.test/api/artifacts?name=n.md&mime=text%2Fmarkdown");
+    check("upload bytes", stub.calls[0].init.headers["Content-Type"] === "application/octet-stream");
+    check("upload result", result.artifact.id === id);
+  }
+
+  // retention reads by default and sets with --days; cleanup previews and runs.
+  {
+    const stub = stubFetch([jsonResponse({ retention: { maxAgeDays: 90 } })]);
+    const result = await runCommand({ ...base, command: "retention" }, { fetchImpl: stub.fetch, ...noSleep });
+    check("retention read", result.retention.maxAgeDays === 90);
+    const setStub = stubFetch([jsonResponse({ retention: { maxAgeDays: 7 } })]);
+    await runCommand({ ...base, command: "retention", retentionDays: 7 }, { fetchImpl: setStub.fetch, ...noSleep });
+    check("retention set url", setStub.calls[0].url === "http://local.test/api/artifacts/retention");
+    const previewStub = stubFetch([jsonResponse({ cleanup: { deleted: [], failed: [], remaining: 0 } })]);
+    await runCommand({ ...base, command: "cleanup" }, { fetchImpl: previewStub.fetch, ...noSleep });
+    check("cleanup preview url", previewStub.calls[0].url === "http://local.test/api/artifacts/cleanup/preview");
+    const runStub = stubFetch([jsonResponse({ cleanup: { deleted: [], failed: [], remaining: 0 } })]);
+    await runCommand(
+      { ...base, command: "cleanup", cleanupRun: true, admin: true },
+      { fetchImpl: runStub.fetch, ...noSleep },
+    );
+    check("cleanup run url", runStub.calls[0].url === "http://local.test/api/artifacts/cleanup/run");
   }
 
   // preview resolves the Saga name, posts the parsed input, and returns the

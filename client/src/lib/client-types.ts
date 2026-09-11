@@ -200,6 +200,24 @@ export interface AppDetail extends AppSummary {
   activeDeployment: AppDeployment | null;
 }
 
+/** Artifact status values served by the Wrangnarök Worker (ADR 018). */
+export type ArtifactStatus = "active" | "deleted";
+
+/** Attachment-binding scopes: which surface the Artifact backs. */
+export type ArtifactBindingScope = "execution" | "workspace" | "conversation";
+
+/** Row shape for GET /api/artifacts (summaries + hasMore, never bytes). */
+export interface ArtifactSummary {
+  id: string;
+  name: string;
+  mime: string;
+  sizeBytes: number;
+  version: number;
+  status: ArtifactStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Row shape for GET /api/config (CON-02, ADR 020): typed values for this
  * Organization; secret rows answer "[SECRET]", never values. */
 export interface ConfigEntry {
@@ -300,6 +318,38 @@ export interface FileMeta {
   status: "pending" | "ready";
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ArtifactsResponse {
+  artifacts: ArtifactSummary[];
+  hasMore: boolean;
+}
+
+export interface ArtifactVersion {
+  version: number;
+  mime: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface ArtifactBinding {
+  scope: ArtifactBindingScope;
+  refId: string;
+}
+
+/** Detail shape for GET /api/artifacts/:id. */
+export interface ArtifactDetail extends ArtifactSummary {
+  orgId: string;
+  creatorUserId: string;
+  deletedAt: string | null;
+  versions: ArtifactVersion[];
+  bindings: ArtifactBinding[];
+}
+
+/** Generated-output format subcapability (all deferred: no Python rendering on Workers). */
+export interface ArtifactFormat {
+  format: string;
+  status: string;
 }
 
 export interface FilesResponse {

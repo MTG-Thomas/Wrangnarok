@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Nav } from "./components/Nav";
 import { AdminOrgs } from "./pages/AdminOrgs";
 import { ApplicationDetailView, ApplicationsList } from "./pages/Applications";
+import { ArtifactDetailView, ArtifactsList } from "./pages/Artifacts";
 import { ConfigsList } from "./pages/Configs";
 import { ConnectionsList } from "./pages/Connections";
 import { ExecutionDetailView } from "./pages/ExecutionDetail";
@@ -24,6 +25,8 @@ export function App(): React.JSX.Element {
           <Route path="/admin" element={<AdminOrgs />} />
           <Route path="/apps" element={<ApplicationsList />} />
           <Route path="/apps/:id" element={<ApplicationDetailView />} />
+          <Route path="/artifacts" element={<ArtifactsList />} />
+          <Route path="/artifacts/:id" element={<ArtifactDetailView />} />
           <Route path="/files" element={<FilesList />} />
           <Route path="/connections" element={<ConnectionsList />} />
           <Route path="*" element={<p>Not found. Try History.</p>} />
