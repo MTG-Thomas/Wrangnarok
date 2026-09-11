@@ -55,10 +55,10 @@ the UI: Bearer token, Organization from auth context, exact IDs only):
 | `workflows execute <ref>` + log tail | `submit --saga NAME\|UUID [--input JSON\|@FILE] [--key KEY] [--no-wait]` (202 + poll to terminal) | Partial (poll, no log stream) |
 | `workflows update/delete/grant-role/revoke-role` | None (Git-owned registration; no runtime mutation) | Tracked (AUTH-02 for grants) |
 | `workflows register` (workspace `.py` file) | `scaffold --name SLUG --id UUID` (offline `defineSaga` template; registration stays Git-owned) | Partial (adapted: no runtime registration by design) |
-| `run` (direct local workflow file, silent JSON) | `submit` against the local Worker; no local-file execution | Partial (adapted: `wrangler dev` is the local loop; DEV-02 owns preview/sync) |
+| `run` (direct local workflow file, silent JSON) | `preview --saga NAME\|UUID [--input JSON\|@FILE] [--check-env]` (read-only `POST /api/dev/preview`: authoritative parse, no D1 writes, no dispatch) | Supported (adapted: `wrangler dev` is the edit loop; preview is the validation loop) |
 | Execution detail/history/cancel | `detail --id HEX [--wait]`, `history [--status S] [--saga NAME\|UUID] [--limit N]`, `cancel --id HEX` | Supported |
 | Failure diagnosis | `diagnose --id HEX` (detail + operations + hint for known codes) | Supported |
-| `solution/app/deploy/push/pull/sync/watch/git` | None | Tracked (DEV-02 owns preview/sync/deploy; SOL-01 owns bundles) |
+| `solution/app/deploy/push/pull/sync/watch/git` | `preview` over `POST /api/dev/preview` plus offline sync/Git/lock/deploy checks in `src/dev.ts` (`planSync`, `parseGitTarget`, `validateLockfile`, `validateDeploy`); full Solution/app lifecycle stays with SOL-01/APP-01 | Partial (DEV-02 slice: local preview + validation; hosted Git/package/deploy lifecycle not in scope) |
 | `login/logout/auth` (device-code, password-grant, keychain) | `--token` / `$WRANGNAROK_TOKEN` / `.dev.vars` LAB_TOKEN plus Access service-token headers | Partial (adapted: Access is the identity source per ADR 014; no local password DB per AUTH-03) |
 | `api` (generic authenticated request) | None (every command is a fixed typed call) | Missing (deliberate: boring typed APIs over a generic escape hatch) |
 | Entity groups (`orgs/roles/forms/agents/apps/claims/integrations/configs/tables/files/events/policy-rule/requirements`) | None | Tracked (owning parity issues; never declared complete here) |

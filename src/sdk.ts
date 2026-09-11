@@ -73,6 +73,10 @@ export const SDK_ERROR_CODES = [
   "SMOKE_WRITE_UNVERIFIED",
   "SMOKE_READ_UNVERIFIED",
   "EXECUTION_FAILED",
+  "STABLE_IDENTITY_REMAP_REQUIRED",
+  "SYNC_CONFLICT",
+  "INVALID_GIT_TARGET",
+  "DEPLOY_BLOCKED",
   "LOCAL_AUTH_NOT_CONFIGURED",
   "ACCESS_NOT_CONFIGURED",
   "SDK_CLIENT_MISMATCH",
@@ -283,6 +287,57 @@ export function parseHistoryPage(value: unknown): SdkHistoryPage {
     hasMore: value.hasMore,
     nextCursor: (nextCursor ?? null) as string | null,
   };
+}
+
+export interface SdkPreviewEnvironment {
+  readonly integrationId: string;
+  readonly configured: boolean;
+  readonly detail: string;
+}
+
+export interface SdkPreview {
+  readonly saga: SdkSaga;
+  readonly input: unknown;
+  readonly environmentChecked: boolean;
+  readonly environment: readonly SdkPreviewEnvironment[];
+  readonly persisted: false;
+  readonly dispatched: false;
+}
+
+export interface SdkPreviewOptions {
+  readonly saga: string;
+  readonly input?: unknown;
+  readonly checkEnvironment?: boolean;
+}
+
+function isPreviewEnvironment(value: unknown): value is SdkPreviewEnvironment {
+  return (
+    isRecord(value) &&
+    typeof value.integrationId === "string" &&
+    typeof value.configured === "boolean" &&
+    typeof value.detail === "string"
+  );
+}
+
+/** Guard a POST /api/dev/preview payload (DEV-02, issue #141). Throws
+ * SDK_CLIENT_MISMATCH on drift. */
+export function parsePreview(value: unknown): SdkPreview {
+  if (!isRecord(value) || !isRecord(value.preview)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The Saga preview has an unexpected shape.");
+  }
+  const preview = value.preview;
+  if (
+    !isRecord(preview.saga) ||
+    !("input" in preview) ||
+    typeof preview.environmentChecked !== "boolean" ||
+    !Array.isArray(preview.environment) ||
+    !preview.environment.every(isPreviewEnvironment) ||
+    preview.persisted !== false ||
+    preview.dispatched !== false
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The Saga preview has an unexpected shape.");
+  }
+  return preview as unknown as SdkPreview;
 }
 
 // --- Offline authoring helpers ----------------------------------------------
@@ -572,6 +627,9 @@ function hintFor(code: unknown): string | null {
 export interface SdkClient {
   listSagas(): Promise<readonly SdkSaga[]>;
   inspectSaga(ref: string): Promise<SdkSaga>;
+  /** DEV-02 read-only preview (POST /api/dev/preview): validates against the
+   * static Catalog with no D1 writes and no Workflow dispatch. */
+  previewSaga(options: SdkPreviewOptions): Promise<SdkPreview>;
   submitExecution(options: SdkSubmitOptions): Promise<SdkSubmitReceipt | SdkExecutionDetail>;
   getExecution(id: string): Promise<SdkExecutionDetail>;
   cancelExecution(id: string): Promise<SdkCancelReceipt>;
@@ -674,6 +732,23 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       }
       const sagas = await fetchSagas();
       return inspectSaga(sagas, ref);
+    },
+    async previewSaga(preview: SdkPreviewOptions): Promise<SdkPreview> {
+      const sagaId = await resolveSagaId(preview.saga);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/dev/preview`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              sagaId,
+              input: preview.input ?? {},
+              ...(preview.checkEnvironment === true ? { checkEnvironment: true } : {}),
+            }),
+          }),
+        "saga preview",
+      );
+      return parsePreview(await readJson(response, "saga preview"));
     },
     async submitExecution(submit: SdkSubmitOptions): Promise<SdkSubmitReceipt | SdkExecutionDetail> {
       const key = submit.key ?? randomKey();
@@ -782,6 +857,12 @@ export function describeContract(): SdkContractDescriptor {
     routes: [
       { method: "GET", path: "/api/sdk", description: "This contract descriptor (authenticated)." },
       { method: "GET", path: "/api/sagas", description: "Saga discovery catalog (read-only metadata)." },
+      {
+        method: "POST",
+        path: "/api/dev/preview",
+        description:
+          "No-registration local preview: authoritative parse, no D1 writes, no dispatch. Opt-in read-only environment check.",
+      },
       { method: "POST", path: "/api/executions", description: "Submit an Execution (Idempotency-Key required)." },
       {
         method: "GET",
@@ -824,6 +905,12 @@ export function describeContract(): SdkContractDescriptor {
         detail: "Offline validateAgainstSchema plus server parse; the server remains authoritative.",
       },
       { name: "execute-status-cancel", status: "supported", detail: "Submit, poll, detail, history, and cancel." },
+      {
+        name: "local-preview",
+        status: "supported",
+        detail:
+          "No-registration local preview (POST /api/dev/preview): authoritative parse, no D1 writes, no dispatch; opt-in read-only environment check. Sync/Git/lock/deploy guidance lives in docs/dev-preview.md (DEV-02).",
+      },
       {
         name: "resource-management",
         status: "tracked",

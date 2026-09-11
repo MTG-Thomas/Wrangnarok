@@ -49,8 +49,14 @@ describe("SDK contract version and descriptor (issue #140)", () => {
     expect(descriptor.contract).toBe("wrangnarok.sdk");
     expect(descriptor.version).toBe(SDK_VERSION);
     expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
-      expect.arrayContaining(["GET /api/sdk", "GET /api/sagas", "POST /api/executions"]),
+      expect.arrayContaining(["GET /api/sdk", "GET /api/sagas", "POST /api/executions", "POST /api/dev/preview"]),
     );
+    // DEV-02 (issue #141): local preview is a supported capability; the new
+    // error codes stay in the contract list.
+    expect(descriptor.capabilities.find((entry) => entry.name === "local-preview")?.status).toBe("supported");
+    for (const code of ["STABLE_IDENTITY_REMAP_REQUIRED", "SYNC_CONFLICT", "INVALID_GIT_TARGET", "DEPLOY_BLOCKED"]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
     for (const capability of descriptor.capabilities) {
       expect(["supported", "git-owned", "tracked"]).toContain(capability.status);
     }
@@ -515,6 +521,31 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
         saga: "missing",
       }),
     ).rejects.toMatchObject({ code: "SDK_SAGA_NOT_FOUND" });
+  });
+
+  it("previews through the typed client without dispatching", async () => {
+    const seen = {
+      preview: {
+        saga: { id: helloSaga.id, name: "hello", revision: "hello-v1" },
+        input: { name: "Ada" },
+        environmentChecked: false,
+        environment: [],
+        persisted: false,
+        dispatched: false,
+      },
+    };
+    const { calls, fetchImpl } = stub([json(catalog), json(seen)]);
+    const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    const previewed = await client.previewSaga({ saga: "hello", input: { name: "Ada" } });
+    expect(previewed.persisted).toBe(false);
+    expect(previewed.dispatched).toBe(false);
+    expect(calls[1]?.url).toBe("http://local.test/api/dev/preview");
+    const malformed = stub([json(catalog), json({ preview: { nope: true } })]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: malformed.fetchImpl }).previewSaga({
+        saga: helloSaga.id,
+      }),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
   });
 
   it("diagnoses every known failure code and returns null hints otherwise", async () => {

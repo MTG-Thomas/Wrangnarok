@@ -276,6 +276,9 @@ Commands:
                                           Emit a new defineSaga module (offline)
   submit --saga NAME|UUID [--input JSON|@FILE] [--key KEY] [--no-wait]
                                           Submit an Execution (202 + poll to terminal)
+  preview --saga NAME|UUID [--input JSON|@FILE] [--check-env]
+                                          No-registration local preview (read-only:
+                                          no D1 writes, no dispatch)
   detail --id HEX                         Fetch one Execution (add --wait to poll)
   diagnose --id HEX                       Fetch one Execution with failure hints
   history [--status S[,S2]] [--saga NAME|UUID] [--from YYYY-MM-DD]
@@ -441,6 +444,26 @@ export async function runCommand(ctx, deps = {}) {
     case "contract": {
       return readJson(await fetchImpl(`${ctx.base}/api/sdk`, { headers: full.headers }), "sdk contract");
     }
+    case "preview": {
+      // DEV-02 (issue #141): no-registration local preview. Read-only by
+      // construction server-side (no D1 writes, no dispatch); --check-env
+      // opts into the read-only Connection-presence check for this
+      // Organization only. Same caller policy as every other command.
+      if (!ctx.saga) fail("USAGE", "preview needs --saga NAME|UUID.");
+      const sagaId = await resolveSagaId(full, ctx.saga);
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/dev/preview`, {
+          method: "POST",
+          headers: full.headers,
+          body: JSON.stringify({
+            sagaId,
+            input: ctx.input ?? {},
+            ...(ctx.checkEnv ? { checkEnvironment: true } : {}),
+          }),
+        }),
+        "saga preview",
+      );
+    }
     case "submit": {
       if (!ctx.saga) fail("USAGE", "submit needs --saga NAME|UUID.");
       const key = ctx.key ?? `cli-${randomUUID()}`;
@@ -552,7 +575,8 @@ async function main() {
     timeoutMs: Number(arg("timeout-ms", "120000")),
     pollMs: Number(arg("poll-ms", "2000")),
     // Per-command arguments; each command reads only its own.
-    saga: command === "submit" || command === "inspect" ? arg("saga") : undefined,
+    saga: command === "submit" || command === "inspect" || command === "preview" ? arg("saga") : undefined,
+    checkEnv: command === "preview" ? flag("check-env") : false,
     scaffoldName: command === "scaffold" ? arg("name") : undefined,
     scaffoldId: command === "scaffold" ? arg("id") : undefined,
     scaffoldDescription: command === "scaffold" ? arg("description") : undefined,
@@ -560,7 +584,7 @@ async function main() {
     sagaFilter: command === "history" ? arg("saga") : undefined,
     id: command === "detail" || command === "cancel" || command === "diagnose" ? arg("id") : undefined,
     key: command === "submit" ? arg("key") : undefined,
-    input: command === "submit" ? readInput() : undefined,
+    input: command === "submit" || command === "preview" ? readInput() : undefined,
     statusFilter: command === "history" ? arg("status") : undefined,
     limit: limit === undefined ? undefined : Number(limit),
     from: command === "history" ? arg("from") : undefined,
@@ -821,6 +845,42 @@ async function selftest() {
     const result = await runCommand({ ...base, command: "contract" }, { fetchImpl: stub.fetch, ...noSleep });
     check("contract version", result.version === "1");
     check("contract url", stub.calls[0].url === "http://local.test/api/sdk");
+  }
+
+  // preview resolves the Saga name, posts the parsed input, and returns the
+  // read-only receipt untouched. --check-env opts into the read-only check.
+  {
+    const uuid = "395e15f0-3627-41f6-8922-008ce37e3b35";
+    const body = {
+      preview: {
+        saga: { id: uuid, name: "hello", revision: "hello-v1" },
+        input: { name: "Ada" },
+        environmentChecked: false,
+        environment: [],
+        persisted: false,
+        dispatched: false,
+      },
+    };
+    const stub = stubFetch([
+      jsonResponse({ sagas: [{ id: uuid, name: "hello", revision: "hello-v1" }] }),
+      jsonResponse(body),
+    ]);
+    const result = await runCommand(
+      { ...base, command: "preview", saga: "hello", input: { name: "Ada" }, checkEnv: false },
+      { fetchImpl: stub.fetch, ...noSleep },
+    );
+    check("preview read-only", result.preview.persisted === false && result.preview.dispatched === false);
+    check("preview url", stub.calls[1].url === "http://local.test/api/dev/preview");
+    check("preview opt-in off by default", !JSON.parse(stub.calls[1].init.body).checkEnvironment);
+    const envStub = stubFetch([
+      jsonResponse({ sagas: [{ id: uuid, name: "hello", revision: "hello-v1" }] }),
+      jsonResponse(body),
+    ]);
+    await runCommand(
+      { ...base, command: "preview", saga: uuid, input: {}, checkEnv: true },
+      { fetchImpl: envStub.fetch, ...noSleep },
+    );
+    check("preview check-env opts in", JSON.parse(envStub.calls[0].init.body).checkEnvironment === true);
   }
 
   // server mismatch is loud.

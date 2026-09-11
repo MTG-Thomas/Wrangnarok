@@ -30,6 +30,7 @@ keys.
 | `GET` | `/api/sdk` | Versioned contract descriptor (`describeContract`) |
 | `GET` | `/api/sagas` | Saga discovery catalog (read-only metadata) |
 | `POST` | `/api/executions` | Submit (`Idempotency-Key` required; 202 + `Location`, replay 200 + `replayed:true`) |
+| `POST` | `/api/dev/preview` | No-registration local preview (authoritative parse; no D1 writes, no dispatch; opt-in `checkEnvironment` read-only Connection check) |
 | `GET` | `/api/executions` | History summaries (`status` single or comma-separated, `sagaId`, `sagaName`, `startDate`, `endDate`, `limit`, `cursor`) |
 | `GET` | `/api/executions/:id` | Detail with Operations, input/result, safe error, `runtimeStatus` |
 | `POST` | `/api/executions/:id/cancel` | Owner-only cancel (exact 64-hex ID) |
