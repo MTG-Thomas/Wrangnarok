@@ -120,6 +120,16 @@ export interface ConnectionTestResponse {
 /** Detail shape for GET /api/executions/:id. */
 export interface ExecutionDetail extends ExecutionSummary {
   runtimeStatus: string | null;
+  /** Applied runtime-policy snapshot (RUN-01, ADR 018): what this Execution ran under. */
+  policy: {
+    sagaId: string;
+    version: number;
+    policy: {
+      timeout: { vendorTimeoutMs: number; stepTimeout: string };
+      retry: { checkpointRetries: number; vendorRetries: number };
+      admission: { enabled: boolean; maxConcurrent: number };
+    };
+  };
   input: unknown;
   result: unknown;
   error: unknown;

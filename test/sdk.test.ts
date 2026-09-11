@@ -16,6 +16,7 @@ import {
   localCatalog,
   parseExecutionDetail,
   parseHistoryPage,
+  parseRuntimePolicy,
   parseSagaCatalog,
   parseSdkError,
   scaffoldSaga,
@@ -61,6 +62,15 @@ describe("SDK contract version and descriptor (issue #140)", () => {
       expect.arrayContaining(["GET /api/config", "POST /api/config", "PUT /api/config/:id"]),
     );
     for (const code of ["CONFIG_REQUIREMENT_UNSATISFIED", "SECRET_NOT_CONFIGURED", "MANAGED_RESOURCE"]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
+    // RUN-01 (ADR 018): persisted runtime policy is a supported capability
+    // with its routes and error codes in the contract.
+    expect(descriptor.capabilities.find((entry) => entry.name === "runtime-policy")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining(["GET /api/sagas/:id/policy", "PUT /api/sagas/:id/policy"]),
+    );
+    for (const code of ["INVALID_POLICY", "SAGA_PAUSED", "ADMISSION_LIMITED"]) {
       expect(SDK_ERROR_CODES).toContain(code);
     }
     for (const code of ["STABLE_IDENTITY_REMAP_REQUIRED", "SYNC_CONFLICT", "INVALID_GIT_TARGET", "DEPLOY_BLOCKED"]) {
@@ -344,6 +354,15 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
       startedAt: "2026-09-11T00:00:01.000Z",
       completedAt: "2026-09-11T00:00:02.000Z",
       runtimeStatus: null,
+      policy: {
+        sagaId: helloSaga.id,
+        version: 1,
+        policy: {
+          timeout: { vendorTimeoutMs: 0, stepTimeout: "10 seconds" },
+          retry: { checkpointRetries: 2, vendorRetries: 0 },
+          admission: { enabled: true, maxConcurrent: 0 },
+        },
+      },
       input: { name: "Ada" },
       result: { greeting: "Hello, Ada!", name: "Ada" },
       error: null,
@@ -565,6 +584,8 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
       "NINJA_UNAUTHORIZED",
       "NINJA_NOT_CONFIGURED",
       "EXECUTION_CANCELLED",
+      "SAGA_PAUSED",
+      "ADMISSION_LIMITED",
       "DISPATCH_UNCONFIRMED",
     ];
     for (const code of codes) {
@@ -605,6 +626,21 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     expect(() => parseExecutionDetail(null)).toThrow(/unexpected shape/);
     expect(() => parseExecutionDetail({ ...detail(), operations: [{ name: 1 }] })).toThrow(/unexpected shape/);
     expect(() => parseExecutionDetail({ ...detail(), operations: "x" })).toThrow(/unexpected shape/);
+    expect(() => parseExecutionDetail({ ...detail(), policy: undefined })).toThrow(/unexpected shape/);
+    expect(() => parseRuntimePolicy({ policy: { nope: true } })).toThrow(/unexpected shape/);
+    expect(
+      parseRuntimePolicy({
+        policy: {
+          sagaId: helloSaga.id,
+          sagaName: "hello",
+          version: 1,
+          updatedAt: "2026-09-11T00:00:00.000Z",
+          timeout: { vendorTimeoutMs: 0, stepTimeout: "10 seconds" },
+          retry: { checkpointRetries: 2, vendorRetries: 0 },
+          admission: { enabled: true, maxConcurrent: 0 },
+        },
+      }).sagaId,
+    ).toBe(helloSaga.id);
     expect(() => parseHistoryPage({})).toThrow(/unexpected shape/);
     expect(() => parseHistoryPage({ executions: [{ sagaId: 1 }], hasMore: false })).toThrow(/unexpected shape/);
     expect(() => parseHistoryPage({ executions: [], hasMore: false, nextCursor: 7 })).toThrow(/unexpected shape/);

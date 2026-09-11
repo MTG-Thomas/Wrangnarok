@@ -50,7 +50,12 @@ import { join } from "node:path";
 // APP-02 surface and measures ~334 KiB combined. Same deliberate feature
 // headroom as the earlier raises, not dependency bloat: package.json is
 // unchanged versus main.
-const BUDGET_BYTES = 340 * 1024;
+// 2026-09-11 (RUN-01, issue #135): 352 KiB. Persisted per-Saga runtime policy
+// (2 routes, D1 table, per-Execution snapshot, policy-gated submit plus
+// snapshot-resolved retries/deadlines) stacks on the CON-02 surface above.
+// Same deliberate feature headroom, not dependency bloat: package.json is
+// unchanged versus main.
+const BUDGET_BYTES = 352 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

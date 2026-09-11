@@ -185,6 +185,12 @@ export function ExecutionDetailView(props: { initial?: Detail }): React.JSX.Elem
             </dd>
             <dt>Dispatch</dt>
             <dd className="muted">{data.dispatchConfirmed ? "confirmed" : "unconfirmed (Pending receipt only)"}</dd>
+            <dt>Runtime policy</dt>
+            <dd className="muted" data-testid="detail-policy">
+              {data.policy
+                ? `v${data.policy.version} · vendor timeout ${data.policy.policy.timeout.vendorTimeoutMs === 0 ? "default" : `${data.policy.policy.timeout.vendorTimeoutMs}ms`} · checkpoint retries ${data.policy.policy.retry.checkpointRetries} · vendor retries ${data.policy.policy.retry.vendorRetries} · ${data.policy.policy.admission.enabled ? "admission open" : "paused"}${data.policy.policy.admission.maxConcurrent > 0 ? ` · max ${data.policy.policy.admission.maxConcurrent} concurrent` : ""}`
+                : "default policy"}
+            </dd>
             <dt>Created</dt>
             <dd className="muted">{data.createdAt}</dd>
             <dt>Started</dt>
