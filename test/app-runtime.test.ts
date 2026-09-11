@@ -4,7 +4,7 @@
 //
 // Runs in real workerd via @cloudflare/vitest-plugin; D1/Workflow bindings
 // are never replaced, only outbound vendor HTTP is intercepted. No production
-// deployment. Applies the full migration chain (0001 + 0002 + 0006 + 0007) so
+// deployment. Applies the full migration chain (0001 + 0002 + 0006 + 0022) so
 // the runtime schema composes with executions and apps.
 //
 // Proven here, end to end through HTTP:
@@ -30,7 +30,7 @@ import { describeContract, SDK_ERROR_CODES } from "../src/sdk";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
-import migration10 from "../migrations/0010_app_runtime.sql?raw";
+import migration22 from "../migrations/0022_app_runtime.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);
@@ -74,7 +74,7 @@ beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(migration6);
-  await bindings.DB.exec(migration10);
+  await bindings.DB.exec(migration22);
 });
 
 afterEach(async () => {
