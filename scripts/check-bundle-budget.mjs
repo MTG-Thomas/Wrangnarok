@@ -23,7 +23,13 @@ import { join } from "node:path";
 // fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
 // shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
 // 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 145 * 1024;
+// 2026-09-11 (OBS-02, issue #153): 155 KiB. The bounded author-log surface
+// (src/logs.ts domain: parsers, cursor pagination, retention, SEC-01
+// write/read paths, plus two routes, SDK tail/search, and hello-pilot
+// emission) measures ~150 KiB combined with the AUTH-01 surface above.
+// Hand-written feature code with no new dependencies; package.json is
+// unchanged versus main.
+const BUDGET_BYTES = 155 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
