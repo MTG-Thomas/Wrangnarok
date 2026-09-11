@@ -1183,13 +1183,13 @@ export function describeContract(): SdkContractDescriptor {
         name: "endpoint-triggers",
         status: "supported",
         detail:
-          "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 019): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
+          "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 018): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
       },
       {
         name: "resource-management",
         status: "tracked",
         detail:
-          "Forms, files, config, and agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md).",
+          "Author Tables/files/forms/config/agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md); the scoped browser app runtime is the separate app-runtime capability.",
       },
     ],
     docs: [
