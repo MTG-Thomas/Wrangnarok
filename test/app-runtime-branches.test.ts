@@ -23,6 +23,7 @@ import {
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
 import migration22 from "../migrations/0022_app_runtime.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -88,6 +89,7 @@ beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(migration6);
+  await bindings.DB.exec(migration7);
   await bindings.DB.exec(migration22);
 });
 
@@ -563,6 +565,30 @@ describe("file arms fail closed", () => {
 });
 
 describe("route guards fail closed", () => {
+  it("denies strangers on runtime routes without leaking the app", async () => {
+    // The AUTH-01 membership gate runs before app loading: a caller with no
+    // membership answers ORG_NOT_FOUND (404), never APP_NOT_FOUND shape
+    // differences that would confirm or deny the app id.
+    const stranger = "00000000-0000-4000-8000-000000000005";
+    const appId = await createApp("stranger-arms", "stranger-arms");
+    const strangerCall = (path: string, method = "GET", body?: unknown) =>
+      worker.fetch(
+        new Request(`http://local.test${path}`, {
+          method,
+          headers: headers(),
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+        {
+          ...bindings,
+          LAB_ORG_ID: ORG,
+          LAB_USER_ID: stranger,
+          LAB_FIXTURE_USER_ID: "00000000-0000-4000-8000-000000000002",
+        },
+      );
+    await expectCode(await strangerCall(`/api/apps/${appId}/sdk`), 404, "ORG_NOT_FOUND");
+    await expectCode(await strangerCall(`/api/apps/${appId}/runtime/tables`), 404, "ORG_NOT_FOUND");
+  });
+
   it("rejects query strings on query-less app routes", async () => {
     const appId = await createApp("guard-arms", "guard-arms");
     await expectCode(await call(`/api/apps?x=1`), 400, "UNSUPPORTED_QUERY");
