@@ -338,17 +338,24 @@ export async function getOrgSummary(db: D1Database, orgId: string): Promise<OrgS
 /** Organizations visible to the caller: everything for instance admins, only
  * live memberships otherwise. Revoked rows stay hidden. */
 export async function listOrgs(db: D1Database, ctx: CallerCtx): Promise<OrgSummary[]> {
-  if (ctx.isInstanceAdmin) {
-    const rows = await db.prepare("SELECT * FROM organizations ORDER BY name").all<OrgRow>();
+  try {
+    if (ctx.isInstanceAdmin) {
+      const rows = await db.prepare("SELECT * FROM organizations ORDER BY name").all<OrgRow>();
+      return rows.results.map(toOrgSummary);
+    }
+    const rows = await db
+      .prepare(
+        "SELECT o.* FROM organizations o JOIN org_memberships m ON m.org_id=o.id WHERE m.user_id=? AND m.status IN ('invited','active','suspended') ORDER BY o.name",
+      )
+      .bind(ctx.principal.userId)
+      .all<OrgRow>();
     return rows.results.map(toOrgSummary);
+  } catch (error) {
+    if (isMissingTable(error)) {
+      throw new Fault(503, "ORG_STORE_NOT_MIGRATED", "Organization storage is not migrated: apply migration 0006.");
+    }
+    throw error;
   }
-  const rows = await db
-    .prepare(
-      "SELECT o.* FROM organizations o JOIN org_memberships m ON m.org_id=o.id WHERE m.user_id=? AND m.status IN ('invited','active','suspended') ORDER BY o.name",
-    )
-    .bind(ctx.principal.userId)
-    .all<OrgRow>();
-  return rows.results.map(toOrgSummary);
 }
 
 export async function setOrgStatus(db: D1Database, orgId: string, disabled: boolean): Promise<OrgSummary> {

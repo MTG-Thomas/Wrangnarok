@@ -195,6 +195,12 @@ describe("DEV-02 offline preview helper", () => {
     expect(parsed).toEqual({ name: "Ada" });
     expect(() => previewLocal(SAGA_CATALOG, parsers(), "not-a-uuid", {})).toThrow(/stable Saga UUID/);
     expect(() => previewLocal(SAGA_CATALOG, parsers(), helloSaga.id, { name: "" })).toThrowError(Fault);
+    // Well-formed but unknown UUIDs, and catalog entries without a parser,
+    // both answer UNKNOWN_SAGA (never a dispatch).
+    expect(() => previewLocal(SAGA_CATALOG, parsers(), "00000000-0000-4000-8000-000000009999", {})).toThrow(
+      /stable id/,
+    );
+    expect(() => previewLocal(SAGA_CATALOG, new Map(), helloSaga.id, { name: "Ada" })).toThrow(/stable id/);
   });
 });
 
@@ -284,6 +290,8 @@ describe("DEV-02 Git target selection", () => {
     });
     expect(target.branch).toBe("parity/dev-02-preview");
     for (const bad of [
+      null,
+      ["https://x/y.git"],
       { remoteUrl: "https://x/y.git", authEnvVar: "T" },
       { remoteUrl: "ftp://x/y", branch: "main", authEnvVar: "T" },
       { remoteUrl: "https://x/y.git", branch: "", authEnvVar: "T" },
@@ -362,6 +370,7 @@ describe("DEV-02 compatibility inventory", () => {
     }
     // Arbitrary Python execution is an explicit blocker.
     expect(classifyDependency("subprocess.run(['python', 'x.py'])").disposition).toBe("blocker");
+    expect(classifyDependency("import os; os.system('x')").category).toBe("process-execution");
     expect(classifyDependency("run setup.py install").disposition).toBe("blocker");
     expect(classifyDependency("import pandas").disposition).toBe("supported");
     expect(classifyDependency("totally-unknown-thing-xyz").disposition).toBe("blocker");

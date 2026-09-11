@@ -124,7 +124,9 @@ it("serves the catalog on a valid assertion without LAB configured", async () =>
   await db.exec(migration7);
   const stamp = new Date().toISOString();
   await db
-    .prepare("INSERT INTO organizations(id,name,status,created_at,disabled_at) VALUES (?,'Access team','active',?,NULL)")
+    .prepare(
+      "INSERT INTO organizations(id,name,status,created_at,disabled_at) VALUES (?,'Access team','active',?,NULL)",
+    )
     .bind(ORG.toLowerCase(), stamp)
     .run();
   await db
@@ -185,4 +187,31 @@ it("denies unlisted service identity", async () => {
   await expect(
     verifyAccess(token, { ...accessEnv, ACCESS_ALLOWED_SERVICES: "wrangnarok-machine-final" }),
   ).rejects.toMatchObject({ status: 403 });
+});
+
+it("covers access config and key edge branches", async () => {
+  const { publicKey, privateKey } = await keypair();
+  const pub = await crypto.subtle.exportKey("jwk", publicKey);
+  certsStub(pub, "k1");
+  const valid = await mint(privateKey, "k1", validPayload());
+  // Trailing slashes strip from the team domain (same cert URL either way,
+  // so the token still verifies); whitespace-only allowlists parse to empty
+  // sets (denied, never open).
+  const slashed = { ...accessEnv, ACCESS_TEAM_DOMAIN: `${TEAM}///` };
+  await expect(verifyAccess(valid, slashed)).resolves.toEqual({
+    userId: EMAIL,
+    orgId: ORG.toLowerCase(),
+  });
+  await expect(verifyAccess(valid, { ...accessEnv, ACCESS_ALLOWED_EMAILS: "  , " })).rejects.toMatchObject({
+    status: 403,
+  });
+  // Malformed assertions fail closed before any key fetch: wrong part count,
+  // non-JSON payload, and a bad algorithm all answer 401.
+  await expect(verifyAccess("a.b", accessEnv)).rejects.toMatchObject({ status: 401 });
+  const head = { alg: "none", kid: "k1", typ: "JWT" };
+  const body = validPayload();
+  const b64 = (v: unknown) => btoa(JSON.stringify(v)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  await expect(verifyAccess(`${b64(head)}.${b64(body)}.x`, accessEnv)).rejects.toMatchObject({ status: 401 });
+  const notJson = `${b64url(new TextEncoder().encode("hi"))}.${b64(body)}.x`;
+  await expect(verifyAccess(notJson, accessEnv)).rejects.toMatchObject({ status: 401 });
 });

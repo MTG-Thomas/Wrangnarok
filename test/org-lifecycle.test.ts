@@ -11,6 +11,15 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { echoSaga } from "../src/domain";
+import {
+  ensureLabFixture,
+  inviteMember,
+  resolveCaller,
+  updateMember,
+  type MembershipKind,
+  type MembershipStatus,
+  type OrgRole,
+} from "../src/orgs";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration3 from "../migrations/0003_usage_blocks.sql?raw";
@@ -426,4 +435,357 @@ it("fails closed without migration 0006 and refuses cross-org elevation", async 
   // Admin of B is still a stranger in A for member management.
   expect(await call(`/api/orgs/${ORG_A}/members`, "GET", USER_ORDINARY)).toMatchObject({ status: 404 });
   expect(orgB.length).toBe(36);
+});
+
+it("pins admin validation, error, and filter branches", async () => {
+  const FRESH = "00000000-0000-4000-8000-000000000101";
+  const UNKNOWN_ORG = "aaaaaaaa-1111-4111-8111-111111111112";
+  const orgB = await seedSecondOrg();
+  // Collection gate: an identity with no user row at all is unknown (404),
+  // while a known stranger without membership lists nothing (200, empty).
+  expect(await call("/api/orgs", "GET", FRESH)).toMatchObject({
+    status: 404,
+    body: { error: { code: "ORG_NOT_FOUND" } },
+  });
+  expect(await call("/api/orgs", "GET", USER_STRANGER)).toMatchObject({ status: 200, body: { orgs: [] } });
+  // Unknown org UUIDs answer 404 on every admin surface, never a leak.
+  expect(await call(`/api/orgs/${UNKNOWN_ORG}`, "GET", USER_ADMIN)).toMatchObject({
+    status: 404,
+    body: { error: { code: "ORG_NOT_FOUND" } },
+  });
+  expect(await call(`/api/orgs/${UNKNOWN_ORG}/members`, "GET", USER_ADMIN)).toMatchObject({ status: 404 });
+  expect(await call(`/api/orgs/${UNKNOWN_ORG}/disable`, "POST", USER_ADMIN)).toMatchObject({ status: 404 });
+  expect(await call(`/api/orgs/${UNKNOWN_ORG}/delete-preview`, "GET", USER_ADMIN)).toMatchObject({ status: 404 });
+  // Non-admin members cannot read the org detail even in their own org.
+  expect(await call(`/api/orgs/${orgB}`, "GET", USER_ORDINARY)).toMatchObject({
+    status: 404,
+    body: { error: { code: "ORG_NOT_FOUND" } },
+  });
+  // Org admins list members and read the org detail.
+  expect(await call(`/api/orgs/${orgB}/members`, "GET", USER_ADMIN)).toMatchObject({ status: 200 });
+  expect(await call(`/api/orgs/${orgB}`, "GET", USER_ADMIN)).toMatchObject({
+    status: 200,
+    body: { name: "second-org" },
+  });
+  // Request-body validation fails closed before touching D1.
+  expect(await call("/api/orgs", "POST", USER_ADMIN, undefined)).toMatchObject({
+    status: 415,
+    body: { error: { code: "JSON_REQUIRED" } },
+  });
+  expect(await call("/api/orgs", "POST", USER_ADMIN, { name: 7 })).toMatchObject({
+    status: 400,
+    body: { error: { code: "INVALID_ORG_NAME" } },
+  });
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, {})).toMatchObject({
+    status: 400,
+    body: { error: { code: "INVALID_USER_ID" } },
+  });
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: "fine@example.com" })).toMatchObject({
+    status: 201,
+  });
+  expect(
+    await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: "role@example.com", role: "superuser" }),
+  ).toMatchObject({ status: 400, body: { error: { code: "INVALID_MEMBERSHIP" } } });
+  expect(
+    await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: "kind@example.com", kind: "robot" }),
+  ).toMatchObject({ status: 400, body: { error: { code: "INVALID_MEMBERSHIP" } } });
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: "" })).toMatchObject({
+    status: 400,
+    body: { error: { code: "INVALID_USER_ID" } },
+  });
+  // Inviting into a disabled org, or a disabled user, is refused.
+  expect(await call(`/api/orgs/${orgB}/disable`, "POST", USER_ADMIN)).toMatchObject({ status: 200 });
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: "late@example.com" })).toMatchObject({
+    status: 409,
+    body: { error: { code: "ORG_DISABLED" } },
+  });
+  expect(await call(`/api/orgs/${orgB}/enable`, "POST", USER_ADMIN)).toMatchObject({ status: 200 });
+  expect(await call(`/api/users/${USER_STRANGER}/disable`, "POST", USER_ADMIN)).toMatchObject({ status: 200 });
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: USER_STRANGER })).toMatchObject({
+    status: 409,
+    body: { error: { code: "USER_DISABLED" } },
+  });
+  expect(await call(`/api/users/${USER_STRANGER}/enable`, "POST", USER_ADMIN)).toMatchObject({ status: 200 });
+  expect(await call("/api/users/nobody@example.com/disable", "POST", USER_ADMIN)).toMatchObject({
+    status: 404,
+    body: { error: { code: "USER_NOT_FOUND" } },
+  });
+  // Live memberships conflict; revoked ones reset to invited on re-invite.
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: USER_ORDINARY })).toMatchObject({
+    status: 409,
+    body: { error: { code: "MEMBERSHIP_EXISTS" } },
+  });
+  expect(
+    await call(`/api/orgs/${orgB}/members/${USER_ORDINARY}`, "PATCH", USER_ADMIN, { status: "revoked" }),
+  ).toMatchObject({ status: 200 });
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: USER_ORDINARY })).toMatchObject({
+    status: 201,
+    body: { status: "invited" },
+  });
+  // Member-update validation: unknown fields, bad enums, empty change, and
+  // unknown memberships fail closed; kind/role guard both directions. The
+  // re-invited membership activates on this verified read first.
+  expect(await call("/api/sagas", "GET", USER_ORDINARY, undefined, orgB)).toMatchObject({ status: 200 });
+  expect(
+    await call(`/api/orgs/${orgB}/members/${USER_ORDINARY}`, "PATCH", USER_ADMIN, { role: "member" }),
+  ).toMatchObject({
+    status: 200,
+  });
+  expect(await call(`/api/orgs/${orgB}/members/${USER_ORDINARY}`, "PATCH", USER_ADMIN, { bogus: true })).toMatchObject({
+    status: 400,
+    body: { error: { code: "UNSUPPORTED_FIELD" } },
+  });
+  expect(
+    await call(`/api/orgs/${orgB}/members/${USER_ORDINARY}`, "PATCH", USER_ADMIN, { role: "superuser" }),
+  ).toMatchObject({ status: 400, body: { error: { code: "INVALID_MEMBERSHIP" } } });
+  expect(
+    await call(`/api/orgs/${orgB}/members/${USER_ORDINARY}`, "PATCH", USER_ADMIN, { status: "limbo" }),
+  ).toMatchObject({ status: 400, body: { error: { code: "INVALID_MEMBERSHIP" } } });
+  expect(
+    await call(`/api/orgs/${orgB}/members/${USER_ORDINARY}`, "PATCH", USER_ADMIN, { kind: "robot" }),
+  ).toMatchObject({ status: 400, body: { error: { code: "INVALID_MEMBERSHIP" } } });
+  expect(await call(`/api/orgs/${orgB}/members/${USER_ORDINARY}`, "PATCH", USER_ADMIN, {})).toMatchObject({
+    status: 400,
+    body: { error: { code: "INVALID_MEMBERSHIP" } },
+  });
+  expect(
+    await call(`/api/orgs/${orgB}/members/nobody@example.com`, "PATCH", USER_ADMIN, { role: "member" }),
+  ).toMatchObject({ status: 404, body: { error: { code: "USER_NOT_FOUND" } } });
+  // An admin cannot be made external while holding admin, and suspending the
+  // last admin is refused like revocation.
+  expect(
+    await call(`/api/orgs/${orgB}/members/${USER_ADMIN}`, "PATCH", USER_ADMIN, { kind: "external" }),
+  ).toMatchObject({ status: 400, body: { error: { code: "INVALID_MEMBERSHIP" } } });
+  expect(
+    await call(`/api/orgs/${orgB}/members/${USER_ADMIN}`, "PATCH", USER_ADMIN, { status: "suspended" }),
+  ).toMatchObject({ status: 409, body: { error: { code: "LAST_ADMIN" } } });
+  // Deleting an unknown org answers 404.
+  expect(await call(`/api/orgs/${UNKNOWN_ORG}`, "DELETE", USER_ADMIN)).toMatchObject({
+    status: 404,
+    body: { error: { code: "ORG_NOT_FOUND" } },
+  });
+  // The org admin history surface filters by status, saga, and cursor pages.
+  // (The membership is active again after the verified read above; the key
+  // is unique per run: execution IDs hash (org, user, key), so a reused key
+  // would collide with an earlier row for this caller. The fixture admin
+  // holds a live admin membership from seeding, so they submit.)
+  const filterKey = `auth01-filter-${Date.now()}`;
+  const filterInput = { sagaId: echoSaga.id, input: { message: "filter" } };
+  const sub1 = await worker.fetch(
+    new Request("http://local.test/api/executions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": filterKey,
+        "X-Organization-Id": orgB,
+      },
+      body: JSON.stringify(filterInput),
+    }),
+    asUser(USER_ADMIN),
+  );
+  expect(sub1.status).toBe(202);
+  // A second execution (distinct key, distinct row) gives the cursor pages
+  // something to traverse.
+  const sub2 = await worker.fetch(
+    new Request("http://local.test/api/executions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": `${filterKey}-second`,
+        "X-Organization-Id": orgB,
+      },
+      body: JSON.stringify(filterInput),
+    }),
+    asUser(USER_ADMIN),
+  );
+  expect(sub2.status).toBe(202);
+  const running = await call(`/api/orgs/${orgB}/executions?status=Running`, "GET", USER_ADMIN);
+  expect(running.status).toBe(200);
+  const bySaga = await call(`/api/orgs/${orgB}/executions?sagaId=${echoSaga.id}`, "GET", USER_ADMIN);
+  expect(bySaga.status).toBe(200);
+  expect((bySaga.body.executions as unknown[]).length).toBeGreaterThan(0);
+  const page1 = await call(`/api/orgs/${orgB}/executions?limit=1`, "GET", USER_ADMIN);
+  expect(page1.status).toBe(200);
+  expect(page1.body).toMatchObject({ hasMore: true });
+  const cursor = (page1.body as { nextCursor: string }).nextCursor;
+  expect(typeof cursor).toBe("string");
+  const page2 = await call(
+    `/api/orgs/${orgB}/executions?limit=1&cursor=${encodeURIComponent(cursor)}`,
+    "GET",
+    USER_ADMIN,
+  );
+  expect(page2.status).toBe(200);
+  expect(page2.body).toMatchObject({ hasMore: false, nextCursor: null });
+  // Unknown enum spellings in stored rows map to safe defaults on read.
+  // (Runs before the bundle-install block below: inviting needs a live org.)
+  expect(await call(`/api/orgs/${orgB}/members`, "POST", USER_ADMIN, { userId: "odd@example.com" })).toMatchObject({
+    status: 201,
+  });
+  await bindings.DB.prepare("UPDATE org_memberships SET role='owner',kind='alien' WHERE org_id=? AND user_id=?")
+    .bind(orgB, "odd@example.com")
+    .run();
+  const listed = await call(`/api/orgs/${orgB}/members`, "GET", USER_ADMIN);
+  expect(listed.status).toBe(200);
+  expect(listed.body).toMatchObject({
+    members: expect.arrayContaining([
+      expect.objectContaining({ userId: "odd@example.com", role: "member", kind: "ordinary" }),
+    ]),
+  });
+  // Bundle install records block deletion with their own message.
+  await bindings.DB.prepare(
+    "INSERT INTO bundle_installs(bundle_id,version,org_id,manifest_hash,installed_at) VALUES (?,?,?,?,?)",
+  )
+    .bind("00000000-0000-4000-8000-000000000201", "1.0.0", orgB, "hash", new Date().toISOString())
+    .run();
+  expect(await call(`/api/orgs/${orgB}/delete-preview`, "GET", USER_ADMIN)).toMatchObject({
+    status: 200,
+    body: { canDelete: false, bundleInstalls: 1 },
+  });
+  expect(await call(`/api/orgs/${orgB}`, "DELETE", USER_ADMIN)).toMatchObject({
+    status: 409,
+    body: { error: { code: "DELETE_BLOCKED" } },
+  });
+  await bindings.DB.prepare("DELETE FROM bundle_installs WHERE org_id=?").bind(orgB).run();
+  // Pre-0004 databases predate connections.managed_by and bundle_installs:
+  // the preview falls back instead of failing.
+  await bindings.DB.exec("DROP TABLE connections; DROP TABLE bundle_installs;");
+  await bindings.DB.exec(
+    "CREATE TABLE connections(id TEXT PRIMARY KEY, org_id TEXT NOT NULL, endpoint TEXT NOT NULL);",
+  );
+  await bindings.DB.prepare("INSERT INTO connections(id,org_id,endpoint) VALUES (?,?,?)")
+    .bind("00000000-0000-4000-8000-000000000202", orgB, "http://127.0.0.1:8788/echo")
+    .run();
+  const legacy = await call(`/api/orgs/${orgB}/delete-preview`, "GET", USER_ADMIN);
+  expect(legacy.status).toBe(200);
+  expect(legacy.body).toMatchObject({ connectionsLoose: 1, connectionsManaged: 0, bundleInstalls: 0 });
+  const removed = await call(`/api/orgs/${orgB}`, "DELETE", USER_ADMIN);
+  expect(removed.status).toBe(200);
+  expect(removed.body).toMatchObject({ deletedConnections: 1 });
+  // Collection routes fail closed when the users table is gone, and unknown
+  // HTTP verbs on org paths answer 400 rather than falling through.
+  await bindings.DB.exec("DROP TABLE org_memberships;");
+  expect(await call("/api/orgs", "GET", USER_STRANGER)).toMatchObject({
+    status: 503,
+    body: { error: { code: "ORG_STORE_NOT_MIGRATED" } },
+  });
+  // Rebuild the membership store the DROP removed (the users/organizations
+  // rows survive, so no re-bootstrap is needed). Plain DDL, not the
+  // migration: the organizations ALTERs already ran in beforeEach.
+  await bindings.DB.exec(
+    "CREATE TABLE org_memberships(org_id TEXT NOT NULL REFERENCES organizations(id), user_id TEXT NOT NULL REFERENCES users(user_id), role TEXT NOT NULL DEFAULT 'member', status TEXT NOT NULL DEFAULT 'invited', kind TEXT NOT NULL DEFAULT 'ordinary', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(org_id, user_id));",
+  );
+  const put = await worker.fetch(
+    new Request(`http://local.test/api/orgs`, { method: "PUT", headers: { Authorization: `Bearer ${TOKEN}` } }),
+    asUser(USER_ADMIN),
+  );
+  expect(put.status).toBe(400);
+  // A membership row with an unknown status fails closed at the gate.
+  await bindings.DB.prepare(
+    "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+  )
+    .bind(ORG_A, USER_STRANGER, "member", "weird", "ordinary", new Date().toISOString(), new Date().toISOString())
+    .run();
+  expect(await call("/api/sagas", "GET", USER_STRANGER, undefined, ORG_A)).toMatchObject({
+    status: 403,
+    body: { error: { code: "MEMBERSHIP_SUSPENDED" } },
+  });
+  await bindings.DB.prepare("DELETE FROM org_memberships WHERE org_id=? AND user_id=?")
+    .bind(ORG_A, USER_STRANGER)
+    .run();
+  // An identity with no user row is unknown on scoped routes too (404).
+  expect(await call("/api/sagas", "GET", FRESH, undefined, ORG_A)).toMatchObject({
+    status: 404,
+    body: { error: { code: "ORG_NOT_FOUND" } },
+  });
+  // An instance admin with no membership row still recovers through the gate.
+  const createdC = await call("/api/orgs", "POST", USER_ADMIN, { name: "third-org" });
+  expect(createdC.status).toBe(201);
+  const orgC = createdC.body.id as string;
+  expect(await call("/api/sagas", "GET", USER_ADMIN, undefined, orgC)).toMatchObject({ status: 200 });
+  // Empty admin lists deny admin routes; whitespace-only entries are ignored.
+  expect(await call("/api/orgs", "POST", USER_ADMIN, { name: "nope" }, undefined, "")).toMatchObject({
+    status: 403,
+    body: { error: { code: "ADMIN_ONLY" } },
+  });
+  // Unit-level guards unreachable through the route parsers (which validate
+  // enums first): direct calls still fail closed with INVALID_MEMBERSHIP.
+  const db = bindings.DB;
+  await expect(inviteMember(db, orgB, "direct@example.com", "superuser" as OrgRole)).rejects.toMatchObject({
+    status: 400,
+  });
+  await expect(inviteMember(db, orgB, "direct@example.com", "member", "robot" as MembershipKind)).rejects.toMatchObject(
+    {
+      status: 400,
+    },
+  );
+  await expect(updateMember(db, orgB, USER_ORDINARY, { role: "superuser" as OrgRole })).rejects.toMatchObject({
+    status: 400,
+  });
+  await expect(updateMember(db, orgB, USER_ORDINARY, { status: "limbo" as MembershipStatus })).rejects.toMatchObject({
+    status: 400,
+  });
+  await expect(updateMember(db, orgB, USER_ORDINARY, { kind: "robot" as MembershipKind })).rejects.toMatchObject({
+    status: 400,
+  });
+  // The LAB fixture bootstrap never resurrects a disabled user or org.
+  await bindings.DB.prepare("UPDATE users SET status='disabled' WHERE user_id=?").bind(USER_ADMIN).run();
+  const usersBefore = await bindings.DB.prepare("SELECT status FROM users WHERE user_id=?")
+    .bind(USER_ADMIN)
+    .first<{ status: string }>();
+  await ensureLabFixture(bindings.DB, ORG_A, USER_ADMIN);
+  const usersAfter = await bindings.DB.prepare("SELECT status FROM users WHERE user_id=?")
+    .bind(USER_ADMIN)
+    .first<{ status: string }>();
+  expect(usersBefore?.status).toBe("disabled");
+  expect(usersAfter?.status).toBe("disabled");
+  await bindings.DB.prepare("UPDATE users SET status='active' WHERE user_id=?").bind(USER_ADMIN).run();
+  // Missing membership tables fail closed on scoped routes as well.
+  await bindings.DB.exec("DROP TABLE org_memberships;");
+  expect(await call("/api/sagas", "GET", USER_STRANGER, undefined, ORG_A)).toMatchObject({
+    status: 503,
+    body: { error: { code: "ORG_STORE_NOT_MIGRATED" } },
+  });
+  // Missing users tables fail closed on collection routes.
+  await bindings.DB.exec(
+    "CREATE TABLE org_memberships(org_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', status TEXT NOT NULL DEFAULT 'invited', kind TEXT NOT NULL DEFAULT 'ordinary', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(org_id, user_id)); DROP TABLE users;",
+  );
+  expect(await call("/api/orgs", "GET", USER_STRANGER)).toMatchObject({
+    status: 503,
+    body: { error: { code: "ORG_STORE_NOT_MIGRATED" } },
+  });
+  // Instance-admin recovery bypasses (unit level): an admin with no user row
+  // and no membership row still resolves, and reaches disabled orgs too.
+  // (Plain DDL: the migration ALTERs already ran in beforeEach.)
+  await bindings.DB.exec(
+    "CREATE TABLE IF NOT EXISTS users(user_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, disabled_at TEXT); CREATE TABLE IF NOT EXISTS org_memberships(org_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', status TEXT NOT NULL DEFAULT 'invited', kind TEXT NOT NULL DEFAULT 'ordinary', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(org_id, user_id));",
+  );
+  await bindings.DB.prepare("DELETE FROM users WHERE user_id=?").bind(USER_ADMIN).run();
+  await bindings.DB.prepare("DELETE FROM org_memberships WHERE user_id=?").bind(USER_ADMIN).run();
+  const recovered = await resolveCaller(
+    bindings.DB,
+    { ADMIN_USER_IDS: USER_ADMIN },
+    { userId: USER_ADMIN, orgId: ORG_A },
+    ORG_A,
+  );
+  expect(recovered).toMatchObject({ isInstanceAdmin: true, role: null, isOrgAdmin: false });
+  expect(await call(`/api/orgs/${orgC}/disable`, "POST", USER_ADMIN)).toMatchObject({ status: 200 });
+  const intoDisabled = await resolveCaller(
+    bindings.DB,
+    { ADMIN_USER_IDS: USER_ADMIN },
+    { userId: USER_ADMIN, orgId: ORG_A },
+    orgC,
+  );
+  expect(intoDisabled).toMatchObject({ isInstanceAdmin: true });
+  expect(await call(`/api/orgs/${orgC}/enable`, "POST", USER_ADMIN)).toMatchObject({ status: 200 });
+  // A disabled instance admin still resolves (recovery must stay usable).
+  await bindings.DB.prepare("UPDATE users SET status='disabled' WHERE user_id=?").bind(USER_ADMIN).run();
+  const disabledAdmin = await resolveCaller(
+    bindings.DB,
+    { ADMIN_USER_IDS: USER_ADMIN },
+    { userId: USER_ADMIN, orgId: ORG_A },
+    ORG_A,
+  );
+  expect(disabledAdmin).toMatchObject({ isInstanceAdmin: true });
 });

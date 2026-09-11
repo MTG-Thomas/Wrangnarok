@@ -56,7 +56,8 @@ export function AdminOrgs(): React.JSX.Element {
 
   useEffect(() => {
     void reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Mount-only load: reload is stable-by-construction (no props/state
+    // inputs), so no dependency array entries are missing here.
   }, []);
 
   useEffect(() => {
