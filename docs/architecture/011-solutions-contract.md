@@ -5,6 +5,8 @@
 - **Extends:** upstream findings 9–11, ADR 002 (stable identity), ADR 003 (Integration vs Connection), ADR 005 (secret storage)
 - **Upstream compatibility:** verified against `gobifrost/bifrost` Solutions machinery (`api/src/services/solutions/`, ORM + contracts, Sep 2026 mirror). Ideology preserved throughout; divergences below are explicit and Cloudflare-driven.
 
+**Implementation audit, 2026-09-11 ([#132](https://github.com/MTG-Thomas/Wrangnarok/issues/132)):** this is an accepted target, not a statement that every guarantee shipped with #35. `src/solutions.ts:300-442` currently preflights/reconciles declared Connection endpoints and appends an install ledger. The inspected implementation/schema do not supply absent-managed-row deletion, an active-install pointer/execution gate or atomic multi-row visibility. Re-running converges, but partial failure can leave earlier row writes visible. The parity map tracks these gaps without silently weakening the target or adopting a new architecture.
+
 ## Context
 
 Upstream Bifrost separates a portable Solution definition (apps, workflows, forms, integrations, config declarations, claims) from each Organization installation (independent identity, config, credentials, runtime data). Managed entities reject live mutation; deploy reconciles by full replacement while environment data follows separate rules.
@@ -44,7 +46,7 @@ Structural exclusions (rejected by validation, not convention): credential/token
 3. For each declared Connection: INSERT missing managed rows; UPDATE drifted managed rows to manifest values **iff** the row's `managed_by` matches this bundle (same bundle id); never INSERT credentials, never touch `executions`/`operations`/`usage_blocks` or any row with `managed_by = NULL` created outside install.
 4. Report a drift plan first (`--dry-run` lists create/update/skip); apply only on explicit invocation.
 
-Re-running an install is a no-op when nothing drifted. Interrupted activation restarts from scratch safely — there is no half-state by construction (no multi-row transaction spans D1 + Workflows; each row reconciles independently).
+Re-running converges for declared Connection values; the current installer still appends a ledger row. Restart-safe per-row reconciliation does **not** establish atomic visibility or absence of partial state. No cross-service transaction spans D1 + Workflows; satisfying the activation target below requires explicit implementation and interruption/race tests.
 
 ### 3. Owned vs loose: one flag, enforced in code
 
@@ -63,11 +65,9 @@ payloads are never deleted. Wrangnarök copies this shape with D1 means:
 
 ### 4. Activation and rollback are install operations
 
-Upstream keeps immutable deployment rows (hashes, pins, states) behind a mutable
-active pointer moved by compare-and-swap, with `conflicted`/`recovery_required`
-outcomes and rollback reusing the same CAS path; downgrades are refused unless
-forced; execution fail-closes with no active pointer. Wrangnarök adopts the
-semantics with D1 means, minus the Postgres/S3/Vite-compile plumbing:
+**Corrected upstream attribution:** at `3543c7e`, Solution deploy reconciles and compiles before the caller's database commit, then retries post-commit source/dist writes. Exhaustion raises `SolutionFinalizeIncomplete`; a later deploy/sync can heal (`api/src/services/solutions/deploy.py:301-325,427-433,456-511`). Independent V2 App deployment has a separate `Application.active_deployment_id` and deletes superseded compiled artifacts (`api/src/jobs/platform/application_deploy.py:103-149`). These are distinct lifecycles. The inspected Solution paths do not establish the previously asserted immutable-deployment/CAS/`conflicted`/`recovery_required` protocol.
+
+The following remain **Wrangnarök's local target guarantees**, not claims of current upstream implementation or of completeness in our v1 installer:
 
 - Upgrade = install a newer bundle version (reconcile, bump `bundle_installs.version`). Rollback = install the previous manifest (same code path, downgrades managed rows to recorded values). No separate rollback machinery in v1.
 - Each install writes an immutable install record (bundle id/version, manifest hash, resolved IDs); the install pointer moves only on full reconcile success, and a lost race surfaces `conflicted`, never silent overwrite. Downgrades are refused unless forced.

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-10
-- **Extends:** ADR 003 (Integrations and Connections), ADR 005 (secret storage, still Proposed), `docs/upstream-spec.md` auth rows
+- **Extends:** ADR 003 (Integrations and Connections), ADR 005 (provider-global v0 accepted; per-Organization envelope tripwire-gated), `docs/upstream-spec.md` auth rows
 - **Steward review requested** on the implementing PR (security-adjacent; Phase 3 gate unchanged).
 
 ## Context

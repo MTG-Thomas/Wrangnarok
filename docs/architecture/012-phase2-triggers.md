@@ -74,7 +74,9 @@ is insufficient before any Queue or Durable Object is earned — per
 AGENTS.md constraint 7, the primitive needs the requirement, not the
 other way around.
 
-### Overlap-skip: a tick never forks a second run for a live window
+### Same-window deduplication is not cross-window overlap policy
+
+**Audit correction (2026-09-11, [#132](https://github.com/MTG-Thomas/Wrangnarok/issues/132)):** the rules below suppress duplicate delivery of the same window only. Current upstream `api/src/jobs/schedulers/cron_scheduler.py:166-203` skips a new window while an earlier delivery for the same source remains active. A deterministic key for W does not prevent W+1 from overlapping W. The schedule implementation must test both cases and decide cross-window policy explicitly; this investigation still implements neither. Upstream enum alternatives do not establish working queue/parallel overlap modes.
 
 Schedule promotion derives the submit key deterministically from
 (schedule ID, window), so the existing idempotency protocol does the

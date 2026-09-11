@@ -1,6 +1,6 @@
 # ADR 003: Integrations and Connections
 
-Status: **Implemented** (per issue #75)
+Status: **Core contract implemented** (per issue #75). Illustrative schema/admin/OAuth surfaces below are not all implemented. The [2026-09-11 parity audit](../upstream-parity.md) distinguishes the subset from the remaining work.
 
 ## Context
 
@@ -71,7 +71,7 @@ The MVP resolution rule is deliberately strict:
 
 1. Resolve the requested Integration by stable ID/name.
 2. Resolve a Connection for exactly the current Organization.
-3. If none exists, fail with a structured `CONNECTION_NOT_CONFIGURED` error.
+3. If none exists and the Saga declared the Integration required, fail with structured `INTEGRATION_REQUIREMENT_UNSATISFIED` (424 semantics inside ExecutionHistory). Optional undeclared lookup returns `None` without throwing. ADR 010 and the implementation mapping below supersede the former uniform `CONNECTION_NOT_CONFIGURED` rule.
 
 There is **no implicit global credential fallback in the MVP**. Upstream supports org/global cascades, but explicit Organization isolation is safer and simpler for the experiment. Shared/default Connections may be introduced later only with explicit lookup and write-boundary semantics.
 
@@ -93,17 +93,9 @@ Do not require Saga authors to manipulate Connection records, tokens, D1 rows, o
 
 Cloudflare Worker secrets and Secrets Store are suitable for deployment/account-level secrets, but they are not by themselves a scalable per-Organization Connection store: Worker secrets are deployment bindings, while Secrets Store is account-level and currently limited in count.
 
-D1 is encrypted at rest, but D1 encryption alone does not make plaintext credential columns an acceptable application secret design. Before multi-tenant Connections ship, Wrangnarök must choose an application-level secret-storage scheme.
+D1 encryption at rest does not make plaintext credential columns acceptable. **ADR 005 v0 is accepted:** explicitly declared provider-global deployment credentials plus Organization-scoped non-secret Connection mappings. NinjaOne currently uses transient client-credentials tokens without persistence; echo has no credentials. Missing required org mappings still fail closed rather than invoking a generic global fallback.
 
-Proposed direction is now ADR 005 (per-Organization envelope encryption, Proposed — not yet approved for production use):
-
-- one deployment-level master encryption key (KEK) stored as a Worker secret;
-- per-Connection secret payload encrypted/decrypted inside the Worker with Web Crypto (AES-GCM envelope);
-- ciphertext, nonce, wrapped DEK, key version, and algorithm persisted in D1;
-- decrypted material exists only transiently inside server-side Worker/Workflow execution;
-- key rotation/versioning designed before declaring the format stable.
-
-This is **not yet approved for production use**. The MVP slice does not need tenant credentials; its demo Integration can use a mock endpoint with non-secret configuration.
+Per-Organization envelope encryption, token persistence, key lifecycle and rotation remain behind ADR 005's first genuinely per-tenant-secret/compliance tripwire. They are not requirements to replace the accepted v0 prematurely. Execution-scoped secret registration and universal substring scrubbing remain production-readiness gates under #110; selected sentinel tests and shaped results do not establish that mechanism. The audit also distinguishes actual Worker secret strings from the ADR's intended Secrets Store binding choice, which needs explicit reconciliation.
 
 ### OAuth
 
@@ -132,7 +124,7 @@ Token refresh must not be implemented independently in every Saga.
 - global/default Integration credential fallback;
 - provider-organization mapping enumeration;
 - cross-org mapping administration from ordinary workflow APIs;
-- Solution-declared Integration requirement failures;
+- full Solution install requirement resolution beyond the implemented Saga `requiredIntegrations` boundary;
 - OAuth scope override behavior.
 
 These remain specification fodder for later phases.
@@ -145,6 +137,6 @@ Per issue #75 (lanes A: PRs #80, #83, #85, #88):
 - Connection entity: typed `Connection` in `src/integrations/index.ts` (IDs plus non-secret `endpoint` only; secret material referenced transiently at execution time, never stored there), returned by `resolveConnection` in `src/executions.ts`.
 - Resolution: `resolveConnection` in `src/executions.ts` looks up exactly one row for the current Organization (`WHERE org_id=? AND integration_id=?`, never a global cascade, never cross-org); declared-but-missing fails loud with structured `424 INTEGRATION_REQUIREMENT_UNSATISFIED`; undeclared (optional) access resolves to `None` with no throw.
 - Declared requirements: mandatory `requiredIntegrations` field on `SagaDefinition` plus `CatalogEntry` in `src/saga.ts` (validated at startup, frozen; operational-policy keys rejected from source).
-- Secret-field declarations: `secretFields` on each `IntegrationDefinition` (`echo`: none; `ninjaone`: `clientSecret`); secret material never serialized through discovery, history, or Execution result APIs.
+- Secret-field declarations: `secretFields` on each `IntegrationDefinition` (`echo`: none; `ninjaone`: `clientSecret`), with selected output-shaping/sentinel tests. Universal output scrubbing remains the separate ADR 005/#110 mechanism gate.
 
-What stays Proposed/deferred (not implemented by this closeout): OAuth flows (authorization-code, client-credentials refresh coordination, scope overrides/subsets, token replacement lifecycle), per-Organization envelope encryption per ADR 005 (still Proposed, not production-approved), global/default credential fallback (explicitly denied in MVP: lookup is exactly one row for this Organization), provider-organization mapping enumeration, and cross-org mapping administration from ordinary workflow APIs.
+What stays deferred (not implemented by this closeout): OAuth authorization-code/refresh coordination/audience overrides/token replacement lifecycle, per-Organization envelope encryption behind ADR 005's tripwire, generic global/default credential fallback, provider-organization mapping enumeration and cross-org mapping administration. Provider-global v0 credentials are accepted, not a claim that these broader features or production gates are complete.

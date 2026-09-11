@@ -8,7 +8,7 @@ Wrangnarök needs a durable execution contract that belongs to the application r
 
 Upstream Bifrost provides several useful behavioral invariants:
 
-- workflow invocation is asynchronous and returns an execution ID;
+- asynchronous workflow invocation returns an execution ID; current upstream also supports synchronous/data-provider results;
 - execution summaries and full execution detail are separate surfaces;
 - executions retain caller/organization provenance and are authorization-scoped;
 - deferred/scheduled execution is a runtime concern, not workflow source identity;
@@ -16,7 +16,7 @@ Upstream Bifrost provides several useful behavioral invariants:
 - cancellation, timeout and retry are explicit semantics;
 - retry after ambiguous infrastructure loss is only safe for idempotent side effects.
 
-Upstream finding 14 (see `docs/upstream-spec.md`) adds hard constraints that drive this reconciliation:
+The following are **Wrangnarök safety choices**, retained from the reconciliation. The 2026-09-11 source audit corrected their earlier attribution to upstream (see `docs/upstream-spec.md` finding 14 and parity tracker [#132](https://github.com/MTG-Thomas/Wrangnarok/issues/132)). Current upstream sweeps some database Pending rows, its retry metadata is future-use, and the inspected paths do not establish the previously claimed universal attempt-token/broker-confirm protocol. Correcting that provenance does not relax local rules:
 
 - retry is OFF by default, engine-loss-only when on, plus an operator ceiling; business-error retry is never automatic;
 - `Pending` is published-but-unclaimed and is never swept; `Scheduled` is a durable pre-publish row distinct from `Pending`;
@@ -97,7 +97,7 @@ MVP slice Operation defaults:
 - stable step names per Saga version (e.g. `prepare-input-v1`, `echo-http-v1`); never reorder/rename persisted v1 steps;
 - stable `operation_id` per unit of work (e.g. `${executionId}-echo-http-v1`) passed as the outbound `Idempotency-Key` to the Integration Action; retries reuse the same ID;
 - serial, bounded fanout (cap 8 targets/iterations for the MVP slice);
-- step timeout 10 seconds; **retry gate (upstream finding 14): the `stepRetryLimit()` table resolves every step.do limit — Integration/vendor steps `retries: 0` unless destination-side idempotency is proven and an explicit policy exists; idempotent D1 checkpoint steps (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`, `timeout-mark-v1`) only may use `retries` up to the operator ceiling 2; every business/expected failure throws `NonRetryableError` so the engine never retries a non-idempotent mutation.** The former blanket `retries limit 2` on arbitrary steps is rejected for the same reason;
+- step timeout 10 seconds; **local retry gate: the `stepRetryLimit()` table resolves every step.do limit — Integration/vendor steps `retries: 0` unless destination-side idempotency is proven and an explicit policy exists; idempotent D1 checkpoint steps (`prepare-input-v1`, `persist-success-v1`, `persist-failure-v1`, `timeout-mark-v1`) only may use `retries` up to the code-defined ceiling 2; every business/expected failure throws `NonRetryableError` so the engine never retries a non-idempotent mutation.** The former blanket `retries limit 2` on arbitrary steps is rejected for the same reason. Persisted operator-editable policy is not implemented yet;
 - **no exactly-once external-side-effect guarantee:** a step may redeliver after a lost checkpoint. Integration Actions MUST enforce `operation_id` idempotency at the destination or refuse automatic retries for unsafe operations. The fixture echo Action is read-like (POST-echo, no external mutation) with `retries: 0`; future retryable mutations require destination-side idempotency and a deliberate policy.
 
 ### Invocation and creation protocol (D1 + Workflow instance)

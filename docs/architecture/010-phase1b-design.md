@@ -1,7 +1,6 @@
 # ADR 010: Phase 1b design for #58 — ctx, states, Connections, source boundary
 
-**Status:** Implemented per issue #75 (lane-A, PR #80). Section 1–4 decisions
-below are now code; the open questions record the picks the lane made.
+**Status:** Phase 1b core implemented per issue #75 (lane-A, PR #80). The 2026-09-11 audit corrects overbroad implementation claims below: source metadata exclusion is implemented, but persisted operator-editable runtime policy is not. See [parity tracker #132](https://github.com/MTG-Thomas/Wrangnarok/issues/132).
 
 ## 1. Organization ctx propagation
 
@@ -56,9 +55,11 @@ Stays denied in MVP: cross-org lookup from Sagas, admin cross-org reads from wor
 
 ## 4. Local dev without registration + source-vs-persisted boundary
 
-Fresh checkout + `npm run build:ui` once (Static Assets directory must exist or `wrangler dev` hard-fails) + `wrangler dev` on day one: static code catalog discovers Sagas (id/name/revision in source); local D1 migrations auto-apply; setup script seeds fixture principal (`default` org/user, ignored token file, never overwritten) and one exact-org fixture Connection (`http://127.0.0.1:8788/echo`); submit → run → history works with zero deploy/registration round-trip. Full loop proven in `docs/demo.md` (lane-A local verification, issue #75).
-Knob boundary — **source (identity/discovery):** saga id/name/revision, step names/order, integration id/action signatures, declared `required` list, `stepRetryLimit()` code table shape. **Persisted/API-managed (never in decorators):** timeouts (`VENDOR_TIMEOUT_MS`), schedules/due-times, retry ceilings/counts, access grants, Connection config/secrets, per-Execution saga snapshot.
-Boundary tests (workerd, real D1/Workflow bindings; vendor HTTP mocked): (a) source rename preserves Execution history/saga_id; (b) timeout value change needs no source edit; (c) declared-missing → 424 with single vendor call; (d) optional-missing → None with Succeeded; (e) cross-org read → 404; (f) stale-token checkpoint after cancel no-ops; (g) expired-window retry → 409 with no resurrection; (h) fresh-checkout seed script is idempotent and never overwrites token.
+Use the explicit sequence in `docs/demo.md`: install dependencies, create local fixture variables, apply local D1 migrations, seed fixture rows and build UI assets before local execution. `scripts/setup-local.mjs` creates `.dev.vars` and refuses overwrite; it does not apply migrations or seed Connections. The static catalog avoids a server registration/deployment round trip, but authors still add local source/catalog/bindings.
+
+**Implemented boundary:** Saga source carries identity/discovery and required Integration declarations; platform code still defines `stepRetryLimit()`, `VENDOR_TIMEOUT_MS` and the native ten-second step timeout. D1 persists Connection metadata and per-Execution snapshots. **Target, not implemented:** operator-managed timeout/retry policy, schedules/due-times and resource access grants. These remain outside Saga metadata even before their management APIs exist.
+
+Existing workerd coverage includes rename-preserved identity, declared-required versus optional-missing resolution, org/owner isolation, conditional post-cancel writes and expired-dispatch refusal. A missing required Connection is rejected before a vendor call. The prior claim that timeout values change without source edits was incorrect. Each pending policy/local-setup guarantee needs its own observable test rather than inheriting the Phase 1b completion stamp.
 
 ## Open questions (options, not decisions)
 
