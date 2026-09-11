@@ -45,6 +45,24 @@ afterEach(async () => {
   await reset();
 });
 
+it("emits a structured request log line without request detail", async () => {
+  const lines: string[] = [];
+  vi.spyOn(console, "log").mockImplementation((line: string) => {
+    lines.push(line);
+  });
+  const response = await worker.fetch(
+    new Request("http://local.test/api/sagas", { headers: { Authorization: `Bearer ${TOKEN}` } }),
+    bindings,
+  );
+  expect(response.status).toBe(200);
+  const line = lines.find((entry) => entry.startsWith("WRANGNAROK_REQUEST "));
+  expect(line).toBeDefined();
+  const logged = JSON.parse(line!.slice("WRANGNAROK_REQUEST ".length)) as Record<string, unknown>;
+  expect(logged).toMatchObject({ method: "GET", route: "GET /api/sagas", status: 200 });
+  expect(typeof logged.durationMs).toBe("number");
+  expect(JSON.stringify(logged)).not.toContain(TOKEN);
+});
+
 it("serves 404 for non-API routes when no assets binding exists", async () => {
   const response = await worker.fetch(new Request("http://local.test/"), {
     ...bindings,
