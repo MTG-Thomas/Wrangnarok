@@ -6,6 +6,10 @@ import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { clearAccessCertCache, verifyAccess } from "../src/access";
 import { Fault } from "../src/domain";
+import migration1 from "../migrations/0001_initial.sql?raw";
+import migration6 from "../migrations/0006_org_membership.sql?raw";
+import migration7 from "../migrations/0007_executions_org_fk.sql?raw";
+import seed from "../scripts/seed-local.sql?raw";
 
 const TEAM = "https://team.cloudflareaccess.com";
 const AUD = "test-aud-tag";
@@ -111,6 +115,28 @@ it("serves the catalog on a valid assertion without LAB configured", async () =>
   const bindings = { ...(env as unknown as Bindings), ...accessEnv };
   delete (bindings as Record<string, unknown>).LAB_ENABLED;
   delete (bindings as Record<string, unknown>).LAB_TOKEN;
+  // AUTH-01 (ADR 015): the membership gate covers Access identities too, so
+  // the allowlisted email needs a live membership before the catalog serves.
+  const db = (env as unknown as Bindings).DB;
+  await db.exec(migration1);
+  await db.exec(seed);
+  await db.exec(migration6);
+  await db.exec(migration7);
+  const stamp = new Date().toISOString();
+  await db
+    .prepare("INSERT INTO organizations(id,name,status,created_at,disabled_at) VALUES (?,'Access team','active',?,NULL)")
+    .bind(ORG.toLowerCase(), stamp)
+    .run();
+  await db
+    .prepare("INSERT INTO users(user_id,status,created_at) VALUES (?,'active',?)")
+    .bind(EMAIL.toLowerCase(), stamp)
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?, 'member','active','ordinary',?,?)",
+    )
+    .bind(ORG.toLowerCase(), EMAIL.toLowerCase(), stamp, stamp)
+    .run();
   const res = await worker.fetch(
     new Request("http://local.test/api/sagas", { headers: { "Cf-Access-Jwt-Assertion": token } }),
     bindings,

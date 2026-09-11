@@ -525,10 +525,44 @@ export async function setUserStatus(
  * creating user/org/membership rows when missing. Disabled orgs/users are
  * never resurrected here — failing closed preserves deactivation tests that
  * run against the same binding.
+ *
+ * Test databases built from older migrations predate the org tables entirely.
+ * Creating them here (CREATE TABLE IF NOT EXISTS, migration 0006 shape) keeps
+ * the pre-existing suite passing unmodified: the ADR-014 allowlist era never
+ * had these tables, and production always migrates them via
+ * `migrations_dir`, so absence only means a hand-built local/test database.
+ * Anything that is not the LAB fixture identity still fails closed with
+ * ORG_STORE_NOT_MIGRATED in resolveCaller/resolveUser below.
  */
 export async function ensureLabFixture(db: D1Database, orgId: string, userId: string): Promise<void> {
   const org = parseOrgId(orgId);
   const user = parseUserId(userId);
+  // Bootstrap the migration-0006 tables when a hand-built database predates
+  // them (older-migration test databases, or none at all). The organizations
+  // CREATE carries the migrated shape (0001 columns plus the 0006 additions)
+  // so a missing table starts migrated; the ALTERs then only fill gaps on
+  // pre-0006 tables and fail harmlessly everywhere else. Column lists mirror
+  // migrations/0001_initial.sql plus migrations/0006_org_membership.sql. Each
+  // statement is independent: ALTERs fail on already-migrated databases,
+  // CREATEs are IF NOT EXISTS, and D1 applies exec batches statement by
+  // statement, so failures must never abort the survivors.
+  for (const ddl of [
+    "CREATE TABLE IF NOT EXISTS organizations(id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z', disabled_at TEXT)",
+    "ALTER TABLE organizations ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+    "ALTER TABLE organizations ADD COLUMN created_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'",
+    "ALTER TABLE organizations ADD COLUMN disabled_at TEXT",
+    "CREATE TABLE IF NOT EXISTS users(user_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, disabled_at TEXT)",
+    "CREATE TABLE IF NOT EXISTS org_memberships(org_id TEXT NOT NULL REFERENCES organizations(id), user_id TEXT NOT NULL REFERENCES users(user_id), role TEXT NOT NULL DEFAULT 'member', status TEXT NOT NULL DEFAULT 'invited', kind TEXT NOT NULL DEFAULT 'ordinary', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(org_id, user_id))",
+    "CREATE INDEX IF NOT EXISTS org_memberships_user ON org_memberships(user_id, status)",
+    "CREATE INDEX IF NOT EXISTS org_memberships_org ON org_memberships(org_id, status)",
+  ]) {
+    try {
+      await db.exec(ddl);
+    } catch {
+      // Already-migrated databases reject the duplicate-column ALTERs; the
+      // rows below only need the tables to exist.
+    }
+  }
   const existing = await getOrg(db, org);
   if (existing && existing.status !== "active") return;
   const userRow = await db.prepare("SELECT status FROM users WHERE user_id=?").bind(user).first<UserRow>();

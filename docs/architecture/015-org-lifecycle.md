@@ -123,7 +123,9 @@ is ready. This is recorded here per the acceptance requirement.
   (`/api/orgs`, `/api/users`), or the CLI (`scripts/wrangnarok.mjs orgs/members`): no redeploy, no env edit.
 - The ADR-014 allowlist becomes a bootstrap fallback: with migration 0006 applied, verified Access identities must
   hold a live membership (or instance admin) or they fail closed. LAB fixture callers in local/CI are auto-seeded
-  into the fixture org so the existing suite keeps passing unmodified.
+  into the fixture org so the existing suite keeps passing unmodified. The fixture bootstrap (`ensureLabFixture`)
+  also creates the migration-0006 tables when a hand-built test database predates them; anything that is not the
+  LAB fixture identity still fails closed with `ORG_STORE_NOT_MIGRATED` on such databases.
 - Free-tier fit: three small D1 tables plus per-request point reads inside the existing request budget; no new
   billable primitive.
 - Audit: lifecycle mutations are ordinary admin API calls with machine-readable codes; durable audit trails are

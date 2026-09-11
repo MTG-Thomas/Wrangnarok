@@ -394,8 +394,10 @@ it("fails closed without migration 0006 and refuses cross-org elevation", async 
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(seed);
   // The old organizations row predates the status column; SELECT * still
-  // works and the gate proceeds to the missing users table.
-  expect(await call("/api/sagas", "GET", USER_ADMIN)).toMatchObject({
+  // works and the gate proceeds to the missing users table. A non-fixture
+  // caller pins the fail-closed 503: the LAB fixture bootstrap (which runs
+  // only for the configured fixture identity) must not mask a missing store.
+  expect(await call("/api/sagas", "GET", USER_ORDINARY)).toMatchObject({
     status: 503,
     body: { error: { code: "ORG_STORE_NOT_MIGRATED" } },
   });
