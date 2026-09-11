@@ -23,7 +23,13 @@ import { join } from "node:path";
 // fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
 // shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
 // 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 145 * 1024;
+// 2026-09-11 (TABLE-02 query/count/batch slice, issue #154): 180 KiB. The
+// author-Tables surface (16 routes plus the tables domain: declarations,
+// per-action grants, bounded keyset queries, scoped counts, all-or-denied
+// batches) plus the SDK contract entries stacks on the AUTH-01 surface with
+// the same deliberate feature headroom, not dependency bloat: package.json
+// is unchanged versus main. Combined measures ~174 KiB.
+const BUDGET_BYTES = 180 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
