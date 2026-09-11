@@ -28,6 +28,21 @@ The baseline PR pipeline is:
 
 External Integration/vendor behavior is mocked or served by deterministic fixtures. Cloudflare services are locally emulated wherever Cloudflare provides supported local bindings.
 
+### Merge queue: speculative batching
+
+Mergify owns merging into `main` (native GitHub merge queue is unavailable to
+personal-account repos). Branch protection requires the `Validate` check but
+does NOT require branches to be up to date (`strict: false`). The queue runs
+up to 3 speculative checks in parallel (`max_parallel_checks: 3`,
+`batch_size: 3`): each queued PR is tested against predicted main (main +
+PRs ahead of it), so merging PR1 never invalidates PR2 behind it. What merges
+is exactly what was tested — no check-then-merge race.
+
+Rationale: under the old strict-plus-serial setup, every merge invalidated
+each queued PR behind it, costing the tail PR one full update + CI cycle per
+PR ahead of it. Speculative batching removes that serial tax without
+weakening the gate (identical queue/merge conditions: `check-success=Validate`).
+
 ### Deployment is separate from validation
 
 Only trusted deployment workflows receive Cloudflare credentials. Deployment credentials MUST be scoped API tokens rather than global account credentials where Cloudflare supports the required permissions.
