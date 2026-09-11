@@ -2,6 +2,7 @@
 import { authenticate } from "./auth";
 import type { Bindings } from "./bindings";
 import { boundedJson, canTransition, Fault, parseHistoryQuery, parseKey, parseSubmission } from "./domain";
+import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import { SAGA_CATALOG } from "./sagas";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import { logRequest } from "./usage";
@@ -64,6 +65,50 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       const accepted = await submit(env, caller, key, saga, input);
       // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
       return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
+    }
+    const formDetail = /^\/api\/forms\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (formDetail?.[1] && request.method === "GET") {
+      // Form declaration read (FORM-01): persisted fields for this
+      // Organization only. Unknown or foreign names answer 404, never a leak.
+      const name = formDetail[1];
+      if (!FORM_NAME.test(name)) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const def = await loadForm(env.DB, caller.orgId, name);
+      if (!def) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      return json({
+        form: {
+          id: def.id,
+          name: def.name,
+          sagaId: def.sagaId,
+          fields: def.fields.map((field) => ({
+            name: field.name,
+            type: field.type,
+            required: field.required,
+            maxLength: field.maxLength,
+          })),
+        },
+      });
+    }
+    const formSubmit = /^\/api\/forms\/([a-z0-9][a-z0-9-]{0,63})\/submit$/.exec(url.pathname);
+    if (formSubmit?.[1] && request.method === "POST") {
+      // Form-to-Saga binding (FORM-01): server validates the submission
+      // against the persisted declaration (422 + per-field details on
+      // failure), then submits the bound Saga input down the standard
+      // Execution path. The submit gate is authoritative; no renderer,
+      // provider, or publication behavior lives here.
+      const name = formSubmit[1];
+      if (!FORM_NAME.test(name)) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const key = parseKey(request.headers.get("Idempotency-Key"));
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      const def = await loadForm(env.DB, caller.orgId, name);
+      if (!def) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      const { saga, input } = bindFormInput(def, await boundedJson(request.body));
+      const accepted = await submit(env, caller, key, saga, input);
+      // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
+      return json({ form: name, ...accepted }, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
     }
     if (url.pathname === "/api/executions" && request.method === "GET") {
       // ExecutionHistory querying (Phase 2): status/sagaId filters plus
@@ -157,6 +202,13 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const headers: Record<string, string> = {};
     if (fault.status === 401) headers["WWW-Authenticate"] = "Bearer";
     if (fault.status === 503) headers["Retry-After"] = "5";
-    return json({ error: { code: fault.code, message: fault.message } }, fault.status, headers);
+    // FORM-01 details channel: the 422 form-validation Fault carries its
+    // per-field failure list here. No other Fault sets details, and the
+    // client ignores unknown keys, so existing bodies are unchanged.
+    const body =
+      fault.details === undefined
+        ? { code: fault.code, message: fault.message }
+        : { code: fault.code, message: fault.message, details: fault.details };
+    return json({ error: body }, fault.status, headers);
   }
 }

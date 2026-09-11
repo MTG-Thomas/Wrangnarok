@@ -169,11 +169,20 @@ export interface SafeError {
   message: string;
 }
 
+/** One structured validation failure: names the offending field plus a
+ * machine-readable code. Whole-body errors use an empty field name. */
+export interface FieldFailure {
+  readonly field: string;
+  readonly code: string;
+  readonly message: string;
+}
+
 export class Fault extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = "Fault";
