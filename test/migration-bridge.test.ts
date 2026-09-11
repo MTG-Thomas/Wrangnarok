@@ -155,5 +155,88 @@ describe("workspace-to-bundle bridge (issue #116)", () => {
     expect(() => convertWorkspaceToBundle({ slug: "s", name: "S" }, opts())).toThrow(
       expect.objectContaining({ code: "NO_CONVERTIBLE_SAGAS" }),
     );
+    // Every guard branch refuses its own malformed shape: bad bundle IDs,
+    // non-list sections, bad UUIDs, unmapped pins, credential keys, empty
+    // values, bad endpoints, and non-string secret lists.
+    const badId = { ...opts(), bundleId: "nope" };
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S" }, badId)).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", workflows: {} }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", workflows: [{ id: "nope" }] }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() =>
+      convertWorkspaceToBundle(
+        { slug: "s", name: "S", workflows: [{ id: WORKFLOW_UUID }], configs: [], connections: [] },
+        { ...opts(), sagas: { [WORKFLOW_UUID]: { id: "nope", revision: "" } } },
+      ),
+    ).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE" }));
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", configs: {} }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", configs: [{ key: "" }] }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", configs: [{ key: "apiToken" }] }, opts())).toThrow(
+      expect.objectContaining({ code: "CREDENTIAL_IN_MANIFEST" }),
+    );
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", configs: [{ key: "k", value: 7 }] }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", connections: {} }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", connections: [{}] }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
+    expect(() =>
+      convertWorkspaceToBundle(
+        { slug: "s", name: "S", connections: [{ integrationName: "echo" }] },
+        { ...opts(), integrations: { echo: { id: "nope", org: "d", endpoint: "e", secretsRequired: [] } } },
+      ),
+    ).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE" }));
+    expect(() =>
+      convertWorkspaceToBundle(
+        { slug: "s", name: "S", connections: [{ integrationName: "echo" }] },
+        { ...opts(), integrations: { echo: { id: ECHO_INTEGRATION_ID, org: "", endpoint: "e", secretsRequired: [] } } },
+      ),
+    ).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE" }));
+    expect(() =>
+      convertWorkspaceToBundle(
+        { slug: "s", name: "S", connections: [{ integrationName: "echo" }] },
+        {
+          ...opts(),
+          integrations: { echo: { id: ECHO_INTEGRATION_ID, org: "d", endpoint: "", secretsRequired: [] } },
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE" }));
+    expect(() =>
+      convertWorkspaceToBundle(
+        { slug: "s", name: "S", connections: [{ integrationName: "echo" }] },
+        {
+          ...opts(),
+          integrations: {
+            echo: { id: ECHO_INTEGRATION_ID, org: "d", endpoint: "https://x/token=1", secretsRequired: [] },
+          },
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "CREDENTIAL_IN_MANIFEST" }));
+    expect(() =>
+      convertWorkspaceToBundle(
+        { slug: "s", name: "S", connections: [{ integrationName: "echo" }] },
+        {
+          ...opts(),
+          integrations: {
+            echo: { id: ECHO_INTEGRATION_ID, org: "d", endpoint: "e", secretsRequired: [7] as unknown as string[] },
+          },
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: "INVALID_WORKSPACE" }));
+    expect(() => convertWorkspaceToBundle({ slug: "s", name: "S", extraEntities: [] }, opts())).toThrow(
+      expect.objectContaining({ code: "INVALID_WORKSPACE" }),
+    );
   });
 });

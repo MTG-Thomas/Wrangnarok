@@ -12,6 +12,7 @@ import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration7 from "../migrations/0007_files.sql?raw";
+import migrationOrg from "../migrations/0007_org_membership.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);
@@ -84,6 +85,21 @@ async function uploadRoundtrip(
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migrationOrg);
+  // AUTH-01 membership gate: the LAB fixture identity bootstraps to admin
+  // of ORG inside authenticate on first use. OTHER_USER holds an ordinary
+  // membership so file-policy denials prove file policy, not org
+  // strangerhood. OTHER_ORG stays unknown: cross-org reads answer 404.
+  const stamp = new Date().toISOString();
+  await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?)").bind(ORG, "Local demo").run();
+  await bindings.DB.prepare("INSERT INTO users(user_id,status,created_at) VALUES (?,'active',?)")
+    .bind(OTHER_USER, stamp)
+    .run();
+  await bindings.DB.prepare(
+    "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+  )
+    .bind(ORG, OTHER_USER, "member", "active", "ordinary", stamp, stamp)
+    .run();
 });
 
 afterEach(async () => {

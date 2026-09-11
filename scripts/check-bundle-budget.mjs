@@ -17,13 +17,25 @@ import { join } from "node:path";
 // module (src/secrets.ts with scrub call sites, no new dependencies) measure
 // ~114 KiB combined. Same deliberate feature headroom as the 110 KiB raise,
 // not dependency bloat: package.json is unchanged versus main.
-// 2026-09-11 (FILE-01, issue #157): 165 KiB. The managed-files surface (14
+// 2026-09-11 (AUTH-01, issue #142): 145 KiB. The Organization and user
+// lifecycle surface (src/orgs.ts: membership gate on every /api/* request,
+// 9 admin routes plus the org history list, cascading-delete preview, LAB
+// fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
+// shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
+// 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
+// 2026-09-11 (TABLE-02 query/count/batch slice, issue #154): 180 KiB. The
+// author-Tables surface (16 routes plus the tables domain: declarations,
+// per-action grants, bounded keyset queries, scoped counts, all-or-denied
+// batches) plus the SDK contract entries stacks on the AUTH-01 surface with
+// the same deliberate feature headroom, not dependency bloat: package.json
+// is unchanged versus main. Combined measures ~174 KiB.
+// 2026-09-11 (FILE-01, issue #157): 225 KiB. The managed-files surface (14
 // routes plus the files domain: locations, policies, capabilities,
 // finalize verification, versioned mutation, structural listing, plus the
-// SDK descriptor additions) measures ~154 KiB against a 114 KiB baseline.
-// Same deliberate feature headroom as prior raises, not dependency bloat:
-// package.json is unchanged versus main.
-const BUDGET_BYTES = 165 * 1024;
+// SDK descriptor additions) stacks on the TABLE-02 surface with the same
+// deliberate feature headroom, not dependency bloat: package.json is
+// unchanged versus main. Combined measures ~214 KiB.
+const BUDGET_BYTES = 225 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

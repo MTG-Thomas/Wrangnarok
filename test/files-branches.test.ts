@@ -30,24 +30,26 @@ import {
 } from "../src/files";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration7 from "../migrations/0007_files.sql?raw";
+import migrationOrg from "../migrations/0007_org_membership.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);
 const ORG = "00000000-0000-4000-8000-000000000001";
 const OTHER = "00000000-0000-4000-8000-000000000009";
+const OTHER_USER = "00000000-0000-4000-8000-000000000003";
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json", ...extra };
 }
 
-function call(path: string, method = "GET", body?: unknown, orgId = ORG) {
+function call(path: string, method = "GET", body?: unknown, orgId = ORG, userId?: string) {
   return worker.fetch(
     new Request(`http://local.test${path}`, {
       method,
       headers: headers(),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
-    { ...bindings, LAB_ORG_ID: orgId },
+    { ...bindings, LAB_ORG_ID: orgId, ...(userId ? { LAB_USER_ID: userId } : {}) },
   );
 }
 
@@ -73,6 +75,21 @@ async function sha256Of(text: string): Promise<string> {
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migrationOrg);
+  // AUTH-01 membership gate: the LAB fixture identity bootstraps to admin
+  // of ORG inside authenticate on first use. OTHER_USER holds an ordinary
+  // membership so file-policy denials prove file policy, not org
+  // strangerhood. OTHER_ORG stays unknown: cross-org reads answer 404.
+  const stamp = new Date().toISOString();
+  await bindings.DB.prepare("INSERT INTO organizations(id,name) VALUES (?,?)").bind(ORG, "Local demo").run();
+  await bindings.DB.prepare("INSERT INTO users(user_id,status,created_at) VALUES (?,'active',?)")
+    .bind(OTHER_USER, stamp)
+    .run();
+  await bindings.DB.prepare(
+    "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+  )
+    .bind(ORG, OTHER_USER, "member", "active", "ordinary", stamp, stamp)
+    .run();
 });
 
 afterEach(async () => {
@@ -472,8 +489,8 @@ it("lists fail-closed and paginates with prefix and cursor", async () => {
   expect((await call("/api/files?location=ls")).status).toBe(404);
   await call("/api/file-policies", "POST", { location: "ls", action: "read" });
   expect(await call("/api/files?location=ls")).toMatchObject({ status: 200 });
-  // Seed three files, then page with limit 2 plus a prefix slice.
-  for (const name of ["c.txt", "b.txt", "a.txt"]) {
+  // Seed two files, then page with limit 1 plus a prefix slice.
+  for (const name of ["b.txt", "a.txt"]) {
     const slot = await call("/api/files/uploads", "POST", { entries: [{ location: "ls", path: name }] });
     const { entries } = (await slot.json()) as { entries: { token: string }[] };
     const bytes = new TextEncoder().encode(`bytes-${name}`);
@@ -495,13 +512,13 @@ it("lists fail-closed and paginates with prefix and cursor", async () => {
     });
     expect(finalize.status).toBe(200);
   }
-  const page1 = (await (await call("/api/files?location=ls&limit=2")).json()) as {
+  const page1 = (await (await call("/api/files?location=ls&limit=1")).json()) as {
     files: { path: string }[];
     nextCursor: string | null;
   };
-  expect(page1.files).toHaveLength(2);
+  expect(page1.files).toHaveLength(1);
   expect(typeof page1.nextCursor).toBe("string");
-  const page2 = (await (await call(`/api/files?location=ls&limit=2&cursor=${page1.nextCursor}`)).json()) as {
+  const page2 = (await (await call(`/api/files?location=ls&limit=1&cursor=${page1.nextCursor}`)).json()) as {
     files: { path: string }[];
     nextCursor: string | null;
   };

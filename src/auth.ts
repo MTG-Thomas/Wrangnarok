@@ -2,11 +2,17 @@
 import { Fault, hash, UUID } from "./domain";
 import type { Principal } from "./domain";
 import { verifyAccess, type AccessEnv } from "./access";
+import { ensureLabFixture } from "./orgs";
 export interface LabAuth {
   LAB_ENABLED?: string;
   LAB_TOKEN?: string;
   LAB_ORG_ID?: string;
   LAB_USER_ID?: string;
+  DB?: D1Database;
+  /** Test hook: the configured fixture identity. Swapped callers override
+   * LAB_USER_ID per request; this preserves the original for the bootstrap
+   * comparison. Unset in production paths (same as LAB_USER_ID). */
+  LAB_FIXTURE_USER_ID?: string;
 }
 /** Local fixture only. Organization and user never come from request headers or JSON.
  * A present Cf-Access-Jwt-Assertion routes exclusively to Access verification
@@ -31,5 +37,22 @@ export async function authenticate(request: Request, env: LabAuth & AccessEnv): 
   let difference = 0;
   for (let i = 0; i < expected.length; i++) difference |= actual.charCodeAt(i) ^ expected.charCodeAt(i);
   if (difference !== 0) throw new Fault(401, "UNAUTHORIZED", "Unauthorized.");
-  return { userId: env.LAB_USER_ID.toLowerCase(), orgId: env.LAB_ORG_ID.toLowerCase() };
+  const principal = { userId: env.LAB_USER_ID.toLowerCase(), orgId: env.LAB_ORG_ID.toLowerCase() };
+  // Local/CI bootstrap: only the configured fixture identity gains admin
+  // membership in the fixture org, so the existing suite passes unmodified
+  // against the membership-gated routes. Swapped LAB_USER_ID identities used
+  // by tests bootstrap nothing — they stay strangers until invited, which is
+  // exactly what the lifecycle tests pin. LAB_FIXTURE_USER_ID preserves the
+  // configured identity when tests override LAB_USER_ID per caller.
+  // Never resurrects disabled orgs/users (fail closed).
+  const fixtureUser = (env.LAB_FIXTURE_USER_ID ?? env.LAB_USER_ID ?? "").toLowerCase();
+  if (env.DB && fixtureUser && principal.userId === fixtureUser) {
+    try {
+      await ensureLabFixture(env.DB, principal.orgId, principal.userId);
+    } catch {
+      // Pre-migration databases (no users table): leave auth working, the
+      // membership gate answers 503 with ORG_STORE_NOT_MIGRATED.
+    }
+  }
+  return principal;
 }
