@@ -10,6 +10,7 @@ import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
+import { testConnection } from "../src/connections";
 import { ECHO_INTEGRATION_ID, NINJA_INTEGRATION_ID } from "../src/domain";
 import { buildOrgCtx } from "../src/saga";
 import { resolveConnection } from "../src/executions";
@@ -22,7 +23,7 @@ import migration5 from "../migrations/0005_forms.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
 import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
-import migration9 from "../migrations/0009_connection_admin.sql?raw";
+import migration9 from "../migrations/0011_connection_admin.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -381,5 +382,160 @@ describe("Connection redaction (CON-01)", () => {
     );
     // The echo-back of the operator label is scrubbed before send.
     expect((await update.text()).replaceAll("[REDACTED]", "")).not.toContain(SECRET_SENTINEL);
+  });
+});
+
+describe("Connection management branches (CON-01 coverage)", () => {
+  const GHOST = "00000000-0000-4000-8000-000000000000";
+
+  it("rejects malformed and unknown Integration ids on every route", async () => {
+    // Non-UUID ids match no route matcher: the gray-out answers 501
+    // UNIMPLEMENTED, never a leak and never a fake 404 from this surface.
+    for (const [path, method, body] of [
+      ["/api/connections/not-a-uuid", "GET", undefined],
+      ["/api/connections/not-a-uuid", "PUT", {}],
+      ["/api/connections/not-a-uuid", "DELETE", undefined],
+      ["/api/connections/not-a-uuid/test", "POST", {}],
+    ] as [string, string, unknown?][]) {
+      const response = await worker.fetch(call(path, method, body), bindings);
+      expect(response.status).toBe(501);
+      expect(await response.json()).toMatchObject({ error: { code: "UNIMPLEMENTED" } });
+    }
+    // The testConnection format arm (unreachable via the UUID-shaped route
+    // matcher) answers UNKNOWN_INTEGRATION without touching D1.
+    const malformed = await testConnection(bindings.DB, { orgId: ORG, userId: USER }, "not-a-uuid", bindings);
+    expect(malformed).toMatchObject({ ok: false, code: "UNKNOWN_INTEGRATION" });
+    // Well-formed but unregistered UUIDs take the same code through the
+    // registry arm (create/get/update/delete/test).
+    const ghostBody = { integrationId: GHOST, config: {} };
+    expect((await worker.fetch(call("/api/connections", "POST", ghostBody), bindings)).status).toBe(404);
+    expect((await worker.fetch(call(`/api/connections/${GHOST}`, "GET"), bindings)).status).toBe(404);
+    expect((await worker.fetch(call(`/api/connections/${GHOST}`, "PUT", {}), bindings)).status).toBe(404);
+    expect((await worker.fetch(call(`/api/connections/${GHOST}`, "DELETE"), bindings)).status).toBe(404);
+    const ghostTest = await worker.fetch(call(`/api/connections/${GHOST}/test`, "POST", {}), bindings);
+    expect(ghostTest.status).toBe(404);
+    expect(await ghostTest.json()).toMatchObject({ test: { ok: false, code: "UNKNOWN_INTEGRATION" } });
+    // POST without an integrationId string fails before the registry.
+    const noId = await worker.fetch(call("/api/connections", "POST", { config: {} }), bindings);
+    expect(noId.status).toBe(400);
+    expect(await noId.json()).toMatchObject({ error: { code: "UNKNOWN_INTEGRATION" } });
+  });
+
+  it("404s missing mappings on get/update/delete and requires config on create", async () => {
+    expect((await worker.fetch(call(`/api/connections/${ECHO_INTEGRATION_ID}`, "GET"), bindings)).status).toBe(404);
+    expect((await worker.fetch(call(`/api/connections/${ECHO_INTEGRATION_ID}`, "PUT", {}), bindings)).status).toBe(404);
+    expect((await worker.fetch(call(`/api/connections/${ECHO_INTEGRATION_ID}`, "DELETE"), bindings)).status).toBe(404);
+    const noConfig = await worker.fetch(
+      call("/api/connections", "POST", { integrationId: ECHO_INTEGRATION_ID }),
+      bindings,
+    );
+    expect(noConfig.status).toBe(400);
+    expect(await noConfig.json()).toMatchObject({ error: { code: "CONNECTION_SCHEMA_INVALID" } });
+  });
+
+  it("rejects bad displayName and enabled values on create and update", async () => {
+    const base = { integrationId: ECHO_INTEGRATION_ID, config: {} };
+    for (const displayName of ["", "x".repeat(129), 42]) {
+      const response = await worker.fetch(call("/api/connections", "POST", { ...base, displayName }), bindings);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "INVALID_CONNECTION" } });
+    }
+    for (const enabled of ["false", 1, null]) {
+      const response = await worker.fetch(call("/api/connections", "POST", { ...base, enabled }), bindings);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "INVALID_CONNECTION" } });
+    }
+    // Null displayName clears back to null through the null arm.
+    const created = await worker.fetch(call("/api/connections", "POST", { ...base, displayName: "Fixture" }), bindings);
+    expect(created.status).toBe(201);
+    const cleared = await worker.fetch(
+      call(`/api/connections/${ECHO_INTEGRATION_ID}`, "PUT", { displayName: null }),
+      bindings,
+    );
+    expect(await cleared.json()).toMatchObject({ connection: { displayName: null } });
+    const badUpdate = await worker.fetch(
+      call(`/api/connections/${ECHO_INTEGRATION_ID}`, "PUT", { displayName: "", enabled: "yes" }),
+      bindings,
+    );
+    expect(badUpdate.status).toBe(400);
+    expect(await badUpdate.json()).toMatchObject({ error: { code: "INVALID_CONNECTION" } });
+  });
+
+  it("updates config and displayName through the merge arm", async () => {
+    const created = await worker.fetch(
+      call("/api/connections", "POST", { integrationId: ECHO_INTEGRATION_ID, config: {} }),
+      bindings,
+    );
+    expect(created.status).toBe(201);
+    // Explicit config merges over the persisted endpoint; displayName sets.
+    const updated = await worker.fetch(
+      call(`/api/connections/${ECHO_INTEGRATION_ID}`, "PUT", {
+        config: { endpoint: "http://127.0.0.1:8788/echo" },
+        displayName: "Renamed",
+        enabled: true,
+      }),
+      bindings,
+    );
+    expect(await updated.json()).toMatchObject({
+      connection: { displayName: "Renamed", endpoint: "http://127.0.0.1:8788/echo", enabled: true },
+    });
+    // Unknown config keys fail through the merged validation arm.
+    const unknown = await worker.fetch(
+      call(`/api/connections/${ECHO_INTEGRATION_ID}`, "PUT", {
+        config: { endpoint: "http://127.0.0.1:8788/echo", bogus: "x" },
+      }),
+      bindings,
+    );
+    expect(unknown.status).toBe(400);
+    expect(await unknown.json()).toMatchObject({ error: { code: "CONNECTION_SCHEMA_INVALID" } });
+  });
+
+  it("skips stale rows for unknown Integrations in the list", async () => {
+    await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
+      .bind("00000000-0000-4000-8000-000000000110", ORG, GHOST, "https://stale.invalid")
+      .run();
+    const listed = await worker.fetch(call("/api/connections"), bindings);
+    expect(await listed.json()).toEqual({ connections: [] });
+  });
+
+  it("fails the echo probe on non-ok responses and transport throws", async () => {
+    await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
+      .bind("00000000-0000-4000-8000-000000000111", ORG, ECHO_INTEGRATION_ID, "http://127.0.0.1:8788/echo")
+      .run();
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("down", { status: 503 }));
+    const failed = await worker.fetch(call(`/api/connections/${ECHO_INTEGRATION_ID}/test`, "POST", {}), bindings);
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toMatchObject({ test: { ok: false, code: "CONNECTION_TEST_FAILED" } });
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("boom"));
+    const threw = await worker.fetch(call(`/api/connections/${ECHO_INTEGRATION_ID}/test`, "POST", {}), bindings);
+    expect(threw.status).toBe(502);
+    expect(await threw.json()).toMatchObject({ test: { ok: false, code: "CONNECTION_TEST_FAILED" } });
+  });
+
+  it("fails the ninja probe on 5xx and on transport throws", async () => {
+    await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
+      .bind("00000000-0000-4000-8000-000000000112", ORG, NINJA_INTEGRATION_ID, "https://probe.ninja.invalid/api")
+      .run();
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("down", { status: 502 }));
+    const failed = await worker.fetch(call(`/api/connections/${NINJA_INTEGRATION_ID}/test`, "POST", {}), bindings);
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toMatchObject({ test: { ok: false, code: "CONNECTION_TEST_FAILED" } });
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("boom"));
+    const threw = await worker.fetch(call(`/api/connections/${NINJA_INTEGRATION_ID}/test`, "POST", {}), bindings);
+    expect(threw.status).toBe(502);
+    expect(await threw.json()).toMatchObject({ test: { ok: false, code: "CONNECTION_TEST_FAILED" } });
+  });
+
+  it("tests with a non-string deployment credential present", async () => {
+    await bindings.DB.prepare("INSERT INTO connections(id,org_id,integration_id,endpoint) VALUES (?,?,?,?)")
+      .bind("00000000-0000-4000-8000-000000000113", ORG, NINJA_INTEGRATION_ID, "https://probe.ninja.invalid/api")
+      .run();
+    // A non-string binding value is not a configured credential: fail loud.
+    const bad = await worker.fetch(call(`/api/connections/${NINJA_INTEGRATION_ID}/test`, "POST", {}), {
+      ...bindings,
+      NINJA_CLIENT_SECRET: 42 as unknown as string,
+    });
+    expect(bad.status).toBe(502);
+    expect(await bad.json()).toMatchObject({ test: { ok: false, code: "SECRET_NOT_CONFIGURED" } });
   });
 });
