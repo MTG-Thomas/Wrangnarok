@@ -170,14 +170,19 @@ describe("table parsers fail closed", () => {
     expect(query({ filter: JSON.stringify({ status: "open" }), limit: "10" }).filter).toEqual({ status: "open" });
   });
 
-  it("rejects malformed rows, hidden tables, and unknown rows", async () => {
-    const appId = await createApp("row-arms", "row-arms");
+  async function seedRowArms(name: string, slug: string): Promise<string> {
+    const appId = await createApp(name, slug);
     await call(`/api/apps/${appId}/tables`, "POST", { name: "orders" });
     await call(`/api/apps/${appId}/tables`, "POST", { name: "vault", visibility: "hidden" });
     await call(`/api/apps/${appId}/grants`, "POST", { kind: "table", ref: "orders", permission: "write" });
     await call(`/api/apps/${appId}/grants`, "POST", { kind: "table", ref: "orders", permission: "read" });
     await call(`/api/apps/${appId}/grants`, "POST", { kind: "table", ref: "vault", permission: "read" });
     await call(`/api/apps/${appId}/grants`, "POST", { kind: "table", ref: "vault", permission: "write" });
+    return appId;
+  }
+
+  it("rejects malformed row bodies", async () => {
+    const appId = await seedRowArms("row-bodies", "row-bodies");
     await expectCode(
       await call(`/api/apps/${appId}/runtime/tables/orders/rows`, "POST", { data: [] }),
       400,
@@ -203,6 +208,10 @@ describe("table parsers fail closed", () => {
       400,
       "INVALID_TABLE_ROW",
     );
+  });
+
+  it("keeps hidden tables out of row write paths", async () => {
+    const appId = await seedRowArms("row-hidden", "row-hidden");
     await expectCode(
       await call(`/api/apps/${appId}/runtime/tables/vault/rows`, "POST", { data: { status: "x" } }),
       404,
@@ -219,6 +228,11 @@ describe("table parsers fail closed", () => {
       404,
       "APP_TABLE_NOT_FOUND",
     );
+    await expectCode(await call(`/api/apps/${appId}/runtime/tables/vault/rows`, "GET"), 404, "APP_TABLE_NOT_FOUND");
+  });
+
+  it("rejects malformed row ids and unknown rows", async () => {
+    const appId = await seedRowArms("row-ids", "row-ids");
     await expectCode(
       await call(`/api/apps/${appId}/runtime/tables/orders/rows/bad-row-id`, "PATCH", { data: { status: "x" } }),
       400,
@@ -248,7 +262,10 @@ describe("table parsers fail closed", () => {
       404,
       "APP_ROW_NOT_FOUND",
     );
-    await expectCode(await call(`/api/apps/${appId}/runtime/tables/vault/rows`, "GET"), 404, "APP_TABLE_NOT_FOUND");
+  });
+
+  it("rejects stale table cursors", async () => {
+    const appId = await seedRowArms("row-cursor", "row-cursor");
     await expectCode(
       await call(
         `/api/apps/${appId}/runtime/tables/orders/rows?${new URLSearchParams({ cursor: "44444444-4444-4444-8444-444444444444" })}`,
