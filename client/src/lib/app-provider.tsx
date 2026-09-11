@@ -113,7 +113,6 @@ export function AppRuntimeProvider({
       }),
     // Token rotation flows through onRefreshToken, not through re-created
     // clients: re-creating per render would drop handshake state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [baseUrl, appId, fetchImpl],
   );
   void client;
@@ -253,7 +252,6 @@ export function useAppTable(
       stop();
     };
     // filterKey gives value-based change detection for inline literals.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, filterKey, limit, cursor]);
 
   return { rows, tableRevision, hasMore, nextCursor, loading, error };
