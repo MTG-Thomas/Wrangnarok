@@ -50,13 +50,13 @@ import { join } from "node:path";
 // APP-02 surface and measures ~334 KiB combined. Same deliberate feature
 // headroom as the earlier raises, not dependency bloat: package.json is
 // unchanged versus main.
-// 2026-09-11 (AUTH-02, issue #143): 352 KiB. The resource-role control plane
+// 2026-09-11 (AUTH-02, issue #143): 365 KiB. The resource-role control plane
 // (src/roles.ts: 4-table CRUD plus per-request grant evaluation, grant
 // enforcement on direct submits plus form/app routes, 15 role/policy admin
 // routes, SDK error codes; no new dependencies) stacks on the CON-02
-// surface above. Same deliberate feature headroom, not dependency bloat:
-// package.json is unchanged versus main.
-const BUDGET_BYTES = 352 * 1024;
+// surface above and measures 368916 bytes. Same deliberate feature
+// headroom, not dependency bloat: package.json is unchanged versus main.
+const BUDGET_BYTES = 365 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
