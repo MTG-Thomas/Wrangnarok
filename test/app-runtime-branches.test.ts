@@ -23,7 +23,7 @@ import {
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
-import migration7 from "../migrations/0007_app_runtime.sql?raw";
+import migration10 from "../migrations/0010_app_runtime.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);
@@ -88,7 +88,7 @@ beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(migration6);
-  await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration10);
 });
 
 afterEach(async () => {
