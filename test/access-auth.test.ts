@@ -129,3 +129,34 @@ it("keeps LAB behavior when no assertion header is present", async () => {
   expect(await res.json()).toMatchObject({ error: { code: "NOT_FOUND" } });
   expect(new Fault(401, "UNAUTHORIZED", "Unauthorized.").status).toBe(401);
 });
+
+it("maps allowlisted service common_name without email", async () => {
+  const { publicKey, privateKey } = await keypair();
+  const pub = await crypto.subtle.exportKey("jwk", publicKey);
+  certsStub(pub, "k1");
+  const now = Math.floor(Date.now() / 1000);
+  const token = await mint(privateKey, "k1", {
+    aud: [AUD],
+    exp: now + 300,
+    iat: now - 10,
+    common_name: "wrangnarok-machine-final",
+  });
+  const p = await verifyAccess(token, { ...accessEnv, ACCESS_ALLOWED_SERVICES: "wrangnarok-machine-final" });
+  expect(p).toEqual({ userId: "service:wrangnarok-machine-final", orgId: ORG.toLowerCase() });
+});
+
+it("denies unlisted service identity", async () => {
+  const { publicKey, privateKey } = await keypair();
+  const pub = await crypto.subtle.exportKey("jwk", publicKey);
+  certsStub(pub, "k1");
+  const now = Math.floor(Date.now() / 1000);
+  const token = await mint(privateKey, "k1", {
+    aud: [AUD],
+    exp: now + 300,
+    iat: now - 10,
+    common_name: "unknown-machine",
+  });
+  await expect(
+    verifyAccess(token, { ...accessEnv, ACCESS_ALLOWED_SERVICES: "wrangnarok-machine-final" }),
+  ).rejects.toMatchObject({ status: 403 });
+});

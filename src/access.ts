@@ -6,6 +6,7 @@ export interface AccessEnv {
   ACCESS_AUD?: string;
   ACCESS_ORG_ID?: string;
   ACCESS_ALLOWED_EMAILS?: string;
+  ACCESS_ALLOWED_SERVICES?: string;
 }
 
 interface AccessConfig {
@@ -13,6 +14,7 @@ interface AccessConfig {
   aud: string;
   orgId: string;
   allowed: ReadonlySet<string>;
+  services: ReadonlySet<string>;
 }
 
 // Module-level cert cache: kid -> CryptoKey. Workers isolates reuse it;
@@ -39,7 +41,13 @@ function readAccessConfig(env: AccessEnv): AccessConfig | null {
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0),
   );
-  return { teamDomain, aud, orgId, allowed };
+  const services = new Set(
+    (env.ACCESS_ALLOWED_SERVICES ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0),
+  );
+  return { teamDomain, aud, orgId, allowed, services };
 }
 
 async function keyFor(teamDomain: string, kid: string, fetchFn: typeof fetch): Promise<CryptoKey | null> {
@@ -74,7 +82,7 @@ export async function verifyAccess(
     throw new Fault(401, "UNAUTHORIZED", "Unauthorized.");
   }
   let header: { alg?: string; kid?: string };
-  let payload: { aud?: string | string[]; exp?: number; email?: string };
+  let payload: { aud?: string | string[]; exp?: number; email?: string; common_name?: string };
   try {
     header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headB64)));
     payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
@@ -96,8 +104,12 @@ export async function verifyAccess(
   const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!auds.includes(cfg.aud)) throw new Fault(401, "UNAUTHORIZED", "Unauthorized.");
   const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
-  if (!email || !cfg.allowed.has(email)) throw new Fault(403, "FORBIDDEN", "Forbidden.");
-  return { userId: email, orgId: cfg.orgId };
+  if (email && cfg.allowed.has(email)) return { userId: email, orgId: cfg.orgId };
+  // Service-token assertions carry common_name instead of email (Phase 3 will
+  // fold services into the membership table; until then an explicit allowlist).
+  const svc = typeof payload.common_name === "string" ? payload.common_name.trim().toLowerCase() : "";
+  if (svc && cfg.services.has(svc)) return { userId: `service:${svc}`, orgId: cfg.orgId };
+  throw new Fault(403, "FORBIDDEN", "Forbidden.");
 }
 
 /** Test hook: drop cached certs (rotation tests, suite isolation). */
