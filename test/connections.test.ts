@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 // CON-01 (issue #146): authorized Integration/Connection management through
 // one Worker boundary. Runs in real workerd with a real D1 binding (full
-// migration chain 0001-0009); only outbound vendor HTTP is intercepted.
+// migration chain 0001-0008 plus 0011); only outbound vendor HTTP is intercepted.
 // Secret values never appear on any path: management writes carry non-secret
 // config only, views carry required-secret names only, and the deployment
 // scrub pins every response.

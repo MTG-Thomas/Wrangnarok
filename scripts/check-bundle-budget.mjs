@@ -17,13 +17,18 @@ import { join } from "node:path";
 // fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
 // shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
 // 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
-// 2026-09-11 (CON-01, issue #146): 175 KiB. The Connection management surface
+// 2026-09-11 (TRG-02, issue #138): 210 KiB. The endpoint/webhook Trigger
+// surface (src/endpoints.ts: key/HMAC verification, rate limits, challenge,
+// delivery protocol, operator management; 3 public plus 6 management routes
+// in src/index.ts) stacks on the TABLE-02 surface with the same deliberate
+// feature headroom, not dependency bloat: package.json is unchanged versus
+// main. Combined measures ~203 KiB.
+// 2026-09-11 (CON-01, issue #146): 220 KiB. The Connection management surface
 // (7 routes: integrations discovery, connections CRUD, read-only test; plus
 // src/connections.ts, config-schema validation, SDK descriptor entries)
-// stacks on the AUTH-01 surface above and measures ~166 KiB combined. Same
-// deliberate feature headroom, not dependency bloat: package.json is
-// unchanged versus main.
-const BUDGET_BYTES = 175 * 1024;
+// stacks on the TRG-02 surface above with the same deliberate feature
+// headroom, not dependency bloat: package.json is unchanged versus main.
+const BUDGET_BYTES = 220 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

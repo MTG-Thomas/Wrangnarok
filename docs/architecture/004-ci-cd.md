@@ -43,6 +43,12 @@ each queued PR behind it, costing the tail PR one full update + CI cycle per
 PR ahead of it. Speculative batching removes that serial tax without
 weakening the gate (identical queue/merge conditions: `check-success=Validate`).
 
+No-update policy: lanes rebase ONLY on reported conflict, never for currency.
+An "out of date" PR still queues and merges — Mergify tests it against
+predicted main on a temp branch. Every manual branch update burns a full
+fresh CI cycle and resets queue position, so updating for currency is pure
+waste. There is intentionally no Mergify auto-update rule for the same reason.
+
 ### Deployment is separate from validation
 
 Only trusted deployment workflows receive Cloudflare credentials. Deployment credentials MUST be scoped API tokens rather than global account credentials where Cloudflare supports the required permissions.

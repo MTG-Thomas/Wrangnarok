@@ -8,14 +8,14 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
+Total: 47 capability rows — 17 Partial, 28 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
 | RUN-01 | Persist and enforce per-Saga runtime policy without changing source identity | 2 | Partial | AUTH-02 | new |
 | RUN-02 | Invoke child Sagas with explicit context, completion and failure semantics | 2 | Missing | AUTH-02, RUN-01 | new |
 | TRG-01 | Run one-off and recurring schedules with durable due-time and cancellation semantics | 2 | Missing | AUTH-02, RUN-01 | new |
-| TRG-02 | Expose authenticated webhook and custom HTTP execution endpoints | 2 | Missing | AUTH-03, CON-01 | new |
+| TRG-02 | Expose authenticated webhook and custom HTTP execution endpoints | 2 | Partial | AUTH-01 | #138 |
 | TRG-03 | Deliver topic and built-in events through scoped subscriptions with replay visibility | 4 | Missing | TRG-01, TRG-02, AUTH-02 | new |
 | DEV-01 | Provide a complete typed TypeScript author and automation SDK | 1+4 | Partial | — | new |
 | DEV-02 | Preview, sync and deploy author source with explicit dependency compatibility | 5 | Partial | DEV-01, SOL-01 | new |
@@ -31,8 +31,8 @@ Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
 | RUN-04 | Do not confirm cancellation when native Workflow termination is ambiguous | 2 | Partial | — | new |
 | OBS-01 | Complete the execution UI and CLI: results, failures, live status and history traversal | 2 | Partial | RUN-04 | new |
 | OBS-02 | Persist and stream authorized author logs and progress with reconnect recovery | 4 | Missing | SEC-01, AUTH-02, OBS-01 | new |
-| TABLE-01 | Deliver the existing minimal author Tables migration slice | 4 | Missing | AUTH-02 | #117 |
-| TABLE-02 | Extend author Tables to policy-safe querying, batch mutations and realtime visibility | 4 | Missing | TABLE-01, AUTH-02, OBS-02 | new |
+| TABLE-01 | Deliver the existing minimal author Tables migration slice | 4 | Partial | AUTH-02 | #117 |
+| TABLE-02 | Extend author Tables to policy-safe querying, batch mutations and realtime visibility | 4 | Partial | TABLE-01, AUTH-02, OBS-02 | #154 |
 | FORM-01 | Deliver the existing Forms-to-Saga input binding slice | 4 | Partial | — | #118 |
 | FORM-02 | Deliver usable dynamic forms with safe startup, providers and submissions | 4 | Missing | FORM-01, RUN-03, TRG-01, AUTH-02, FILE-01 | new |
 | EMBED-01 | Publish and embed forms/apps with revocable external capabilities | 4 | Missing | FORM-02, APP-01, AUTH-03, AUTH-02 | new |
@@ -137,11 +137,11 @@ Related Wrangnarok issues: #76
 
 ## TRG-02: Expose authenticated webhook and custom HTTP execution endpoints
 
-Phase 2; **Missing**; existing issue: new
+Phase 2; **Partial**; existing issue: #138
 
-Local status: Only the internal POST /api/executions submit API exists; it is not a vendor webhook or a configured workflow endpoint.
+Local status: Scoped api-key endpoints (`POST /api/endpoints/:name`) and HMAC webhook endpoints (`POST /hooks/:name`) bind a name to a deployed Saga (ADR 018, migration 0009). Deliveries verify per-endpoint keys (expiry, disable/rotate revocation) or HMAC signatures against deployment-store secrets, answer echo-param vendor challenges in plaintext, rate-limit per endpoint, and submit through the standard protocol with derived `wep-` keys (202 receipt, 200 replay, 409 mismatch). Operator create/list/read/update/rotate/history ride the AUTH-01 membership gate. Upstream sync-mode inline results stay deferred to RUN-03; per-tenant webhook secrets stay deployment-scoped per ADR 005 v0 (SEC-02 tripwire).
 
-Depends: AUTH-03, CON-01
+Depends: AUTH-01
 
 Acceptance:
 
@@ -540,9 +540,14 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## TABLE-01: Deliver the existing minimal author Tables migration slice
 
-Phase 4; **Missing**; existing issue: #117
+Phase 4; **Partial**; existing issue: #117
 
-Local status: No author Tables exist. Keep #117 as the minimal org-scoped Saga read/write slice rather than opening a duplicate.
+Local status: Subsumed by the TABLE-02 (#154) landing slice: org-scoped
+Table declarations, single-row create/read/replace/delete, deny-by-absence
+per-action grants, and the explicit-deletion retention note all ship in
+`src/tables.ts` (migration `0007_tables.sql`) and are proven in workerd by
+`test/tables.test.ts`. TABLE-02 owns the remaining query/policy/realtime
+acceptance; this issue tracks the minimal-slice exit only.
 
 Depends: AUTH-02
 
@@ -559,9 +564,27 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## TABLE-02: Extend author Tables to policy-safe querying, batch mutations and realtime visibility
 
-Phase 4; **Missing**; existing issue: new
+Phase 4; **Partial**; existing issue: #154
 
-Local status: The existing #117 deliberately defers indexes, visibility transitions and broader query/policy semantics; those remain required for full parity.
+Local status: The query/count/batch slice landed (`src/tables.ts`, migration
+`0007_tables.sql`, `test/tables.test.ts`): org-scoped declarations with
+deny-by-absence per-action grants, policy-safe keyset queries (nested-JSON
+filters, prefix, order, cursor pagination), scoped counts with skip_count
+(total=-1), and all-or-denied batch mutations with per-item operational
+results. Realtime table-change subscriptions (visibility transitions,
+revocation push, reconnect reconciliation) remain missing per the multi-slice
+note; retained until verified. TABLE-01 (#117) is subsumed by this slice.
+
+D1 bounds and blockers (explicit, Free-tier posture): 4 KB per document, 25
+items per batch, 1000-row scan caps, limit 1-50, 5 nested filters. Unsupported
+query operators fail closed (UNSUPPORTED_QUERY / INVALID_ORDER / INVALID_CURSOR
+for offset or custom sorts: no offset pagination, no custom sorts, no
+projection, no managed indexes, no version tokens). D1 limits recorded as
+blockers: 10 GB per-database cap needs a retention/partitioning policy before
+large Tables are production-shaped (explicit deletion only in this slice);
+single-database transactions only (batch() is one-database atomic, no
+cross-database semantics); JSON filtering is application-side over the bounded
+keyset window (no PostgreSQL JSONB assumptions, no managed indexes yet).
 
 Depends: TABLE-01, AUTH-02, OBS-02
 
