@@ -288,10 +288,12 @@ export function parseSecretRef(value: unknown): { ref: string } | null {
     throw invalid("INVALID_CONFIG_VALUE", "Secret configs carry exactly { ref: <declared secret name> }.");
   }
   const ref = record.ref as string;
+  // Every Integration declares its secretFields, so the join below always
+  // names at least one provisionable secret.
   if (!declaredSecretNames().includes(ref)) {
     throw invalid(
       "SECRET_SCHEMA_MISMATCH",
-      `Secret "${ref}" is not a declared provider-global secret (${declaredSecretNames().join(", ") || "none"}).`,
+      `Secret "${ref}" is not a declared provider-global secret (${declaredSecretNames().join(", ")}).`,
     );
   }
   return { ref };
@@ -570,7 +572,10 @@ export function bindSagaConfig(
       throw new Fault(424, resolved.error.code, resolved.error.message);
     },
     async require(key: string): Promise<unknown> {
-      const resolved = await resolveConfig(env, key, declared === undefined ? [key] : [...declared, key], defaults);
+      // key is appended to declared, so a miss is always the declared
+      // variant: surface it loud. The undeclared fallthrough below is
+      // defensive — resolveConfig cannot produce it here by construction.
+      const resolved = await resolveConfig(env, key, [...declared, key], defaults);
       if (resolved.found) return resolved.value;
       if (resolved.declared) throw new Fault(424, resolved.error.code, resolved.error.message);
       throw new Fault(

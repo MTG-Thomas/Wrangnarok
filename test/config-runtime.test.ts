@@ -194,6 +194,17 @@ describe("CON-02 ctx.config runtime", () => {
     expect(output).toEqual({ timeout: null, fallback: "dflt" });
   });
 
+  it("fails closed when the Execution row vanishes before the config read", async () => {
+    // The handle resolves the org from the immutable D1 row inside step.do:
+    // a vanished row fails loud instead of resolving against a null org.
+    await insertExecution(bindings.DB, ID, ORG);
+    await bindings.DB.prepare("DELETE FROM executions WHERE id = ?").bind(ID).run();
+    const env = { ...bindings, LAB_ENABLED: "true" } as unknown as Bindings;
+    await expect(
+      executeSaga(env, eventFor(ID), nativeStep(), readingSaga as unknown as Parameters<typeof executeSaga>[3]),
+    ).rejects.toBeInstanceOf(NonRetryableError);
+  });
+
   it("exposes ctx.config on the event context for Saga authors", () => {
     // Author-visible surface: every Saga ctx carries the config handle with
     // get/require. Determinism enforcement (inside step.do only) is pinned by
