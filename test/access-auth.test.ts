@@ -97,6 +97,42 @@ it("rejects wrong aud, expired, bad signature, unknown kid, malformed", async ()
   await expect(verifyAccess("abc", accessEnv), "segments").rejects.toMatchObject({ status: 401 });
 });
 
+it("uses the cached cert on rotation and maps scalar aud payloads", async () => {
+  const { publicKey, privateKey } = await keypair();
+  const pub = await crypto.subtle.exportKey("jwk", publicKey);
+  certsStub(pub, "k1");
+  const first = await mint(privateKey, "k1", validPayload());
+  expect(await verifyAccess(first, accessEnv)).toMatchObject({ userId: EMAIL });
+  const second = await mint(privateKey, "k1", { ...validPayload(), aud: AUD });
+  expect(await verifyAccess(second, accessEnv)).toMatchObject({ userId: EMAIL });
+});
+
+it("fails closed when the cert endpoint is down or returns no usable keys", async () => {
+  const { privateKey } = await keypair();
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("down", { status: 500 }));
+  await expect(verifyAccess(await mint(privateKey, "k9", validPayload()), accessEnv)).rejects.toMatchObject({
+    status: 401,
+  });
+  vi.restoreAllMocks();
+  clearAccessCertCache();
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ keys: [{ kid: "k9" }] }));
+  await expect(verifyAccess(await mint(privateKey, "k9", validPayload()), accessEnv)).rejects.toMatchObject({
+    status: 401,
+  });
+});
+
+it("rejects unparseable segments and non-RS256 headers", async () => {
+  const { publicKey } = await keypair();
+  const pub = await crypto.subtle.exportKey("jwk", publicKey);
+  certsStub(pub, "k1");
+  await expect(verifyAccess("!!!.@@@.###", accessEnv)).rejects.toMatchObject({ status: 401 });
+  const head = b64url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", kid: "k1" })));
+  const body = b64url(new TextEncoder().encode(JSON.stringify(validPayload())));
+  await expect(verifyAccess(`${head}.${body}.sig`, accessEnv)).rejects.toMatchObject({ status: 401 });
+  const missing: string[] = ["a", "b"];
+  await expect(verifyAccess(missing.join("."), accessEnv)).rejects.toMatchObject({ status: 401 });
+});
+
 it("denies unlisted email and fails closed when unconfigured", async () => {
   const { publicKey, privateKey } = await keypair();
   const pub = await crypto.subtle.exportKey("jwk", publicKey);

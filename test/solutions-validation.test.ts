@@ -240,6 +240,16 @@ it("refuses silent overwrites when the marker changes under install", async () =
   await expect(pending).rejects.toMatchObject({ status: 409, code: "INSTALL_CONFLICT" });
 });
 
+it("reports drift without writing on dry runs", async () => {
+  const planned = await installBundle(bindings.DB, manifest(), { dryRun: true });
+  expect(planned.dryRun).toBe(true);
+  expect(planned.drift).toEqual({ created: 3, updated: 0, skipped: 0, deleted: 0 });
+  const orgs = await bindings.DB.prepare("SELECT COUNT(*) AS n FROM organizations").first<{ n: number }>();
+  expect(orgs?.n ?? 0).toBe(0);
+  const ledger = await bindings.DB.prepare("SELECT COUNT(*) AS n FROM bundle_installs").first<{ n: number }>();
+  expect(ledger?.n ?? 0).toBe(0);
+});
+
 it("reports missing connections on the update path", async () => {
   await expect(
     updateConnectionEndpoint(bindings.DB, "no-such-org", ECHO_INTEGRATION_ID, ENDPOINT_V1),

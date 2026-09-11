@@ -197,6 +197,28 @@ it("leaves the pointer on the previous complete version when interrupted, then c
   expect(row?.managed_by).toBe(`${BUNDLE_ID}@2.0.0`);
 });
 
+it("lets an interrupted upgrade fall back to the active version without force", async () => {
+  await installBundle(bindings.DB, manifest("1.0.0", ENDPOINT_V1));
+  const hook = {
+    internals: {
+      afterWrite: (completed: number) => {
+        if (completed >= 3) throw new Error("injected interruption before activation");
+      },
+    },
+  };
+  await expect(installBundle(bindings.DB, manifest("2.0.0", ENDPOINT_V2), hook)).rejects.toThrow(
+    "injected interruption before activation",
+  );
+  // The failed v2 attempt is the newest ledger row, but the pointer still
+  // names the complete v1 install: re-running v1 reconciles back to the
+  // active version without force (fencing reads the pointer, not newest-row).
+  expect(await pointer()).toMatchObject({ version: "1.0.0" });
+  const recovered = await installBundle(bindings.DB, manifest("1.0.0", ENDPOINT_V1));
+  expect(await pointer()).toMatchObject({ version: "1.0.0", manifestHash: recovered.manifestHash });
+  expect((await connectionRow("default", ECHO_INTEGRATION_ID))?.endpoint).toBe(ENDPOINT_V1);
+  expect((await connectionRow("default", ECHO_INTEGRATION_ID))?.managed_by).toBe(`${BUNDLE_ID}@1.0.0`);
+});
+
 it("advertises nothing when the very first install is interrupted", async () => {
   const hook = {
     internals: {

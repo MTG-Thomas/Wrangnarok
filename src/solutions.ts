@@ -430,17 +430,38 @@ export async function installBundle(db: D1Database, raw: unknown, opts: InstallO
 
   const manifestHash = await hash(canonical(manifest));
 
-  // Preflight reads (no writes yet): resolve org rows, latest install
-  // records, and current Connection ownership.
+  // Preflight reads (no writes yet): resolve org rows, the active install
+  // pointer, and current Connection ownership. The downgrade and
+  // same-version fences compare against the activation pointer (the last
+  // fully reconciled install), never the newest ledger row: ledger rows are
+  // immutable evidence of attempts, and an interrupted install leaves a
+  // newer ledger row behind while the pointer still names the previous
+  // complete version (restart convergence, ADR 011 section 2).
   const orgIds = new Map<string, string>();
   for (const name of orgNames) {
     const row = await db.prepare("SELECT id FROM organizations WHERE name = ?").bind(name).first<{ id: string }>();
     if (row) orgIds.set(name, row.id);
   }
+  const activationPresent = await activationTablesPresent(db);
+  const activeVersions = new Map<string, { version: string; manifestHash: string }>();
+  if (activationPresent) {
+    for (const name of orgNames) {
+      const orgId = orgIds.get(name);
+      if (orgId === undefined) continue;
+      const active = await activeInstallFor(db, bundleId, orgId);
+      if (active) activeVersions.set(name, { version: active.version, manifestHash: active.manifestHash });
+    }
+  }
   for (const name of orgNames) {
     const orgId = orgIds.get(name);
     if (orgId === undefined) continue;
-    const latest = await latestLedger(db, bundleId, orgId);
+    const active = activeVersions.get(name);
+    // No pointer yet: fall back to the newest ledger row so a first install
+    // still fences same-version forks (and pre-activation databases keep the
+    // legacy downgrade posture until the pointer exists).
+    const latest = active
+      ? { version: active.version, manifestHash: active.manifestHash }
+      : await latestLedger(db, bundleId, orgId);
     if (!latest) continue;
     if (compareVersions(version, latest.version) < 0 && opts.force !== true) {
       throw invalid(
@@ -463,9 +484,8 @@ export async function installBundle(db: D1Database, raw: unknown, opts: InstallO
   }
   const marker = managedBy(bundleId, version);
   // Desired Connection state compares the full non-secret config on
-  // activation-schema databases; older databases keep the endpoint-only
-  // comparison and write path below.
-  const activationPresent = await activationTablesPresent(db);
+  // activation-schema databases (flag read above); older databases keep the
+  // endpoint-only comparison and write path below.
   const plan: PlannedConnection[] = [];
   for (const conn of desired) {
     const orgId = orgIds.get(conn.org) ?? null;
