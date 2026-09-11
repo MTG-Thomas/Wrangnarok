@@ -29,7 +29,7 @@ import {
   sha256Hex,
 } from "../src/files";
 import migration1 from "../migrations/0001_initial.sql?raw";
-import migration7 from "../migrations/0007_files.sql?raw";
+import migration19 from "../migrations/0019_files.sql?raw";
 import migrationOrg from "../migrations/0007_org_membership.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -74,7 +74,7 @@ async function sha256Of(text: string): Promise<string> {
 
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
-  await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration19);
   await bindings.DB.exec(migrationOrg);
   // AUTH-01 membership gate: the LAB fixture identity bootstraps to admin
   // of ORG inside authenticate on first use. OTHER_USER holds an ordinary

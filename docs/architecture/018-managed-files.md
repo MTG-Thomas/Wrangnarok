@@ -78,7 +78,7 @@ Upstream's shared fallback pattern is adopted with explicit bounds: a location w
 
 ## Consequences
 
-- New platform primitive: R2 (`FILES` binding) plus migration `0007_files.sql`. Free-tier viable: R2 free tier covers experiment-scale bytes/operations; D1 rows are small metadata.
+- New platform primitive: R2 (`FILES` binding) plus migration `0019_files.sql`. Free-tier viable: R2 free tier covers experiment-scale bytes/operations; D1 rows are small metadata.
 - New API surface (all authenticated, deny-by-default query strings, bounded JSON bodies): locations CRUD-list, batch upload/download issuance, token PUT/GET content, finalize, versioned delete, scoped list, policy admin plus access-test.
 - SDK contract gains the file routes and error codes; `docs/sdk-capability-map.md` moves `files` to Partial (artifacts/retention stay Tracked under FILE-02).
 - `docs/upstream-parity.md` FILE-01 row moves to Implemented with the single-PUT/multipart note.

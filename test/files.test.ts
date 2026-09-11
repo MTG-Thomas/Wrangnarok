@@ -4,14 +4,14 @@
 // verification, versioned mutation, revocation, and the bounded shared
 // read-only fallback. Proven against real local D1 + real local R2 in
 // workerd; the FILES binding is never replaced. Applies migrations 0001 +
-// 0007 so the file schema composes with the existing tables.
+// 0019 so the file schema composes with the existing tables.
 import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import migration1 from "../migrations/0001_initial.sql?raw";
-import migration7 from "../migrations/0007_files.sql?raw";
+import migration19 from "../migrations/0019_files.sql?raw";
 import migrationOrg from "../migrations/0007_org_membership.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -84,7 +84,7 @@ async function uploadRoundtrip(
 
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
-  await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration19);
   await bindings.DB.exec(migrationOrg);
   // AUTH-01 membership gate: the LAB fixture identity bootstraps to admin
   // of ORG inside authenticate on first use. OTHER_USER holds an ordinary
