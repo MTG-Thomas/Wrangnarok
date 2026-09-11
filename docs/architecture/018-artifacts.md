@@ -49,6 +49,6 @@ Still-referenced artifacts are NOT preserved: cleanup deletes expired rows even 
 
 ## Consequences
 
-- `migrations/0010_artifacts.sql` owns the schema; `src/artifacts.ts` owns the domain; `src/index.ts` routes mirror the apps style (one explicit matcher per route).
+- `migrations/0020_artifacts.sql` owns the schema; `src/artifacts.ts` owns the domain; `src/index.ts` routes mirror the apps style (one explicit matcher per route).
 - The SDK contract gains the artifact routes, error codes, and a `generated-artifacts: supported` capability; `docs/sdk-capability-map.md` flips `files, artifacts` to Partial.
 - The parity map marks FILE-02 Partial: the lifecycle ships; AUTH-02 roles (finer than creator/admin), FILE-01 signed-URL parity, and AI-03 chat attachment surfacing remain with their owners.

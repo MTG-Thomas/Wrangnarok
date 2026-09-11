@@ -12,7 +12,7 @@ import type { Bindings } from "../src/bindings";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
 import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
-import migration10 from "../migrations/0010_artifacts.sql?raw";
+import migration20 from "../migrations/0020_artifacts.sql?raw";
 
 const bindings = env as unknown as Bindings;
 const TOKEN = "a".repeat(64);
@@ -76,7 +76,7 @@ beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration7);
   await bindings.DB.exec(migration8);
-  await bindings.DB.exec(migration10);
+  await bindings.DB.exec(migration20);
   // AUTH-01 membership gate: the LAB fixture identity (USER) bootstraps to
   // admin of ORG inside authenticate on first use. OTHER_USER holds an
   // ordinary membership so artifact denials prove artifact policy (403),
