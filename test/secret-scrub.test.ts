@@ -18,6 +18,7 @@ import {
   scrubExecutionError,
   scrubExecutionText,
   scrubExecutionValue,
+  scrubTextWithDeploymentSecrets,
   scrubTextWithSecrets,
   scrubValueWithSecrets,
 } from "../src/secrets";
@@ -109,6 +110,31 @@ describe("execution secret registry (SEC-01)", () => {
     );
     expect(scrubbed.note).not.toContain(SECRET);
     expect(scrubbed.note).not.toContain(TOKEN);
+    clearExecutionSecrets(ID);
+  });
+
+  it("covers registry edges: empty registration, array cycles, class pass-through, deployment text", () => {
+    clearAllExecutionSecrets();
+    // Empty/short-only registration is a no-op (early return): nothing stored.
+    registerExecutionSecrets(ID, ["ab", 42, null]);
+    expect(getExecutionSecrets(ID)).toEqual([]);
+    // Array cycles terminate through the identity map (cached array path).
+    const cyclicArr: unknown[] = [SECRET];
+    cyclicArr.push(cyclicArr);
+    const scrubbedArr = scrubValueWithSecrets(cyclicArr, [SECRET]) as unknown[];
+    expect(scrubbedArr[0]).toBe(SCRUB_PLACEHOLDER);
+    expect(scrubbedArr[1]).toBe(scrubbedArr);
+    // Class instances pass through untouched (never JSON-persisted anyway).
+    const instance = new (class {
+      constructor(readonly token = TOKEN) {}
+    })();
+    expect(scrubValueWithSecrets(instance, [TOKEN])).toBe(instance);
+    // Deployment-secret text helper covers the Worker HTTP isolate shape.
+    const env = { NINJA_CLIENT_ID: "test-client-id", NINJA_CLIENT_SECRET: SECRET };
+    expect(scrubTextWithDeploymentSecrets(`id test-client-id secret ${SECRET}`, env)).toBe(
+      `id ${SCRUB_PLACEHOLDER} secret ${SCRUB_PLACEHOLDER}`,
+    );
+    expect(scrubTextWithDeploymentSecrets("clean", {})).toBe("clean");
     clearExecutionSecrets(ID);
   });
 });
