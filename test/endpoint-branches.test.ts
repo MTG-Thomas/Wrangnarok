@@ -458,6 +458,41 @@ it("propagates mismatched redelivery conflicts and submit Faults", async () => {
   expect(degraded.replayed).toBe(false);
 });
 
+it("accepts Bearer api-key transport alongside X-Endpoint-Key", async () => {
+  const created = await worker.fetch(
+    authed("/api/endpoints", "POST", { name: "bearer-key", sagaId: helloSaga.id, kind: "api-key" }),
+    bindings,
+  );
+  expect(created.status).toBe(201);
+  const { apiKey } = (await created.json()) as { apiKey: string };
+
+  // Bearer transport (no X-Endpoint-Key) verifies the same credential.
+  const viaBearer = await worker.fetch(
+    new Request("http://local.test/api/endpoints/bearer-key", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "X-Endpoint-Event-Id": "b-001",
+      },
+      body: JSON.stringify({ input: { name: "Ada" } }),
+    }),
+    bindings,
+  );
+  expect(viaBearer.status).toBe(202);
+
+  // Non-Bearer Authorization values fall through to unauthorized, not a crash.
+  const basic = await worker.fetch(
+    new Request("http://local.test/api/endpoints/bearer-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Basic abc", "X-Endpoint-Event-Id": "b-002" },
+      body: JSON.stringify({ input: { name: "Ada" } }),
+    }),
+    bindings,
+  );
+  expect(basic.status).toBe(401);
+});
+
 it("answers route-level fallbacks: bad bodies, bad names, cross-kind, and unknown endpoints", async () => {
   const create = await worker.fetch(
     authed("/api/endpoints", "POST", { name: "route-key", sagaId: helloSaga.id, kind: "api-key" }),
