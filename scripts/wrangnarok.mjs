@@ -150,6 +150,29 @@ function checkOrgId(id) {
   return id;
 }
 
+function checkConfigId(id) {
+  if (!STABLE_UUID.test(id ?? "")) {
+    fail("USAGE", "config-update and config-delete need the exact config UUID (no prefixes, no search).");
+  }
+  return id;
+}
+
+/** Config --value parsing: secret types take { ref } JSON (or @FILE);
+ * non-secret types take raw text (or @FILE text). Never logs or stores. */
+function readConfigValue(ctx) {
+  const raw = ctx.configValue;
+  if (typeof raw !== "string") fail("USAGE", "config --value must be text (or @path to a file).");
+  const text = raw.startsWith("@") ? readFileSync(raw.slice(1), "utf-8") : raw;
+  if (ctx.configType === "secret") {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return fail("USAGE", 'secret configs need --value \'{"ref":"<declared name>"}\' (or @path to that JSON).');
+    }
+  }
+  return text;
+}
+
 function readInput() {
   const raw = arg("input", "{}");
   const text = raw.startsWith("@") ? readFileSync(raw.slice(1), "utf-8") : raw;
@@ -355,6 +378,14 @@ Commands:
   user-disable/--enable --user ID         Disable/enable a user globally (instance admin)
   org-executions --id UUID [--status S] [--limit N]
                                           Org-scoped ExecutionHistory (org admin, incl. in-flight)
+  configs                                 List typed config rows (secrets masked)
+  config-set --key NAME --type T [--value V|@FILE] [--description TEXT]
+                                          Set a non-secret value or provision a
+                                          secret reference (upsert by key)
+  config-update --id UUID [--key NAME] [--type T] [--value V|@FILE]
+                [--description TEXT]      Update one config row (omitted secret
+                                          values preserve the reference)
+  config-delete --id UUID                 Delete one config row (exact ID only)
   contract                                Show the versioned SDK contract (GET /api/sdk)
   selftest                                Offline selftest (stub fetch, no network)
 
@@ -764,6 +795,52 @@ export async function runCommand(ctx, deps = {}) {
         "org executions",
       );
     }
+    case "configs": {
+      const data = await readJson(await fetchImpl(`${ctx.base}/api/config`, { headers: full.headers }), "config list");
+      if (!Array.isArray(data.configs)) fail("SERVER_MISMATCH", "config list has no configs array.");
+      return data;
+    }
+    case "config-set": {
+      if (!ctx.configKey) fail("USAGE", "config-set needs --key NAME.");
+      if (!ctx.configType) fail("USAGE", "config-set needs --type string|int|bool|json|secret.");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/config`, {
+          method: "POST",
+          headers: full.headers,
+          body: JSON.stringify({
+            key: ctx.configKey,
+            type: ctx.configType,
+            ...(ctx.configValue === undefined ? {} : { value: readConfigValue(ctx) }),
+            ...(ctx.configDescription === undefined ? {} : { description: ctx.configDescription }),
+          }),
+        }),
+        "config set",
+      );
+    }
+    case "config-update": {
+      const id = checkConfigId(ctx.id);
+      const update = {};
+      if (ctx.configKey !== undefined) update.key = ctx.configKey;
+      if (ctx.configType !== undefined) update.type = ctx.configType;
+      if (ctx.configValue !== undefined) update.value = readConfigValue(ctx);
+      if (ctx.configDescription !== undefined) update.description = ctx.configDescription;
+      if (Object.keys(update).length === 0) fail("USAGE", "config-update needs --key/--type/--value/--description.");
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/config/${id}`, {
+          method: "PUT",
+          headers: full.headers,
+          body: JSON.stringify(update),
+        }),
+        "config update",
+      );
+    }
+    case "config-delete": {
+      const id = checkConfigId(ctx.id);
+      return readJson(
+        await fetchImpl(`${ctx.base}/api/config/${id}`, { method: "DELETE", headers: full.headers }),
+        "config delete",
+      );
+    }
     default:
       fail("USAGE", `unknown command ${JSON.stringify(ctx.command ?? "")}. See --help.`);
       return undefined;
@@ -871,6 +948,23 @@ async function main() {
   } else if (command === "members" && Array.isArray(result.members)) {
     if (asJson()) console.log(JSON.stringify(result));
     else for (const m of result.members) console.log(`${m.userId}\t${m.role}\t${m.status}\t${m.kind}`);
+    return;
+  } else if (command === "configs" && Array.isArray(result.configs)) {
+    if (asJson()) console.log(JSON.stringify(result));
+    else
+      for (const c of result.configs)
+        console.log(`${c.key}\t${c.type}\t${JSON.stringify(c.value)}\t${c.managedBy ?? "loose"}`);
+    return;
+  } else if ((command === "config-set" || command === "config-update") && result.config) {
+    if (asJson()) console.log(JSON.stringify(result));
+    else {
+      const c = result.config;
+      console.log(`${c.key}\t${c.type}\t${JSON.stringify(c.value)}`);
+    }
+    return;
+  } else if (command === "config-delete") {
+    if (asJson()) console.log(JSON.stringify(result));
+    else console.log("deleted");
     return;
   } else if (command === "detail") printDetail(result);
   else if (command === "cancel") printCancel(result);

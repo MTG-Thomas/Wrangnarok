@@ -17,13 +17,15 @@ import type {
   AppSummary,
   AuditEvent,
   AuditResponse,
+  ConfigEntry,
+  ConfigListResponse,
+  ConnectionsResponse,
+  ConnectionSummary,
+  ConnectionTestResponse,
   ExecutionDetail,
   ExecutionHistoryResponse,
   ExecutionStatus,
   NotificationsResponse,
-  ConnectionsResponse,
-  ConnectionSummary,
-  ConnectionTestResponse,
   FileLocation,
   FileLocationsResponse,
   FileMeta,
@@ -342,6 +344,75 @@ function isAuditEvent(value: unknown): value is AuditEvent {
     "detail" in v &&
     typeof v["createdAt"] === "string"
   );
+}
+
+function isConfigEntry(value: unknown): value is ConfigEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["id"] === "string" &&
+    typeof v["key"] === "string" &&
+    typeof v["type"] === "string" &&
+    "value" in v &&
+    (v["description"] === null || typeof v["description"] === "string") &&
+    (v["managedBy"] === null || typeof v["managedBy"] === "string") &&
+    typeof v["updatedAt"] === "string" &&
+    typeof v["updatedBy"] === "string"
+  );
+}
+
+/** GET /api/config — typed config rows for this Organization (CON-02, ADR
+ * 019). Secret rows answer "[SECRET]", never values. */
+export async function listConfigs(): Promise<ConfigListResponse> {
+  const data = await get("/api/config");
+  if (typeof data !== "object" || data === null || !Array.isArray((data as { configs?: unknown }).configs)) {
+    throw new Error("Unexpected configs response shape.");
+  }
+  const configs = (data as { configs: unknown[] }).configs;
+  if (!configs.every(isConfigEntry)) throw new Error("Unexpected configs response shape.");
+  return { configs };
+}
+
+/** POST /api/config — set a non-secret value or provision a secret
+ * reference (upsert by key; managed rows refuse). */
+export async function setConfigEntry(body: {
+  key: string;
+  type: string;
+  value?: unknown;
+  description?: string;
+}): Promise<ConfigEntry> {
+  const data = await postJson("/api/config", body);
+  const config = (data as { config?: unknown }).config;
+  if (!isConfigEntry(config)) throw new Error("Unexpected config response shape.");
+  return config;
+}
+
+/** PUT /api/config/:id — update one row; omitted secret values preserve the
+ * reference. */
+export async function updateConfigEntry(
+  id: string,
+  body: { key?: string; type?: string; value?: unknown; description?: string },
+): Promise<ConfigEntry> {
+  if (!APP_ID.test(id)) throw new Error("Unexpected Config ID shape.");
+  const data = await putJson(`/api/config/${id}`, body);
+  const config = (data as { config?: unknown }).config;
+  if (!isConfigEntry(config)) throw new Error("Unexpected config response shape.");
+  return config;
+}
+
+async function deleteJson(path: string): Promise<unknown> {
+  const token = getToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(path, { method: "DELETE", headers });
+  if (!response.ok) throw await parseApiError(response);
+  return (await response.json()) as unknown;
+}
+
+/** DELETE /api/config/:id — delete one row (managed rows refuse). */
+export async function deleteConfigEntry(id: string): Promise<void> {
+  if (!APP_ID.test(id)) throw new Error("Unexpected Config ID shape.");
+  await deleteJson(`/api/config/${id}`);
 }
 
 const LOCATION_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;

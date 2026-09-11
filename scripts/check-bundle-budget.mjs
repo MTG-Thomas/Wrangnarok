@@ -43,13 +43,21 @@ import { join } from "node:path";
 // guard, compacted SDK descriptor), stacked here on the FILE-01 surface.
 // Same deliberate feature headroom as the earlier raises, not dependency
 // bloat: package.json is unchanged versus main.
-// 2026-09-11 (OPS-01, issue #172): 330 KiB. The audit/notifications slice
+// 2026-09-11 (CON-02, issue #147): 340 KiB. The scoped-config surface
+// (src/config.ts: typed validation, secret-reference provisioning,
+// org-only resolution, managed-row reconciliation; 4 operator routes plus
+// the ctx.config Saga handle and SDK descriptor entries) stacks on the
+// APP-02 surface and measures ~334 KiB combined. Same deliberate feature
+// headroom as the earlier raises, not dependency bloat: package.json is
+// unchanged versus main.
+// 2026-09-11 (OPS-01, issue #172): 355 KiB. The audit/notifications slice
 // (src/ops.ts: audit + notification domain, keyset pagination, reconcile;
 // 4 read routes plus audit emission on 5 app routes and the cancel route;
-// SDK audit/notification surface) stacks on the APP-02 surface with the
+// SDK audit/notification surface) stacks on the CON-02 surface with the
 // same deliberate feature headroom, not dependency bloat: package.json is
-// unchanged. Combined measures ~327 KiB.
-const BUDGET_BYTES = 330 * 1024;
+// unchanged. Remeasure after merge; shrink the raise if the combined bundle
+// lands lower.
+const BUDGET_BYTES = 355 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

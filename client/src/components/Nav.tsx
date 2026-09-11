@@ -67,6 +67,12 @@ export const NAV_ENTRIES: NavEntry[] = [
     phase: "Phase 2 / Phase 3",
   },
   {
+    label: "Configuration",
+    to: "/configs",
+    enabled: true,
+    phase: "Phase 3 (#147)",
+  },
+  {
     label: "Connections",
     to: "/connections",
     enabled: true,
