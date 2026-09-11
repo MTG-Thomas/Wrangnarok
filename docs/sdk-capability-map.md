@@ -30,7 +30,7 @@ context, and typed errors. Wrangnarok maps them as follows:
 | `organizations`, `roles`, `users` | None | Tracked | Organization/user/role lifecycle belongs to AUTH-01/AUTH-02. |
 | `tables` | None | Tracked | Author Tables belong to TABLE-01 (#117) and TABLE-02. |
 | `forms` | None | Tracked | Forms belong to FORM-01 (#118) and FORM-02. |
-| `files`, `artifacts` | None | Tracked | Managed files belong to FILE-01/FILE-02. |
+| `files`, `artifacts` | `listArtifacts` / `fetchArtifactDetail` / `deleteArtifact` / CLI `artifacts artifact upload download rename bind unbind bindings retention cleanup` over `/api/artifacts/*` | Partial | Generated/uploaded Artifacts ship (FILE-02, ADR 018); managed file locations with signed URLs belong to FILE-01. |
 | `knowledge` | None | Tracked | Knowledge/memory belongs to AI-05/AI-06. |
 | `agents`, `ai` (complete/stream) | None | Tracked | Agents/AI belong to AI-01/AI-02/AI-03. |
 | `events` (sources/subscriptions) | None | Tracked | Events belong to TRG-03. |

@@ -37,6 +37,15 @@
       "migrations_dir": "migrations",
     },
   ],
+  // Artifact bytes (FILE-02, ADR 018): local R2 bucket provisioned by `npm
+  // run setup:local`. D1 carries identity/ownership/versions/bindings; R2
+  // carries one object per Artifact version. Never production data locally.
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "wrangnarok-artifacts-local",
+    },
+  ],
   "workflows": [
     {
       "binding": "ECHO_WORKFLOW",
@@ -90,6 +99,13 @@
           "database_name": "wrangnarok-dev",
           "database_id": "4bcf0eef-45a4-46c1-b80c-1d244ff3076c",
           "migrations_dir": "migrations",
+        },
+      ],
+      // Dev artifact bytes live in their own bucket (never the local one).
+      "r2_buckets": [
+        {
+          "binding": "ARTIFACTS",
+          "bucket_name": "wrangnarok-artifacts-dev",
         },
       ],
       "workflows": [

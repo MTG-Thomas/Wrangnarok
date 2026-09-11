@@ -8,7 +8,7 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
+Total: 47 capability rows — 17 Partial, 28 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ Total: 47 capability rows — 16 Partial, 29 Missing, 2 Gated.
 | FORM-02 | Deliver usable dynamic forms with safe startup, providers and submissions | 4 | Missing | FORM-01, RUN-03, TRG-01, AUTH-02, FILE-01 | new |
 | EMBED-01 | Publish and embed forms/apps with revocable external capabilities | 4 | Missing | FORM-02, APP-01, AUTH-03, AUTH-02 | new |
 | FILE-01 | Deliver managed file locations with policy-checked upload, download and mutation | 4 | Missing | AUTH-02, SEC-01 | new |
-| FILE-02 | Manage generated artifacts and attachment lifecycles with retention | 4+6 | Missing | FILE-01, AUTH-02 | new |
+| FILE-02 | Manage generated artifacts and attachment lifecycles with retention | 4+6 | Partial | FILE-01, AUTH-02 | #158 |
 | APP-01 | Deploy authored applications with explicit lifecycle, ownership and recovery | 4+5 | Partial | AUTH-02, DEV-02, SOL-01 | #159 |
 | APP-02 | Provide the browser App SDK with scoped workflows, Tables, files and live updates | 4 | Missing | APP-01, TABLE-02, FILE-01, OBS-02 | new |
 | SOL-01 | Close the existing bundle reconciliation and activation contract gaps | 5 | Partial | — | new |
@@ -691,9 +691,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## FILE-02: Manage generated artifacts and attachment lifecycles with retention
 
-Phase 4+6; **Missing**; existing issue: new
+Phase 4+6; **Partial**; existing issue: #158
 
-Local status: Managed file locations do not by themselves cover opaque artifact IDs/workspaces, generated chat files, attachment ownership or cleanup policy.
+Local status: ADR 018 accepts the identity/versioning/access/retention contract. Generated/uploaded Artifacts ship end to end on Worker + D1 + R2: upload with same-filename versioning (same stable UUID, current pointer advances, no optimistic version-conflict API), list/preview/download/rename/delete, execution/workspace/conversation attachment bindings with the canonical-versus-binding access split (creator-or-admin for bytes, triple-only for binding readers), configurable retention (default 90 days, range 1-3650, admin-only changes) with explicit preview/run cleanup (bounded batch, per-row outcomes, R2-first interrupted recovery), upload completion verification with failed-write cleanup, MIME/size limits (5 MiB per surface), deleted metadata surviving while bytes are removed, and metadata-only portable exports. Generated-output formats ride as deferred subcapabilities; no Python rendering on Workers. Remaining: AUTH-02 roles (finer than creator/admin), FILE-01 signed-URL parity (direct-to-R2 browser PUTs), AI-03 chat attachment surfacing.
 
 Depends: FILE-01, AUTH-02
 

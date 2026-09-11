@@ -6,8 +6,12 @@ export interface NinjaCredentials {
   NINJA_CLIENT_ID?: string;
   NINJA_CLIENT_SECRET?: string;
 }
-export interface Bindings extends LabAuth, AccessEnv, NinjaCredentials {
+export interface ArtifactAdmin {
+  ADMIN_USER_ID?: string;
+}
+export interface Bindings extends LabAuth, AccessEnv, NinjaCredentials, ArtifactAdmin {
   DB: D1Database;
+  ARTIFACTS?: R2Bucket;
   ECHO_WORKFLOW: Workflow<ExecutionParams>;
   NINJA_WORKFLOW: Workflow<ExecutionParams>;
   DIGEST_WORKFLOW: Workflow<ExecutionParams>;

@@ -17,6 +17,32 @@ import {
   swapSlugs,
   validateApp,
 } from "./apps";
+import {
+  artifactDetail,
+  ARTIFACT_FORMAT_STATUS,
+  ARTIFACT_FORMATS,
+  ARTIFACT_LIST_LIMIT_MAX,
+  bindAttachment,
+  bindingsForRef,
+  createOrVersionArtifact,
+  deleteArtifact,
+  downloadArtifact,
+  exportManifest,
+  getRetention,
+  isAdminCaller,
+  listArtifacts,
+  parseArtifactId,
+  parseArtifactVersion,
+  parseBindingRef,
+  parseBindingScope,
+  previewArtifact,
+  previewCleanup,
+  renameArtifact,
+  runCleanup,
+  setRetention,
+  unbindAttachment,
+  uploadArtifactVersion,
+} from "./artifacts";
 import { previewEnvironment, previewLocal } from "./dev";
 import {
   boundedJson,
@@ -94,8 +120,11 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const caller = await authenticate(request, env);
     // Query strings are deny-by-default: only the history list route takes
     // them, and only its allowlisted keys (anything else is UNSUPPORTED_QUERY).
+    // Artifact routes take their own allowlisted keys (upload ?name=/?mime=,
+    // list ?limit=, binding ?scope=/?refId=); each route validates its keys.
     const historyList = url.pathname === "/api/executions" && request.method === "GET";
-    if (url.search && !historyList)
+    const artifactQuery = url.pathname === "/api/artifacts" || url.pathname.startsWith("/api/artifacts/");
+    if (url.search && !historyList && !artifactQuery)
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (url.pathname === "/api/sagas" && request.method === "GET")
       // Static Git-owned Catalog (ADR 002): discovery metadata only.
@@ -391,6 +420,198 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     }
     if (appOne?.[1] && request.method === "DELETE") {
       await deleteApp(env.DB, caller, parseAppId(appOne[1]));
+      return json({ deleted: true });
+    }
+    // Generated Artifacts (FILE-02, ADR 018): Organization-scoped records
+    // with R2 bytes, attachment bindings, and explicit retention cleanup.
+    // Canonical byte/metadata access is creator-or-admin; foreign rows 404.
+    // One explicit matcher per route, mirroring the apps style above.
+    const artifactStore = { db: env.DB, bucket: env.ARTIFACTS };
+    const artifactAdmin = isAdminCaller(caller, request.headers, env.ADMIN_USER_ID);
+    if (url.pathname === "/api/artifacts" && request.method === "GET") {
+      const limitRaw = url.searchParams.get("limit");
+      const limit = limitRaw === null ? undefined : Number(limitRaw);
+      if (limitRaw !== null && (!/^\d+$/.test(limitRaw) || limit === undefined)) {
+        throw new Fault(400, "INVALID_LIMIT", `Limit must be an integer from 1 to ${ARTIFACT_LIST_LIMIT_MAX}.`);
+      }
+      for (const key of url.searchParams.keys()) {
+        if (key !== "limit") {
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only limit is supported here.");
+        }
+      }
+      return json(await listArtifacts(env.DB, caller, limit === undefined ? {} : { limit }));
+    }
+    if (url.pathname === "/api/artifacts" && request.method === "PUT") {
+      // Upload: bytes arrive as the raw octet-stream body; name and mime ride
+      // the allowlisted query keys (the only query-bearing artifact route).
+      // Same-filename re-upload appends a version to the same Artifact row
+      // (201 on first upload, 200 on a new version), never a version-conflict
+      // 409: current version always advances.
+      const name = url.searchParams.get("name");
+      const mime = url.searchParams.get("mime") ?? "application/octet-stream";
+      for (const key of url.searchParams.keys()) {
+        if (key !== "name" && key !== "mime") {
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only name and mime are supported here.");
+        }
+      }
+      if (name === null)
+        throw new Fault(400, "INVALID_ARTIFACT", "Artifact upload needs ?name= and octet-stream bytes.");
+      const contentType = request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+      if (contentType !== "application/octet-stream" || request.headers.has("Content-Encoding")) {
+        throw new Fault(415, "BYTES_REQUIRED", "Artifact bytes require unencoded application/octet-stream.");
+      }
+      if (request.body === null) throw new Fault(400, "EMPTY_ARTIFACT", "Artifact bytes must not be empty.");
+      const buffer = await request.arrayBuffer();
+      const { artifact, created } = await createOrVersionArtifact(artifactStore, caller, {
+        name,
+        mime,
+        bytes: new Uint8Array(buffer),
+      });
+      return json({ artifact }, created ? 201 : 200);
+    }
+    if (url.pathname === "/api/artifacts/formats" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({
+        formats: ARTIFACT_FORMATS.map((format) => ({ format, status: ARTIFACT_FORMAT_STATUS[format] })),
+      });
+    }
+    if (url.pathname === "/api/artifacts/retention" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ retention: await getRetention(env.DB, caller.orgId) });
+    }
+    if (url.pathname === "/api/artifacts/retention" && request.method === "PUT") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { maxAgeDays?: unknown };
+      return json({ retention: await setRetention(env.DB, caller, artifactAdmin, body?.maxAgeDays) });
+    }
+    if (url.pathname === "/api/artifacts/cleanup/preview" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ cleanup: await previewCleanup(env.DB, caller, Date.now()) });
+    }
+    if (url.pathname === "/api/artifacts/cleanup/run" && request.method === "POST") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ cleanup: await runCleanup(artifactStore, caller, artifactAdmin, Date.now()) });
+    }
+    if (url.pathname === "/api/artifacts/bindings" && request.method === "GET") {
+      const scope = parseBindingScope(url.searchParams.get("scope"));
+      const refId = parseBindingRef(url.searchParams.get("refId"));
+      for (const key of url.searchParams.keys()) {
+        if (key !== "scope" && key !== "refId") {
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only scope and refId are supported here.");
+        }
+      }
+      // Binding listing answers the triple only, never bytes or metadata.
+      return json(await bindingsForRef(env.DB, caller, { scope, refId }));
+    }
+    const artifactVersion = /^\/api\/artifacts\/([0-9a-f-]{36})\/versions\/(\d+)$/.exec(url.pathname);
+    if (artifactVersion?.[1] && artifactVersion[2] && request.method === "GET") {
+      const served = await previewArtifact(
+        artifactStore,
+        caller,
+        parseArtifactId(artifactVersion[1]),
+        artifactAdmin,
+        parseArtifactVersion(Number(artifactVersion[2])),
+      );
+      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
+        status: 200,
+        headers: {
+          "Content-Type": served.mime,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const artifactBytes = /^\/api\/artifacts\/([0-9a-f-]{36})\/bytes$/.exec(url.pathname);
+    if (artifactBytes?.[1] && request.method === "PUT") {
+      const contentType = request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+      if (contentType !== "application/octet-stream" || request.headers.has("Content-Encoding")) {
+        throw new Fault(415, "BYTES_REQUIRED", "Artifact bytes require unencoded application/octet-stream.");
+      }
+      if (request.body === null) throw new Fault(400, "EMPTY_ARTIFACT", "Artifact bytes must not be empty.");
+      const buffer = await request.arrayBuffer();
+      const uploaded = await uploadArtifactVersion(
+        artifactStore,
+        caller,
+        parseArtifactId(artifactBytes[1]),
+        artifactAdmin,
+        {
+          mime: url.searchParams.get("mime") ?? "application/octet-stream",
+          bytes: new Uint8Array(buffer),
+        },
+      );
+      return json({ artifact: uploaded });
+    }
+    const artifactPreview = /^\/api\/artifacts\/([0-9a-f-]{36})\/preview$/.exec(url.pathname);
+    if (artifactPreview?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const served = await previewArtifact(artifactStore, caller, parseArtifactId(artifactPreview[1]), artifactAdmin);
+      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
+        status: 200,
+        headers: {
+          "Content-Type": served.mime,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const artifactDownload = /^\/api\/artifacts\/([0-9a-f-]{36})\/download$/.exec(url.pathname);
+    if (artifactDownload?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const served = await downloadArtifact(artifactStore, caller, parseArtifactId(artifactDownload[1]), artifactAdmin);
+      const filename = served.name.replace(/["\r\n]/g, "_");
+      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
+        status: 200,
+        headers: {
+          "Content-Type": served.mime,
+          "Content-Disposition": `attachment; filename="${filename}"`,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const artifactRename = /^\/api\/artifacts\/([0-9a-f-]{36})\/rename$/.exec(url.pathname);
+    if (artifactRename?.[1] && request.method === "POST") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { name?: unknown };
+      return json({
+        artifact: await renameArtifact(env.DB, caller, parseArtifactId(artifactRename[1]), artifactAdmin, body?.name),
+      });
+    }
+    const artifactBind = /^\/api\/artifacts\/([0-9a-f-]{36})\/bindings$/.exec(url.pathname);
+    if (artifactBind?.[1] && request.method === "POST") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { scope?: unknown; refId?: unknown };
+      return json(
+        {
+          binding: await bindAttachment(env.DB, caller, parseArtifactId(artifactBind[1]), artifactAdmin, {
+            scope: body?.scope,
+            refId: body?.refId,
+          }),
+        },
+        201,
+      );
+    }
+    if (artifactBind?.[1] && request.method === "DELETE") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { scope?: unknown; refId?: unknown };
+      await unbindAttachment(env.DB, caller, parseArtifactId(artifactBind[1]), artifactAdmin, {
+        scope: (body as { scope?: unknown })?.scope,
+        refId: (body as { refId?: unknown })?.refId,
+      });
+      return json({ deleted: true });
+    }
+    const artifactExport = /^\/api\/artifacts\/([0-9a-f-]{36})\/export$/.exec(url.pathname);
+    if (artifactExport?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      // Metadata-only by construction: the manifest never carries bytes.
+      return json(await exportManifest(env.DB, caller, parseArtifactId(artifactExport[1]), artifactAdmin));
+    }
+    const artifactOne = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (artifactOne?.[1] && request.method === "GET") {
+      return json({ artifact: await artifactDetail(env.DB, caller, parseArtifactId(artifactOne[1]), artifactAdmin) });
+    }
+    if (artifactOne?.[1] && request.method === "DELETE") {
+      await deleteArtifact(artifactStore, caller, parseArtifactId(artifactOne[1]), artifactAdmin);
       return json({ deleted: true });
     }
     // Gray-out is server-enforced: mapped /api/* routes serve, every other
