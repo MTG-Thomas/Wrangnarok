@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: AGPL-3.0
+// SEC-01 (issue #145): execution-scoped secret registration and universal
+// substring scrubbing. The registry mechanism (src/secrets.ts) plus the
+// write-time/egress wiring is proven here: pure unit coverage of the
+// scrubber contract (nested, substrings in URLs/headers/vendor bodies,
+// short-secret and encoding limits, cycle handling, per-Execution
+// isolation), then live Workflow/D1 evidence with mocked vendor HTTP only.
+// Fixture secrets only — never production credentials.
+import { describe, expect, it } from "vitest";
+import {
+  clearAllExecutionSecrets,
+  clearExecutionSecrets,
+  deploymentSecretsFromEnv,
+  getExecutionSecrets,
+  MIN_SCRUB_SECRET_LENGTH,
+  registerExecutionSecrets,
+  SCRUB_PLACEHOLDER,
+  scrubExecutionError,
+  scrubExecutionText,
+  scrubExecutionValue,
+  scrubTextWithDeploymentSecrets,
+  scrubTextWithSecrets,
+  scrubValueWithSecrets,
+} from "../src/secrets";
+
+const SECRET = "test-client-secret-sentinel";
+const TOKEN = "test-access-token-sentinel";
+const ID = "id-for-isolation-probe";
+const OTHER = "other-execution-probe";
+
+describe("execution secret registry (SEC-01)", () => {
+  it("scrubs nested and embedded substrings, never exact-match only", () => {
+    clearAllExecutionSecrets();
+    registerExecutionSecrets(ID, [SECRET, TOKEN]);
+    // URL, header, and vendor-error embeddings of both the credential and the token.
+    expect(scrubExecutionText(ID, `https://vendor.invalid/login?secret=${SECRET}&next=/`)).toBe(
+      `https://vendor.invalid/login?secret=${SCRUB_PLACEHOLDER}&next=/`,
+    );
+    expect(scrubExecutionText(ID, `Bearer ${TOKEN} rejected`)).toBe(`Bearer ${SCRUB_PLACEHOLDER} rejected`);
+    expect(scrubExecutionText(ID, `vendor says invalid_client ${SECRET}`)).not.toContain(SECRET);
+    // Nested structures, including object keys.
+    const nested = { outer: [{ url: `x${SECRET}y`, headers: { Authorization: `Bearer ${TOKEN}` } }] };
+    const scrubbed = scrubExecutionValue(nested, ID);
+    expect(JSON.stringify(scrubbed)).not.toContain(SECRET);
+    expect(JSON.stringify(scrubbed)).not.toContain(TOKEN);
+    expect(JSON.stringify(scrubbed)).toContain(SCRUB_PLACEHOLDER);
+    // Error envelopes.
+    const error = scrubExecutionError({ code: `E_${SECRET}`, message: `token ${TOKEN} leaked` }, ID);
+    expect(`${error.code} ${error.message}`).not.toContain(SECRET);
+    expect(`${error.code} ${error.message}`).not.toContain(TOKEN);
+    clearExecutionSecrets(ID);
+  });
+
+  it("keeps registries isolated per Execution and clears on settle", () => {
+    clearAllExecutionSecrets();
+    registerExecutionSecrets(ID, [SECRET]);
+    registerExecutionSecrets(OTHER, [TOKEN]);
+    expect(scrubExecutionText(ID, SECRET)).toBe(SCRUB_PLACEHOLDER);
+    // One Execution's credential never scrubs (or leaks into) another's view.
+    expect(scrubExecutionText(OTHER, SECRET)).toBe(SECRET);
+    expect(scrubExecutionText(ID, TOKEN)).toBe(TOKEN);
+    expect(getExecutionSecrets(ID)).toEqual([SECRET]);
+    clearExecutionSecrets(ID);
+    // Settled Executions leave nothing behind for a reused isolate.
+    expect(getExecutionSecrets(ID)).toEqual([]);
+    expect(scrubExecutionText(ID, SECRET)).toBe(SECRET);
+    clearExecutionSecrets(OTHER);
+  });
+
+  it("defines the short-secret, encoding, and cycle limits explicitly", () => {
+    clearAllExecutionSecrets();
+    // Short secrets are not substring-scrubbed: scrubbing "ab" would redact
+    // the database. Protection there is shaping, not replacement.
+    expect(MIN_SCRUB_SECRET_LENGTH).toBe(8);
+    registerExecutionSecrets(ID, ["ab", SECRET]);
+    expect(getExecutionSecrets(ID)).toEqual([SECRET]);
+    expect(scrubExecutionText(ID, "cab ride")).toBe("cab ride");
+    // Encodings are out of scope: only raw UTF-8 substrings are replaced.
+    const encoded = btoa(SECRET);
+    expect(encoded).not.toBe(SECRET);
+    expect(scrubTextWithSecrets(encoded, [SECRET])).toBe(encoded);
+    // Cycles terminate through the identity map instead of hanging.
+    const cyclic: { self?: unknown; secret?: string } = { secret: SECRET };
+    cyclic.self = cyclic;
+    const scrubbed = scrubValueWithSecrets(cyclic, [SECRET]) as typeof cyclic;
+    expect(scrubbed.secret).toBe(SCRUB_PLACEHOLDER);
+    expect(scrubbed.self).toBe(scrubbed);
+    // Deployment-secret helper covers the Worker HTTP isolate, which never
+    // sees Workflow-registered tokens.
+    const env = { NINJA_CLIENT_ID: "test-client-id", NINJA_CLIENT_SECRET: SECRET };
+    expect(deploymentSecretsFromEnv(env)).toContain(SECRET);
+    expect(deploymentSecretsFromEnv({})).toEqual([]);
+    clearExecutionSecrets(ID);
+  });
+
+  it("never exports secrets through discovery or portable shapes", () => {
+    clearAllExecutionSecrets();
+    registerExecutionSecrets(ID, [SECRET, TOKEN]);
+    // Portable exports carry declarations (names), never values: scrubbing
+    // the carrier proves no value rode along.
+    const portable = {
+      secretFields: ["clientSecret"],
+      requiredIntegrations: ["0606e237-137b-4629-8346-85468e1c2df6"],
+      note: `uses ${SECRET} and ${TOKEN}`,
+    };
+    const scrubbed = scrubExecutionValue(portable, ID) as typeof portable;
+    expect(scrubbed.secretFields).toEqual(["clientSecret"]);
+    expect(`${scrubbed.secretFields.join(",")}:${scrubbed.requiredIntegrations.join(",")}`).not.toContain(
+      SCRUB_PLACEHOLDER,
+    );
+    expect(scrubbed.note).not.toContain(SECRET);
+    expect(scrubbed.note).not.toContain(TOKEN);
+    clearExecutionSecrets(ID);
+  });
+
+  it("covers registry edges: empty registration, array cycles, class pass-through, deployment text", () => {
+    clearAllExecutionSecrets();
+    // Empty/short-only registration is a no-op (early return): nothing stored.
+    registerExecutionSecrets(ID, ["ab", 42, null]);
+    expect(getExecutionSecrets(ID)).toEqual([]);
+    // Array cycles terminate through the identity map (cached array path).
+    const cyclicArr: unknown[] = [SECRET];
+    cyclicArr.push(cyclicArr);
+    const scrubbedArr = scrubValueWithSecrets(cyclicArr, [SECRET]) as unknown[];
+    expect(scrubbedArr[0]).toBe(SCRUB_PLACEHOLDER);
+    expect(scrubbedArr[1]).toBe(scrubbedArr);
+    // Class instances pass through untouched (never JSON-persisted anyway).
+    const instance = new (class {
+      constructor(readonly token = TOKEN) {}
+    })();
+    expect(scrubValueWithSecrets(instance, [TOKEN])).toBe(instance);
+    // Deployment-secret text helper covers the Worker HTTP isolate shape.
+    const env = { NINJA_CLIENT_ID: "test-client-id", NINJA_CLIENT_SECRET: SECRET };
+    expect(scrubTextWithDeploymentSecrets(`id test-client-id secret ${SECRET}`, env)).toBe(
+      `id ${SCRUB_PLACEHOLDER} secret ${SCRUB_PLACEHOLDER}`,
+    );
+    expect(scrubTextWithDeploymentSecrets("clean", {})).toBe("clean");
+    clearExecutionSecrets(ID);
+  });
+});

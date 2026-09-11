@@ -7,4 +7,5 @@ worker-configuration.d.ts
 package-lock.json
 docs/
 .opencode/
+.jcode/skills/
 CODEX_HANDOFF.md

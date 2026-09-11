@@ -6,6 +6,10 @@ import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { clearAccessCertCache, verifyAccess } from "../src/access";
 import { Fault } from "../src/domain";
+import migration1 from "../migrations/0001_initial.sql?raw";
+import migration7 from "../migrations/0007_org_membership.sql?raw";
+import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
+import seed from "../scripts/seed-local.sql?raw";
 
 const TEAM = "https://team.cloudflareaccess.com";
 const AUD = "test-aud-tag";
@@ -111,6 +115,30 @@ it("serves the catalog on a valid assertion without LAB configured", async () =>
   const bindings = { ...(env as unknown as Bindings), ...accessEnv };
   delete (bindings as Record<string, unknown>).LAB_ENABLED;
   delete (bindings as Record<string, unknown>).LAB_TOKEN;
+  // AUTH-01 (ADR 015): the membership gate covers Access identities too, so
+  // the allowlisted email needs a live membership before the catalog serves.
+  const db = (env as unknown as Bindings).DB;
+  await db.exec(migration1);
+  await db.exec(seed);
+  await db.exec(migration7);
+  await db.exec(migration8);
+  const stamp = new Date().toISOString();
+  await db
+    .prepare(
+      "INSERT INTO organizations(id,name,status,created_at,disabled_at) VALUES (?,'Access team','active',?,NULL)",
+    )
+    .bind(ORG.toLowerCase(), stamp)
+    .run();
+  await db
+    .prepare("INSERT INTO users(user_id,status,created_at) VALUES (?,'active',?)")
+    .bind(EMAIL.toLowerCase(), stamp)
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO org_memberships(org_id,user_id,role,status,kind,created_at,updated_at) VALUES (?,?, 'member','active','ordinary',?,?)",
+    )
+    .bind(ORG.toLowerCase(), EMAIL.toLowerCase(), stamp, stamp)
+    .run();
   const res = await worker.fetch(
     new Request("http://local.test/api/sagas", { headers: { "Cf-Access-Jwt-Assertion": token } }),
     bindings,
@@ -159,4 +187,31 @@ it("denies unlisted service identity", async () => {
   await expect(
     verifyAccess(token, { ...accessEnv, ACCESS_ALLOWED_SERVICES: "wrangnarok-machine-final" }),
   ).rejects.toMatchObject({ status: 403 });
+});
+
+it("covers access config and key edge branches", async () => {
+  const { publicKey, privateKey } = await keypair();
+  const pub = await crypto.subtle.exportKey("jwk", publicKey);
+  certsStub(pub, "k1");
+  const valid = await mint(privateKey, "k1", validPayload());
+  // Trailing slashes strip from the team domain (same cert URL either way,
+  // so the token still verifies); whitespace-only allowlists parse to empty
+  // sets (denied, never open).
+  const slashed = { ...accessEnv, ACCESS_TEAM_DOMAIN: `${TEAM}///` };
+  await expect(verifyAccess(valid, slashed)).resolves.toEqual({
+    userId: EMAIL,
+    orgId: ORG.toLowerCase(),
+  });
+  await expect(verifyAccess(valid, { ...accessEnv, ACCESS_ALLOWED_EMAILS: "  , " })).rejects.toMatchObject({
+    status: 403,
+  });
+  // Malformed assertions fail closed before any key fetch: wrong part count,
+  // non-JSON payload, and a bad algorithm all answer 401.
+  await expect(verifyAccess("a.b", accessEnv)).rejects.toMatchObject({ status: 401 });
+  const head = { alg: "none", kid: "k1", typ: "JWT" };
+  const body = validPayload();
+  const b64 = (v: unknown) => btoa(JSON.stringify(v)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  await expect(verifyAccess(`${b64(head)}.${b64(body)}.x`, accessEnv)).rejects.toMatchObject({ status: 401 });
+  const notJson = `${b64url(new TextEncoder().encode("hi"))}.${b64(body)}.x`;
+  await expect(verifyAccess(notJson, accessEnv)).rejects.toMatchObject({ status: 401 });
 });

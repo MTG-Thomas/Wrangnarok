@@ -3,6 +3,7 @@ import {
   boundedJson,
   canTransition,
   canTransitionOperation,
+  classifyTerminateError,
   decodeHistoryCursor,
   digestSaga,
   echoSaga,
@@ -101,6 +102,24 @@ describe("MVP slice contracts", () => {
     expect(canTransition("Cancelling", "TimedOut")).toBe(false);
     expect(canTransition("Cancelling", "Running")).toBe(false);
   });
+  it("classifies native terminate outcomes and fails closed to ambiguous", () => {
+    // Exact native codes mapped from the local REST layer (RUN-04, issue
+    // #151): an already-settled engine (finite state) confirms logical
+    // cancel; a missing instance is reported separately; everything else
+    // (transient/control-plane, unknown codes, non-Errors) is ambiguous.
+    expect(
+      classifyTerminateError(
+        new Error("WorkflowError: (instance.cannot_terminate) Cannot terminate instance since its on a finite state"),
+      ),
+    ).toBe("already-settled");
+    expect(classifyTerminateError(new Error("instance.not_found"))).toBe("not-found");
+    expect(classifyTerminateError(new Error("WorkflowError: something new broke"))).toBe("ambiguous");
+    expect(classifyTerminateError(new Error("boom"))).toBe("ambiguous");
+    expect(classifyTerminateError("instance.cannot_terminate")).toBe("already-settled");
+    expect(classifyTerminateError(undefined)).toBe("ambiguous");
+    expect(classifyTerminateError(null)).toBe("ambiguous");
+    expect(classifyTerminateError(42)).toBe("ambiguous");
+  });
   it("restricts operation transitions to Running plus terminal states", () => {
     expect(canTransitionOperation("Running", "Succeeded")).toBe(true);
     expect(canTransitionOperation("Running", "Failed")).toBe(true);
@@ -135,11 +154,37 @@ describe("MVP slice contracts", () => {
     expect(() => parseInput(wide)).not.toThrow();
   });
   it("parses history queries with an allowlisted key set", () => {
-    expect(parseHistoryQuery(new URLSearchParams())).toEqual({ limit: HISTORY_LIMIT_DEFAULT });
-    expect(parseHistoryQuery(new URLSearchParams("status=Failed"))).toEqual({ status: "Failed", limit: 20 });
+    expect(parseHistoryQuery(new URLSearchParams())).toEqual({ statuses: [], limit: HISTORY_LIMIT_DEFAULT });
+    expect(parseHistoryQuery(new URLSearchParams("status=Failed"))).toEqual({ statuses: ["Failed"], limit: 20 });
     expect(parseHistoryQuery(new URLSearchParams(`sagaId=${echoSaga.id}&limit=5`))).toEqual({
+      statuses: [],
       sagaId: echoSaga.id,
       limit: 5,
+    });
+    // Multi-status, exact Saga name, and ISO date bounds (issue #152).
+    expect(parseHistoryQuery(new URLSearchParams("status=Failed,TimedOut"))).toEqual({
+      statuses: ["Failed", "TimedOut"],
+      limit: 20,
+    });
+    expect(parseHistoryQuery(new URLSearchParams("status=Failed,Failed"))).toEqual({
+      statuses: ["Failed"],
+      limit: 20,
+    });
+    expect(parseHistoryQuery(new URLSearchParams("sagaName=echo"))).toEqual({
+      statuses: [],
+      sagaName: "echo",
+      limit: 20,
+    });
+    expect(parseHistoryQuery(new URLSearchParams("startDate=2026-09-01&endDate=2026-09-10"))).toEqual({
+      statuses: [],
+      startAt: "2026-09-01T00:00:00.000Z",
+      endBefore: "2026-09-11T00:00:00.000Z",
+      limit: 20,
+    });
+    expect(parseHistoryQuery(new URLSearchParams("startDate=2026-09-01T12:00:00.000Z"))).toEqual({
+      statuses: [],
+      startAt: "2026-09-01T12:00:00.000Z",
+      limit: 20,
     });
     const queryError = (query: string): string => {
       try {
@@ -150,12 +195,21 @@ describe("MVP slice contracts", () => {
       throw new Error(`expected parseHistoryQuery(${query}) to throw`);
     };
     expect(queryError("status=Bogus")).toBe("INVALID_STATUS");
+    expect(queryError("status=Failed,")).toBe("INVALID_STATUS");
+    expect(queryError("status=")).toBe("INVALID_STATUS");
+    expect(queryError("status=,,")).toBe("INVALID_STATUS");
+    expect(queryError("status= , ")).toBe("INVALID_STATUS");
     expect(queryError("sagaId=nope")).toBe("INVALID_SAGA_ID");
+    expect(queryError("sagaName=")).toBe("INVALID_SAGA_NAME");
+    expect(queryError("startDate=not-a-date")).toBe("INVALID_START_DATE");
+    expect(queryError("endDate=2026-13-99")).toBe("INVALID_END_DATE");
+    expect(queryError("startDate=2026-09-10&endDate=2026-09-01")).toBe("INVALID_DATE_RANGE");
     for (const bad of ["0", "51", "abc", "2.5"]) {
       expect(queryError(`limit=${bad}`)).toBe("INVALID_LIMIT");
     }
     expect(queryError("cursor=!!!")).toBe("INVALID_CURSOR");
     expect(queryError("order=asc")).toBe("UNSUPPORTED_QUERY");
+    expect(queryError("scope=x")).toBe("UNSUPPORTED_QUERY");
   });
   it("round-trips opaque history cursors without readable row content", () => {
     const id = "a".repeat(64);

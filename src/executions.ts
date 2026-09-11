@@ -16,6 +16,7 @@ import { buildOrgCtx } from "./saga";
 import type { OrgCtx } from "./saga";
 import { requireActiveInstall } from "./solutions";
 import type { Bindings } from "./bindings";
+import { scrubExecutionError, scrubExecutionValue } from "./secrets";
 export interface ExecutionRow {
   id: string;
   saga_id: string;
@@ -192,12 +193,14 @@ export async function beginOperation(db: D1Database, id: string, name: string, p
 export async function finishOperation(db: D1Database, id: string, name: string, result: unknown): Promise<void> {
   // Fenced on Running: a late vendor callback that lands after Failed (or a
   // cancel marker) matches no row and no-ops instead of overwriting terminal
-  // history with invented success.
+  // history with invented success. Write-time scrub: the Execution's
+  // registered secrets (credentials, fetched tokens) are replaced by
+  // substring, so a secret-bearing transform can never persist in history.
   await db
     .prepare(
       "UPDATE operations SET status='Succeeded',completed_at=?,result_json=? WHERE execution_id=? AND name=? AND status='Running'",
     )
-    .bind(new Date().toISOString(), JSON.stringify(result), id, name)
+    .bind(new Date().toISOString(), JSON.stringify(scrubExecutionValue(result, id)), id, name)
     .run();
 }
 export async function failExecution(
@@ -214,9 +217,10 @@ export async function failExecution(
   // error_json. Owner-cancel wins (ADR 001): once the Cancelling marker is
   // written, a racing terminal checkpoint is stale and no-ops; the cancel
   // marker below no-ops on non-Cancelling rows, so an acknowledged
-  // cancellation is never rewritten.
+  // cancellation is never rewritten. Write-time scrub: a secret substring
+  // embedded in an error message is replaced before the terminal row lands.
   const now = new Date().toISOString();
-  const json = JSON.stringify(error);
+  const json = JSON.stringify(scrubExecutionError(error, id));
   await db.batch([
     db
       .prepare(
@@ -273,21 +277,34 @@ export interface HistoryPage {
 }
 const HISTORY_COLUMNS =
   "id,saga_id,saga_name,saga_revision,org_id,user_id,dispatched,status,created_at,started_at,completed_at";
-/** ExecutionHistory listing (Phase 2, issue #76): org/requester-scoped
- * summaries in (created_at DESC, id DESC) order, with optional status/saga
- * filters and cursor pagination. Summaries only — input/result never ride
+/** ExecutionHistory listing (Phase 2, issues #76 then #152): org/requester-scoped
+ * summaries in (created_at DESC, id DESC) order, with status (single or
+ * comma-separated multi), sagaId, exact sagaName, and ISO startDate/endDate
+ * bounds, plus cursor pagination. Summaries only — input/result never ride
  * the list. Never claim completeness when more rows exist: hasMore plus a
  * nextCursor carry the rest. */
 export async function listHistory(db: D1Database, caller: Principal, query: HistoryQuery): Promise<HistoryPage> {
   const clauses = ["org_id=?", "user_id=?"];
   const binds: (string | number)[] = [caller.orgId, caller.userId];
-  if (query.status !== undefined) {
-    clauses.push("status=?");
-    binds.push(query.status);
+  if (query.statuses.length > 0) {
+    clauses.push(`status IN (${query.statuses.map(() => "?").join(",")})`);
+    binds.push(...query.statuses);
   }
   if (query.sagaId !== undefined) {
     clauses.push("saga_id=?");
     binds.push(query.sagaId);
+  }
+  if (query.sagaName !== undefined) {
+    clauses.push("saga_name=?");
+    binds.push(query.sagaName);
+  }
+  if (query.startAt !== undefined) {
+    clauses.push("created_at>=?");
+    binds.push(query.startAt);
+  }
+  if (query.endBefore !== undefined) {
+    clauses.push("created_at<?");
+    binds.push(query.endBefore);
   }
   if (query.cursor !== undefined) {
     clauses.push("((created_at < ?) OR (created_at = ? AND id < ?))");

@@ -88,6 +88,38 @@ it("filters by status", async () => {
   const running = await listBody("?status=Running");
   expect(executionIds(running.body)).toEqual([ids.get("history-row-0004")]);
 });
+it("filters by multi-status, saga name, and date bounds", async () => {
+  const multi = await listBody("?status=Failed,Running");
+  expect(multi.status).toBe(200);
+  expect(executionIds(multi.body)).toEqual([
+    ids.get("history-row-0005"),
+    ids.get("history-row-0004"),
+    ids.get("history-row-0002"),
+  ]);
+  const named = await listBody("?sagaName=historyprobe");
+  expect(named.status).toBe(200);
+  expect(executionIds(named.body)).toHaveLength(5);
+  const unknownName = await listBody("?sagaName=no-such-saga");
+  expect(unknownName.status).toBe(200);
+  expect(executionIds(unknownName.body)).toEqual([]);
+  const window = await listBody("?startDate=2026-09-02&endDate=2026-09-04");
+  expect(window.status).toBe(200);
+  expect(executionIds(window.body)).toEqual([
+    ids.get("history-row-0004"),
+    ids.get("history-row-0003"),
+    ids.get("history-row-0002"),
+  ]);
+  const combined = await listBody("?status=Succeeded&startDate=2026-09-03");
+  expect(executionIds(combined.body)).toEqual([ids.get("history-row-0003")]);
+  // Cursor traversal preserves filters: the second page continues the same query.
+  const first = await listBody("?status=Succeeded,Failed&limit=2");
+  expect(executionIds(first.body)).toEqual([ids.get("history-row-0005"), ids.get("history-row-0003")]);
+  const second = await listBody(
+    `?status=Succeeded,Failed&limit=2&cursor=${encodeURIComponent(first.body.nextCursor as string)}`,
+  );
+  expect(executionIds(second.body)).toEqual([ids.get("history-row-0002"), ids.get("history-row-0001")]);
+  expect(second.body.hasMore).toBe(false);
+});
 it("filters by saga and combines both filters", async () => {
   const ninja = await listBody(`?sagaId=${ninjaSaga.id}`);
   expect(ninja.status).toBe(200);
@@ -123,6 +155,20 @@ it("rejects bad filters with machine-readable codes", async () => {
   });
   expect(await (await worker.fetch(listRequest("?sagaId=not-a-uuid"), bindings)).json()).toMatchObject({
     error: { code: "INVALID_SAGA_ID" },
+  });
+  expect(await (await worker.fetch(listRequest("?sagaName="), bindings)).json()).toMatchObject({
+    error: { code: "INVALID_SAGA_NAME" },
+  });
+  expect(await (await worker.fetch(listRequest("?startDate=nope"), bindings)).json()).toMatchObject({
+    error: { code: "INVALID_START_DATE" },
+  });
+  expect(await (await worker.fetch(listRequest("?endDate=nope"), bindings)).json()).toMatchObject({
+    error: { code: "INVALID_END_DATE" },
+  });
+  expect(
+    await (await worker.fetch(listRequest("?startDate=2026-09-10&endDate=2026-09-01"), bindings)).json(),
+  ).toMatchObject({
+    error: { code: "INVALID_DATE_RANGE" },
   });
   for (const badLimit of ["0", "51", "abc", "-1"]) {
     expect(await (await worker.fetch(listRequest(`?limit=${badLimit}`), bindings)).json()).toMatchObject({
