@@ -1,0 +1,4 @@
+interface:
+  display_name: "MTG Domain Language"
+  short_description: "Maintain shared project vocabulary"
+  default_prompt: "Use $mtg-domain-language to capture the project terms and decisions we should reuse."
