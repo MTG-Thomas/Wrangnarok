@@ -4,6 +4,7 @@ import { Nav } from "./components/Nav";
 import { ApplicationDetailView, ApplicationsList } from "./pages/Applications";
 import { ExecutionDetailView } from "./pages/ExecutionDetail";
 import { ExecutionHistoryList } from "./pages/ExecutionHistory";
+import { FilesList } from "./pages/Files";
 import { SagasList } from "./pages/Sagas";
 
 export function App(): React.JSX.Element {
@@ -18,6 +19,7 @@ export function App(): React.JSX.Element {
           <Route path="/sagas" element={<SagasList />} />
           <Route path="/apps" element={<ApplicationsList />} />
           <Route path="/apps/:id" element={<ApplicationDetailView />} />
+          <Route path="/files" element={<FilesList />} />
           <Route path="*" element={<p>Not found. Try History.</p>} />
         </Routes>
       </main>

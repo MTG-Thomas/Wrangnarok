@@ -17,7 +17,13 @@ import { join } from "node:path";
 // module (src/secrets.ts with scrub call sites, no new dependencies) measure
 // ~114 KiB combined. Same deliberate feature headroom as the 110 KiB raise,
 // not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 120 * 1024;
+// 2026-09-11 (FILE-01, issue #157): 165 KiB. The managed-files surface (14
+// routes plus the files domain: locations, policies, capabilities,
+// finalize verification, versioned mutation, structural listing, plus the
+// SDK descriptor additions) measures ~154 KiB against a 114 KiB baseline.
+// Same deliberate feature headroom as prior raises, not dependency bloat:
+// package.json is unchanged versus main.
+const BUDGET_BYTES = 165 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

@@ -37,6 +37,12 @@ export const NAV_ENTRIES: NavEntry[] = [
     phase: "Phase 4 (#159)",
   },
   {
+    label: "Files",
+    to: "/files",
+    enabled: true,
+    phase: "Phase 4 (#157)",
+  },
+  {
     label: "Integrations",
     enabled: false,
     issue: `${REPO}/issues/18`,
