@@ -42,7 +42,7 @@ Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 20 Par
 | APP-02 | Provide the browser App SDK with scoped workflows, Tables, files and live updates | 4 | Partial | APP-01, TABLE-02, FILE-01, OBS-02 | #160 |
 | SOL-01 | Close the existing bundle reconciliation and activation contract gaps | 5 | Partial | — | new |
 | SOL-02 | Install and manage complete reusable Solutions across Organizations | 5 | Partial | SOL-01, AUTH-02, CON-02, TABLE-02, FORM-02, APP-01, AI-02, TRG-03 | new |
-| SOL-03 | Export, capture and import portable Solution source without tenant state | 5 | Missing | SOL-01, MIG-01, SEC-01 | new |
+| SOL-03 | Export, capture and import portable Solution source without tenant state | 5 | Partial | SOL-01, MIG-01, SEC-01 | #163 |
 | MIG-01 | Deliver the existing workspace-to-bundle bridge without false compatibility claims | 5 | Missing | — | #116 |
 | MIG-02 | Verify and close out the existing TypeScript migration pilot | 1 | Partial | — | #119 |
 | AI-01 | Configure AI provider Connections, model profiles and capability assignments | 6 | Missing | SEC-01, CON-01, AUTH-02 | new |
@@ -840,9 +840,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## SOL-03: Export, capture and import portable Solution source without tenant state
 
-Phase 5; **Missing**; existing issue: new
+Phase 5; **Partial**; existing issue: #163
 
-Local status: The local JSON manifest is not a complete source-closure/package/export/capture product. Existing #116 is only the workspace-to-manifest bridge.
+Local status: Implemented the portable source-closure/package/export/capture product in `src/solution-export.ts` (ADR 016): read-only capture/preview with fail-closed gaps, versioned JSON shareable packages with dependency-closure checks, export/import round-trip, and staged export jobs with guaranteed cleanup. App source hosting and forms/tables/agents ownership in packages stay explicitly deferred to SOL-02; encrypted operational backup stays under OPS-03.
 
 Depends: SOL-01, MIG-01, SEC-01
 
