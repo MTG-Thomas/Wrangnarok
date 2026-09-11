@@ -14,6 +14,7 @@ import type { ExecutionStatus, HistoryQuery, Principal, SafeError, SagaDef } fro
 import type { Connection } from "./integrations";
 import { buildOrgCtx } from "./saga";
 import type { OrgCtx } from "./saga";
+import { requireActiveInstall } from "./solutions";
 import type { Bindings } from "./bindings";
 export interface ExecutionRow {
   id: string;
@@ -48,6 +49,12 @@ export function workflowForSaga(env: Bindings, sagaId: string): Workflow<{ execu
   return env.ECHO_WORKFLOW;
 }
 export async function submit(env: Bindings, caller: Principal, key: string, saga: SagaDef, input: unknown) {
+  // Fail-closed execution gate (ADR 011 SOL-01, local decision): a Saga
+  // covered by a bundle install runs only against the applicable active
+  // install/revision. Orgs with no install rows at all keep working under
+  // the explicit local/loose development exception. Checked before the
+  // Execution row write so denied submissions persist nothing.
+  await requireActiveInstall(env.DB, saga.id, saga.revision, caller.orgId);
   // Canonical per ADR 001 (reconciled #15): deterministic SHA execution ID
   // scoped to (org, user, key); required Idempotency-Key; createBatch
   // retained-ID dedup + dispatched marker; 15-min same-revision retry gate;
