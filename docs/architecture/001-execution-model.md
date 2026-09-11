@@ -160,11 +160,53 @@ Expected failures use a structured `{ code, message }` shape with a stable machi
 
 History/list endpoints return lightweight Execution summaries (no input/result, default limit 20 + `hasMore` + opaque `nextCursor`). OBS-01 (issue #152) implements keyset cursor pagination over `(created_at DESC, id DESC)` with server-side filters `status` (single or comma-separated multi, mirroring upstream), `sagaId`, exact `sagaName` (upstream `workflowName` parity), ISO `startDate`/`endDate` bounds on `created_at`, and `limit`/`cursor`; anything else stays `400 UNSUPPORTED_QUERY`. Full input/result/Operation detail belongs on an individual Execution endpoint. Detail exposes stored status, ordered Operation records, and a separate advisory `runtimeStatus` from native Workflow introspection when available. A missing/unavailable native status is never interpreted as success, failure, or expiry. This mirrors a useful upstream separation and avoids large D1 reads.
 
-### Cancellation
+### Cancellation (RUN-04 canonical, issue #151)
 
-Cancellation is a product capability with an explicit implementation (issue #16), not assumed behavior.
+Cancellation is a two-phase product protocol, never a blind native call. The
+route first writes the owner-scoped logical marker (`Pending`/`Running ->
+`Cancelling`, conditional write; foreign owners get 404, never an existence
+leak), then attempts the native Workflow instance `terminate()` control, then
+**classifies the native outcome before reporting anything**. A confirmed stop
+is never reported unless one was observed. The classifier is
+`classifyTerminateError()` in `src/domain.ts` (pure, unit-tested): the local
+REST layer surfaces exact codes — `instance.cannot_terminate` when the
+instance is already in a finite state (`complete`/`errored`/`terminated`), and
+`instance.not_found` when no such native instance exists — and everything else
+(transient/control-plane failures, timeouts, non-Error throws) fails closed to
+ambiguous. Native diagnostics never leave the server (safe code/message only).
 
-Owner-only `POST /api/executions/:id/cancel` uses the same fixture auth plus the same `(org_id, user_id)` scoping as reads: foreign owners get 404, never an existence leak. `Pending` cancels immediately; `Running` moves `Running -> Cancelling -> Cancelled` with a conditional D1 write, then the native Workflow instance `terminate()` control (verified present in the pinned `worker-configuration.d.ts` as `WorkflowInstance.terminate()` and proven in local workerd: the instance reaches `terminated`, observed in `test/resilience.test.ts`), then the terminal `Cancelled` marker. Re-cancel while `Cancelling` is idempotent (`200`, no side effects); terminal states answer `409 EXECUTION_NOT_CANCELLABLE` and are never rewritten. A cancelled Execution never dispatches (again): resubmitting its key returns `409 EXECUTION_CANCELLED`. Late Saga checkpoints are fenced by conditional writes (`Running`-gated success, `Pending`/`Running`-gated failure), so a checkpoint that lands after cancellation cannot overwrite `Cancelled`, and a cancelled row never advances to `Running` (prepare-step guard).
+| Native outcome | D1 writes | Response |
+|---|---|---|
+| `terminate()` resolves (stop delivered) | `Cancelling -> Cancelled` (fenced) plus `EXECUTION_CANCELLED` operation markers | `200 { cancelled: true }` |
+| throws `instance.cannot_terminate` (already settled) | same confirm writes: logical cancel wins, the native engine merely settled first, and any racing terminal checkpoint already no-ops against the fence | `200 { cancelled: true }` |
+| throws `instance.not_found` on an **undispatched `Pending`** row | same confirm writes: vacuous stop — dispatch was never confirmed and the native side has nothing, so nothing is left running | `200 { cancelled: true }` |
+| throws `instance.not_found` on a **dispatched** row (a confirmed instance vanished) | **no terminal or Operation writes**; roll back `Cancelling` to the prior active status | `503 CANCELLATION_UNCONFIRMED` + `Retry-After: 5` |
+| any other throw (transient/control-plane, unknown code) | **no terminal or Operation writes**; roll back `Cancelling` to the prior active status | `503 CANCELLATION_UNCONFIRMED` + `Retry-After: 5` |
+
+The ambiguous path is retry-safe by construction: the rollback restores the
+prior active status, so retrying the cancel looks like a fresh cancel
+(re-mark, re-terminate, re-classify). The rollback (`Cancelling` back to the
+prior active status) is a compensating write owned by the route, not a product
+transition — the `canTransition` table still admits only `Pending`/`Running ->
+`Cancelling` and `Cancelling` -> `Cancelled`. A genuine racer that loses the marker
+write while a cancel is in flight still answers idempotent `200 {
+cancelled: false }`; terminal states still answer `409
+EXECUTION_NOT_CANCELLABLE` and are never rewritten; a cancelled Execution
+never dispatches (again) — resubmitting its key returns `409
+EXECUTION_CANCELLED`. Late Saga checkpoints stay fenced by conditional writes
+(`Running`-gated success, `Pending`/`Running`-gated failure), so a checkpoint
+that lands after a confirmed cancellation cannot overwrite `Cancelled`, a
+cancelled row never advances to `Running` (prepare-step guard), and after a
+rollback the true terminal outcome can still land.
+
+What logical cancellation does and does not guarantee for already-issued
+external side effects: cancellation sends the native stop signal and fences
+D1 state, but it cannot recall an in-flight vendor `fetch` — already-sent
+bytes may still execute remotely, and the vendor may ignore the stop entirely.
+`Cancelled` means the Execution will not advance further under its key, not
+that no external call was ever issued. A late vendor callback that lands after
+a confirmed cancel no-ops against the fenced `finishOperation` rows instead of
+overwriting terminal history.
 
 `Scheduled` stays deferred: there is no delayed-start path to cancel yet, so no `Scheduled` cancel semantics are claimed.
 

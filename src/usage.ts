@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 // Machine-readable usage block per ADR 004 (cost-logging requirement).
+import { scrubValueWithSecrets } from "./secrets";
 // Counts are application-observed D1 statements/rows and Workflow steps —
 // not Cloudflare metering. Never carries secrets, tokens, or payload bodies:
 // counts, IDs, durations, and status codes only.
@@ -54,9 +55,11 @@ export function buildUsage(input: {
     note: "Application-observed statements/rows/steps in local or dev runtime; not Cloudflare metering. Verify allowances vs current Cloudflare pricing before claiming Free-tier headroom.",
   };
 }
-/** Console emission: JSON on one line behind a stable prefix for log scraping. */
-export function logUsage(usage: UsageBlock): void {
-  console.log(`WRANGNAROK_USAGE ${JSON.stringify(usage)}`);
+/** Console emission: JSON on one line behind a stable prefix for log scraping.
+ * The block carries counts/IDs/durations only by construction; the scrub is a
+ * backstop so a secret-bearing caller value can never ride a log line out. */
+export function logUsage(usage: UsageBlock, secrets: readonly unknown[] = []): void {
+  console.log(`WRANGNAROK_USAGE ${JSON.stringify(scrubValueWithSecrets(usage, secrets))}`);
 }
 /** Per-request access log: method, route, status, and duration only — never
  * headers, bodies, query strings, or secrets. Route is the raw /api/*
@@ -72,13 +75,18 @@ export function logRequest(entry: RequestLog): void {
 }
 /** Persisted Trail-adjacent record (no secrets). Best-effort: a missing table
  * (old DB before migration 0002) must not fail the Execution itself. */
-export async function persistUsage(db: D1Database, executionId: string, usage: UsageBlock): Promise<void> {
+export async function persistUsage(
+  db: D1Database,
+  executionId: string,
+  usage: UsageBlock,
+  secrets: readonly unknown[] = [],
+): Promise<void> {
   try {
     await db
       .prepare(
         "INSERT INTO usage_blocks(execution_id,usage_json,created_at) VALUES (?,?,?) ON CONFLICT(execution_id) DO NOTHING",
       )
-      .bind(executionId, JSON.stringify(usage), new Date().toISOString())
+      .bind(executionId, JSON.stringify(scrubValueWithSecrets(usage, secrets)), new Date().toISOString())
       .run();
   } catch {
     console.warn(`WRANGNAROK_USAGE_PERSIST_SKIPPED ${executionId}`);

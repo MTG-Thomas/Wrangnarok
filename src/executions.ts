@@ -15,6 +15,7 @@ import type { Connection } from "./integrations";
 import { buildOrgCtx } from "./saga";
 import type { OrgCtx } from "./saga";
 import type { Bindings } from "./bindings";
+import { scrubExecutionError, scrubExecutionValue } from "./secrets";
 export interface ExecutionRow {
   id: string;
   saga_id: string;
@@ -185,12 +186,14 @@ export async function beginOperation(db: D1Database, id: string, name: string, p
 export async function finishOperation(db: D1Database, id: string, name: string, result: unknown): Promise<void> {
   // Fenced on Running: a late vendor callback that lands after Failed (or a
   // cancel marker) matches no row and no-ops instead of overwriting terminal
-  // history with invented success.
+  // history with invented success. Write-time scrub: the Execution's
+  // registered secrets (credentials, fetched tokens) are replaced by
+  // substring, so a secret-bearing transform can never persist in history.
   await db
     .prepare(
       "UPDATE operations SET status='Succeeded',completed_at=?,result_json=? WHERE execution_id=? AND name=? AND status='Running'",
     )
-    .bind(new Date().toISOString(), JSON.stringify(result), id, name)
+    .bind(new Date().toISOString(), JSON.stringify(scrubExecutionValue(result, id)), id, name)
     .run();
 }
 export async function failExecution(
@@ -207,9 +210,10 @@ export async function failExecution(
   // error_json. Owner-cancel wins (ADR 001): once the Cancelling marker is
   // written, a racing terminal checkpoint is stale and no-ops; the cancel
   // marker below no-ops on non-Cancelling rows, so an acknowledged
-  // cancellation is never rewritten.
+  // cancellation is never rewritten. Write-time scrub: a secret substring
+  // embedded in an error message is replaced before the terminal row lands.
   const now = new Date().toISOString();
-  const json = JSON.stringify(error);
+  const json = JSON.stringify(scrubExecutionError(error, id));
   await db.batch([
     db
       .prepare(

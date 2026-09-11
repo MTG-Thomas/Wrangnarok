@@ -9,6 +9,7 @@ import type { Bindings } from "../bindings";
 import { EXECUTION_ID, helloSaga, parseHelloInput } from "../domain";
 import type { ExecutionParams, HelloResult, SafeError } from "../domain";
 import { defineSaga } from "../saga";
+import { scrubExecutionError, scrubExecutionValue } from "../secrets";
 import { beginOperation, failExecution, finishOperation, prepareExecution } from "../executions";
 import { executeSaga } from "./shared";
 
@@ -68,15 +69,16 @@ export const helloSagaDef = defineSaga<HelloResult>({
           .prepare(
             "UPDATE executions SET status='Succeeded',completed_at=?,result_json=? WHERE id=? AND status='Running'",
           )
-          .bind(new Date().toISOString(), JSON.stringify(output), id)
+          .bind(new Date().toISOString(), JSON.stringify(scrubExecutionValue(output, id)), id)
           .run();
       });
       return output;
     } catch {
-      const safe: SafeError = expectedFailure ?? {
+      const raw: SafeError = expectedFailure ?? {
         code: "EXECUTION_FAILED",
         message: "The Execution could not complete. Inspect local runtime diagnostics.",
       };
+      const safe: SafeError = scrubExecutionError(raw, id);
       await step.do("persist-failure-v1", () => failExecution(ctx.db, id, safe));
       throw new NonRetryableError(safe.code);
     }
