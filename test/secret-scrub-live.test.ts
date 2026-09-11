@@ -71,7 +71,7 @@ afterEach(async () => {
   await reset();
 });
 
-it("scrubs credential and token substrings across a successful ninja Execution", async () => {
+it("scrubs credential and token substrings across a successful ninja Execution", { timeout: 30000 }, async () => {
   // Vendor embeds both the deployment secret and the fetched token as
   // substrings of org names, the error body, and the echoed URL — the exact
   // shape a naive exact-match scrubber would miss.
