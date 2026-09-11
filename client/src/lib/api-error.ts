@@ -2,11 +2,14 @@
 // Adapted from upstream gobifrost/bifrost client/src/lib/api-error.ts
 // (reference: vendor/upstream). Structure borrowed; Wrangnarök error shape only.
 
-/** Structured error body served by the Worker: { error: { code, message } }. */
+/** Structured error body served by the Worker: { error: { code, message } }.
+ * FORM-01 validation failures add an optional details list of per-field
+ * failures; the client passes it through without interpreting it. */
 export interface WorkerErrorBody {
   error: {
     code: string;
     message: string;
+    details?: unknown;
   };
 }
 
