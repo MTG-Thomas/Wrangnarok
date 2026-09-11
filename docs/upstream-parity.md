@@ -8,7 +8,7 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 17 Partial, 28 Missing, 2 Gated.
+Total: 47 capability rows — 1 Implemented, 18 Partial, 26 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ Total: 47 capability rows — 17 Partial, 28 Missing, 2 Gated.
 | FORM-01 | Deliver the existing Forms-to-Saga input binding slice | 4 | Partial | — | #118 |
 | FORM-02 | Deliver usable dynamic forms with safe startup, providers and submissions | 4 | Missing | FORM-01, RUN-03, TRG-01, AUTH-02, FILE-01 | new |
 | EMBED-01 | Publish and embed forms/apps with revocable external capabilities | 4 | Missing | FORM-02, APP-01, AUTH-03, AUTH-02 | new |
-| FILE-01 | Deliver managed file locations with policy-checked upload, download and mutation | 4 | Missing | AUTH-02, SEC-01 | new |
+| FILE-01 | Deliver managed file locations with policy-checked upload, download and mutation | 4 | Implemented | AUTH-02, SEC-01 | #157 |
 | FILE-02 | Manage generated artifacts and attachment lifecycles with retention | 4+6 | Missing | FILE-01, AUTH-02 | new |
 | APP-01 | Deploy authored applications with explicit lifecycle, ownership and recovery | 4+5 | Partial | AUTH-02, DEV-02, SOL-01 | #159 |
 | APP-02 | Provide the browser App SDK with scoped workflows, Tables, files and live updates | 4 | Missing | APP-01, TABLE-02, FILE-01, OBS-02 | new |
@@ -689,9 +689,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## FILE-01: Deliver managed file locations with policy-checked upload, download and mutation
 
-Phase 4; **Missing**; existing issue: new
+Phase 4; **Implemented**; existing issue: #157
 
-Local status: No file APIs or R2 binding exists. This is author/runtime file storage, not Worker static assets.
+Local status: ADR 018 earns the R2 primitive (FILES binding; D1 holds metadata only). Declared locations with minted read/write/delete policies, policy-checked proxy upload/download in Bearer and revocable-capability shapes, bounded batch issuance (100 entries, 1s to 7d expiry, per-path allow/deny), finalize-after-upload with server-side size/digest/type verification, version-fenced overwrite/delete (FILE_MISSING / VERSION_CONFLICT), policy admin plus access-test, Organization-scoped listing, and a bounded shared read-only fallback. Reads collapse missing/unfinalized/foreign to 404 (non-disclosure); revocation deletes outstanding tokens (no TTL grace). Single-PUT objects only (per-location max_bytes, at most 25 MiB); multipart/range/retention/content-search are explicit non-goals owned by FILE-02. Proven by 10 workerd tests on real local R2/D1 plus the Files UI read slice. R2 keys are org-namespaced; no Worker-local disk persistence.
 
 Depends: AUTH-02, SEC-01
 

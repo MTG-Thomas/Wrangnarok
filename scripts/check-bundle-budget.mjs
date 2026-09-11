@@ -29,7 +29,13 @@ import { join } from "node:path";
 // stacks on the TRG-02 surface above and measures ~226 KiB combined with the
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged versus main.
-const BUDGET_BYTES = 230 * 1024;
+// 2026-09-11 (FILE-01, issue #157): 275 KiB. The managed-files surface (14
+// routes plus the files domain: locations, policies, capabilities,
+// finalize verification, versioned mutation, structural listing, plus the
+// SDK descriptor additions) stacks on the CON-01 surface with the same
+// deliberate feature headroom, not dependency bloat: package.json is
+// unchanged versus main. Combined measures ~266 KiB.
+const BUDGET_BYTES = 275 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

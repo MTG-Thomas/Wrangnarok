@@ -199,3 +199,34 @@ export interface AppDetail extends AppSummary {
   jobs: AppJob[];
   activeDeployment: AppDeployment | null;
 }
+
+/** File location declaration (FILE-01, ADR 018). */
+export interface FileLocation {
+  name: string;
+  maxBytes: number;
+  contentTypes: string[];
+  sharedRead: boolean;
+  createdAt: string;
+}
+
+export interface FileLocationsResponse {
+  locations: FileLocation[];
+}
+
+/** File metadata row (only ready rows are downloadable). */
+export interface FileMeta {
+  location: string;
+  path: string;
+  version: number;
+  size: number;
+  contentType: string;
+  sha256: string;
+  status: "pending" | "ready";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FilesResponse {
+  files: FileMeta[];
+  nextCursor: string | null;
+}
