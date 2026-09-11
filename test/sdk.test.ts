@@ -67,7 +67,7 @@ describe("SDK contract version and descriptor (issue #140)", () => {
       "SYNC_CONFLICT",
       "INVALID_GIT_TARGET",
       "DEPLOY_BLOCKED",
-      "INVALID_ACTION",
+      "INVALID_ACTION_PREFIX",
       "INVALID_OUTCOME",
       "INVALID_SEARCH",
       "INVALID_NOTIFICATION",

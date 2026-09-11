@@ -19,7 +19,7 @@ import {
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
-import migration7 from "../migrations/0007_ops.sql?raw";
+import migration10 from "../migrations/0010_ops.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -84,7 +84,7 @@ beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(migration6);
-  await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration10);
   await bindings.DB.exec(seed);
 });
 
@@ -160,7 +160,7 @@ it("scopes audit reads to the Organization and rejects bad filters", async () =>
   const sameOrg = await call("/api/audit", "GET", undefined, ORG, OTHER_USER);
   expect(sameOrg.status).toBe(200);
   expect(((await sameOrg.json()) as { events: unknown[] }).events.length).toBeGreaterThan(0);
-  expect(await (await call("/api/audit?action=")).json()).toMatchObject({ error: { code: "INVALID_ACTION" } });
+  expect(await (await call("/api/audit?action=")).json()).toMatchObject({ error: { code: "INVALID_ACTION_PREFIX" } });
   expect(await (await call("/api/audit?outcome=bogus")).json()).toMatchObject({ error: { code: "INVALID_OUTCOME" } });
   expect(await (await call("/api/audit?search=")).json()).toMatchObject({ error: { code: "INVALID_SEARCH" } });
   expect(await (await call("/api/audit?cursor=!!!")).json()).toMatchObject({ error: { code: "INVALID_CURSOR" } });

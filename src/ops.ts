@@ -2,7 +2,7 @@
 // Administrative audit trail and operational notifications (OPS-01, issue
 // #172; ADR 018).
 //
-// Two D1 tables (migration 0007_ops.sql), Worker + D1 only — no Queue,
+// Two D1 tables (migration 0010_ops.sql), Worker + D1 only — no Queue,
 // Durable Object, KV, or WebSocket is earned by this slice. Clients poll
 // durable state; reconnects re-read the authoritative rows, never a stream.
 //
@@ -96,7 +96,7 @@ export function parseAuditQuery(params: URLSearchParams): AuditQuery {
   const rawAction = params.get("action");
   if (rawAction !== null) {
     if (rawAction.length === 0 || rawAction.length > 128) {
-      throw new Fault(400, "INVALID_ACTION", "Action must be a 1 to 128 character prefix filter.");
+      throw new Fault(400, "INVALID_ACTION_PREFIX", "Action must be a 1 to 128 character prefix filter.");
     }
     actionPrefix = rawAction;
   }

@@ -20,7 +20,7 @@ import {
 } from "../src/ops";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration6 from "../migrations/0006_apps.sql?raw";
-import migration7 from "../migrations/0007_ops.sql?raw";
+import migration10 from "../migrations/0010_ops.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -33,7 +33,7 @@ const other = { orgId: ORG, userId: OTHER_USER };
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration6);
-  await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration10);
   await bindings.DB.exec(seed);
 });
 
@@ -59,8 +59,8 @@ it("pins the audit query parser on every branch", () => {
   expect(parseAuditQuery(new URLSearchParams("cursor=" + encodeCursor()))).toBeDefined();
   // Every reject branch.
   const bad: [string, string][] = [
-    ["action=", "INVALID_ACTION"],
-    [`action=${"a".repeat(129)}`, "INVALID_ACTION"],
+    ["action=", "INVALID_ACTION_PREFIX"],
+    [`action=${"a".repeat(129)}`, "INVALID_ACTION_PREFIX"],
     ["outcome=bogus", "INVALID_OUTCOME"],
     ["search=", "INVALID_SEARCH"],
     [`search=${"a".repeat(257)}`, "INVALID_SEARCH"],
