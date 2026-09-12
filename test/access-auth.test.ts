@@ -4,7 +4,12 @@ import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
-import { ACCESS_CERT_FETCH_TIMEOUT_MS, clearAccessCertCache, setAccessCertFetchTimeoutMs, verifyAccess } from "../src/access";
+import {
+  ACCESS_CERT_FETCH_TIMEOUT_MS,
+  clearAccessCertCache,
+  setAccessCertFetchTimeoutMs,
+  verifyAccess,
+} from "../src/access";
 import { Fault } from "../src/domain";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
