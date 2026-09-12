@@ -162,8 +162,8 @@ import { join } from "node:path";
 // governs); shrink the raise if it lands lower.
 // 2026-09-12 (RUN-02 re-merge over FORM-02 main, issue #136): 560 KiB. The
 // union of the RUN-02 child-lineage surface with the FORM-02 dynamic-forms
-// main measures locally below (CI number governs; shrink the raise if it
-// lands lower). Hand-written feature code, no new dependencies (package.json
+// main measures 561822 bytes (~548.7 KiB) locally (CI number governs).
+// Hand-written feature code, no new dependencies (package.json
 // unchanged versus main); deliberate feature headroom only.
 const BUDGET_BYTES = 560 * 1024;
 
