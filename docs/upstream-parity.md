@@ -8,7 +8,7 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 20 Partial, 23 Missing, 2 Gated.
+Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 21 Partial, 22 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
@@ -53,7 +53,7 @@ Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 20 Par
 | AI-06 | Provide consent-controlled personal memory and composed required instructions | 6 | Missing | AI-05, AUTH-02 | new |
 | TOOL-01 | Expose opt-in Saga tools and an authorized inbound MCP gateway | 6 | Missing | AUTH-03, DEV-01, SEC-01 | new |
 | TOOL-02 | Connect external MCP servers with org tools and per-user consent | 6 | Missing | TOOL-01, OAUTH-01, AI-02 | new |
-| OPS-01 | Provide administrative audit trails and user-visible operational notifications | 4 | Missing | AUTH-02, SEC-01, OBS-02 | new |
+| OPS-01 | Provide administrative audit trails and user-visible operational notifications | 4 | Partial | AUTH-02, SEC-01, OBS-02 | #172 |
 | OPS-02 | Expose Cloudflare-native diagnostics, operational jobs and repair workflows | 4 | Partial | OBS-01, OPS-01, TRG-01 | new |
 | OPS-03 | Export and restore operational data with explicit encrypted-backup boundaries | 5 | Missing | SOL-03, TABLE-02, FILE-02, CON-02, SEC-01 | new |
 | OPS-04 | Report scoped usage, model costs and automation ROI | 4+6 | Missing | AUTH-02, AI-01, OPS-01 | new |
@@ -1093,9 +1093,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## OPS-01: Provide administrative audit trails and user-visible operational notifications
 
-Phase 4; **Missing**; existing issue: new
+Phase 4; **Partial**; existing issue: #172
 
-Local status: ExecutionHistory records runs, not user/role/config/login mutations. There is no notification inbox/dismiss/progress UI.
+Local status: Implemented the ADR 020 slice end to end on Worker + D1 (`audit_events`, `notifications` via `0018_ops.sql`; `src/ops.ts`): `GET /api/audit` (actor/org/action/target/outcome, action-prefix/outcome/search/date filters, keyset pagination, deployment-secret scrubbing, org-scoped reads) with best-effort emission (`app.create/source.edit/build.start/build.complete/swap/delete`, `app.managed_deny`, `execution.cancel/cancel_unconfirmed`) that never fails the primary mutation; durable personal/org notifications with dismiss ownership, per-job dedup, stale-progress reconciliation on read, and polling UI (`/audit`, `/notifications`) plus typed SDK/CLI. Proven in workerd (`test/ops.test.ts`: allowed/denied readers, denied mutations, scrubbing, duplicates, dismissal ownership, interrupted jobs, storage-failure policy) plus UI/contract pins. Remaining: role-gated audit reads and admin scoping (AUTH-02), live progress streaming (OBS-02 follow-up), retention automation (OPS-03).
 
 Depends: AUTH-02, SEC-01, OBS-02
 
