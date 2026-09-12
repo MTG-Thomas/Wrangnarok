@@ -78,7 +78,13 @@ import { join } from "node:path";
 // ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
 // feature code, no new dependencies (package.json unchanged versus main);
 // deliberate feature headroom only.
-const BUDGET_BYTES = 425 * 1024;
+// 2026-09-12 (AUTH-02 merge over OBS-02/OPS-02 main, issue #143): 465 KiB.
+// The union of the AUTH-02 resource-role control plane (src/roles.ts, 15
+// role/policy admin routes, grant enforcement) with the OBS-02/OPS-02
+// surfaces measures ~449 KiB combined. Hand-written feature code, no new
+// dependencies (package.json unchanged versus main); deliberate feature
+// headroom only.
+const BUDGET_BYTES = 465 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
