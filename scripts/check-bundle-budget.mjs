@@ -124,7 +124,17 @@ import { join } from "node:path";
 // surfaces plus the sec endpoint safe-URL policy and response baseline
 // measures 490817 bytes. Hand-written feature code, no new dependencies
 // (package.json unchanged versus main); deliberate feature headroom only.
-const BUDGET_BYTES = 485 * 1024;
+// 2026-09-12 (TOOL-01 stacked over sec/response main, issue #170): 490 KiB.
+// The opt-in tool registry (4 routes + D1 tool_enrollments + SDK entries),
+// the inbound MCP gateway (JSON-RPC tools/list, tools/call, tools/search,
+// tools/describe over the membership gate), and the HaloPSA Code Mode host
+// (contract search/inspect plus host-mediated execute with policy, egress,
+// and provenance) stack on the 450 KiB surface above. Hand-written feature
+// code, no new dependencies (package.json unchanged versus main);
+// deliberate feature headroom only.
+// 2026-09-12 (AUTH-02 rebase over TOOL-01 main, issue #143): union budget,
+// measured below after merge; deliberate feature headroom only.
+const BUDGET_BYTES = 500 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
