@@ -22,8 +22,8 @@ compatibility with upstream Bifrost is not promised; see
 
 Authenticated like every other `/api/*` route: `Authorization: Bearer
 <token>` (local fixture token or Access service identity). Only
-`GET /api/executions` accepts a query string, and only its allowlisted
-keys.
+`GET /api/executions`, `GET /api/executions/:id/logs`, and `GET /api/logs`
+accept a query string, and only each route's allowlisted keys.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -33,6 +33,8 @@ keys.
 | `POST` | `/api/dev/preview` | No-registration local preview (authoritative parse; no D1 writes, no dispatch; opt-in `checkEnvironment` read-only Connection check) |
 | `GET` | `/api/executions` | History summaries (`status` single or comma-separated, `sagaId`, `sagaName`, `startDate`, `endDate`, `limit`, `cursor`) |
 | `GET` | `/api/executions/:id` | Detail with Operations, input/result, safe error, `runtimeStatus` |
+| `GET` | `/api/executions/:id/logs` | OBS-02 scoped log tail (`level`, `limit`, `cursor`; DEBUG hidden unless asked; polling view over durable rows) |
+| `GET` | `/api/logs` | OBS-02 operator log search (`level`, `sagaId`, `sagaName`, `startDate`, `endDate`, `limit`, `cursor`) |
 | `POST` | `/api/executions/:id/cancel` | Owner-only cancel (exact 64-hex ID) |
 | `GET` | `/api/forms/:name` | Form declaration for this Organization (FORM-01) |
 | `POST` | `/api/forms/:name/submit` | Validate (422 `FORM_VALIDATION_FAILED`) then submit the bound Saga |
@@ -68,6 +70,12 @@ await client.listHistory({ status: "Failed,TimedOut", limit: 20 });
 await client.cancelExecution(done.executionId);
 await client.diagnoseExecution(done.executionId); // detail + hint for known codes
 
+// Author logs (OBS-02): scoped tail plus operator search. Polling views over
+// durable D1 rows; reconnect by refetching from nextCursor (replays dedupe
+// by seq). DEBUG rows stay hidden unless level asks for them.
+await client.tailLogs(done.executionId, { level: "INFO", limit: 50 });
+await client.searchLogs({ saga: "hello", level: "ERROR", limit: 20 });
+
 // Scoped config (CON-02, ADR 020): typed rows for this Organization.
 // Secret rows answer "[SECRET]"; secret values never cross the wire.
 await client.listConfigs();
@@ -94,6 +102,8 @@ node scripts/wrangnarok.mjs submit --saga hello --input '{"name":"Ada"}'
 node scripts/wrangnarok.mjs detail --id <64-hex> --wait
 node scripts/wrangnarok.mjs diagnose --id <64-hex>
 node scripts/wrangnarok.mjs history --status Failed,TimedOut --limit 20 --all
+node scripts/wrangnarok.mjs logs --id <64-hex> [--level INFO] [--limit 50] [--follow]
+node scripts/wrangnarok.mjs log-search [--level ERROR] [--saga hello] [--from 2026-09-01] [--to 2026-09-10] [--all]
 node scripts/wrangnarok.mjs cancel --id <64-hex>
 node scripts/wrangnarok.mjs audit --action app. --outcome success --all
 node scripts/wrangnarok.mjs notifications
