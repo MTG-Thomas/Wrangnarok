@@ -10,6 +10,10 @@
 // inside server-side execution (see ADR 005, Proposed).
 import { ECHO_INTEGRATION_ID, Fault, NINJA_INTEGRATION_ID, object, UUID } from "../domain";
 import type { FieldFailure } from "../domain";
+/** Local echo fixture URL (issue #239): the portable loopback default. Main's
+ * #236 policy owns transport/host safety; the #239 gate below owns which
+ * environments may inherit this default. */
+const ECHO_FIXTURE_ENDPOINT = "http://127.0.0.1:8788/echo";
 
 /** One non-secret Connection config field (CON-01). Portable declaration
  * only: names, types, defaults, and bounds — never tenant values. */
@@ -344,9 +348,9 @@ export const echoIntegrationDef = defineIntegration({
       name: "endpoint",
       type: "string",
       required: true,
-      default: "http://127.0.0.1:8788/echo",
+      default: ECHO_FIXTURE_ENDPOINT,
       maxLength: CONNECTION_CONFIG_MAX_LENGTH,
-      description: "Fixture echo URL. Echo accepts only its local fixture endpoint.",
+      description: "Local fixture echo URL (local deployments only). Non-local deployments need an explicit endpoint.",
     },
   ],
   requiredSecrets: [],
@@ -401,13 +405,21 @@ export function integrationByName(name: string): IntegrationDefinition | undefin
 }
 
 /** Validate one non-secret Connection config object against the Integration
- * schema (CON-01) plus the endpoint safe-URL policy (issue #236). Applies
- * declared defaults, rejects unknown keys, credential-shaped keys, missing
- * required fields, overlong values, and endpoint values that are not safe
- * URLs for the Integration (400 CONNECTION_SCHEMA_INVALID with per-field
- * details in the FORM-01 details channel shape: { field, code, message }[]).
- * Pure: no D1, no env. */
-export function validateConnectionConfig(def: IntegrationDefinition, value: unknown): Record<string, string> {
+ * schema (CON-01) plus the endpoint safe-URL policy (issue #236) and the
+ * echo deployment-environment gate (issue #239). Applies declared defaults,
+ * rejects unknown keys, credential-shaped keys, missing required fields,
+ * overlong values, and endpoint values that are not safe URLs for the
+ * Integration. The echo loopback fixture default serves local deployments
+ * only: non-local deployments must configure an explicit endpoint, and
+ * cleartext past loopback is rejected everywhere. Omit opts.environment (or
+ * pass "local") for local/fixture behavior. Throws Fault 400
+ * CONNECTION_SCHEMA_INVALID with per-field details (FORM-01 details channel
+ * shape: { field, code, message }[]). Pure: no D1, no env reads. */
+export function validateConnectionConfig(
+  def: IntegrationDefinition,
+  value: unknown,
+  opts: { readonly environment?: string } = {},
+): Record<string, string> {
   const failures: FieldFailure[] = [];
   if (!object(value)) {
     throw new Fault(400, "CONNECTION_SCHEMA_INVALID", "The Connection config must be a JSON object.", [
@@ -490,6 +502,31 @@ export function validateConnectionConfig(def: IntegrationDefinition, value: unkn
       }
     }
     resolved[field.name] = raw;
+  }
+  // Echo endpoint gating (issue #239, layered over the #236 safe-URL policy
+  // above): the portable default is the local fixture, never a non-local
+  // default. Track whether the writer omitted the endpoint so non-local
+  // deployments fail closed instead of silently inheriting loopback. An
+  // explicit loopback URL outside local is rejected even though #236 deems
+  // it a safe URL — safe transport is necessary but not sufficient past
+  // local. Explicit non-loopback endpoints keep whatever #236 decided.
+  if (def.name === "echo" && resolved.endpoint !== undefined) {
+    const environment = (opts.environment ?? "local").trim().toLowerCase() || "local";
+    const nonLocal = environment !== "local";
+    const omitted = !object(value) || (value as Record<string, unknown>).endpoint === undefined;
+    if (nonLocal && omitted) {
+      failures.push({
+        field: "endpoint",
+        code: "REQUIRED",
+        message: `Config field "endpoint" needs an explicit endpoint outside local deployments for the "echo" Integration.`,
+      });
+    } else if (nonLocal && resolved.endpoint === ECHO_FIXTURE_ENDPOINT) {
+      failures.push({
+        field: "endpoint",
+        code: "LOCAL_ENDPOINT_NOT_ALLOWED",
+        message: `Config field "endpoint" must not be the local fixture URL outside local deployments for the "echo" Integration.`,
+      });
+    }
   }
   if (failures.length > 0) {
     throw new Fault(400, "CONNECTION_SCHEMA_INVALID", "The Connection config failed schema validation.", failures);

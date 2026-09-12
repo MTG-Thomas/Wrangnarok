@@ -109,13 +109,22 @@ import { join } from "node:path";
 // (short messages, no dead helpers): 900 bytes over the 440 KiB budget.
 // Hand-written security-boundary code, no new dependencies (package.json
 // unchanged versus main); deliberate feature headroom only.
-// 2026-09-12 (AUTH-02 merge over RUN-01/AUTH-01/sec main, issue #143): 465 KiB.
+// 2026-09-12 (sec/response-hardening, issues #237 #238 #239): 450 KiB. The
+// response baseline (src/index.ts: inline security headers on the JSON
+// helper, Static Assets pass-through, and all raw file/artifact byte
+// responses; no re-wrap, no new dependencies) plus the echo
+// deployment-environment gate (src/integrations/index.ts, src/connections.ts:
+// opts.environment threading, two failure arms) measures 455735 bytes after
+// a shrink pass (direct header construction instead of Response re-wrapping):
+// 55 bytes over the 445 KiB budget. Hand-written security-boundary code,
+// package.json unchanged versus main; deliberate feature headroom only.
+// 2026-09-12 (AUTH-02 merge over sec/response main, issue #143): 465 KiB.
 // The union of the AUTH-02 resource-role control plane (src/roles.ts, 15
 // role/policy admin routes, grant enforcement) with the OBS-02/OPS-02/RUN-01
-// surfaces plus the sec endpoint safe-URL policy measures ~459 KiB combined
-// (re-measure after merge; shrink if the union lands lower). Hand-written
-// feature code, no new dependencies (package.json unchanged versus main);
-// deliberate feature headroom only.
+// surfaces plus the sec endpoint safe-URL policy and response baseline
+// measures ~459 KiB combined (re-measure after merge; shrink if the union
+// lands lower). Hand-written feature code, no new dependencies (package.json
+// unchanged versus main); deliberate feature headroom only.
 const BUDGET_BYTES = 465 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
