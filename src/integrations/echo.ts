@@ -28,8 +28,9 @@ export async function echo(
   connection: EchoConnection,
   input: EchoInput,
   operationId: string,
-  timeoutMs = VENDOR_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<EchoInput> {
+  const deadline = timeoutMs ?? VENDOR_TIMEOUT_MS;
   // Fixture-only by default, explicit HTTPS elsewhere (issue #239): the
   // local fixture URL serves local development; any other endpoint must be
   // an explicit non-loopback HTTPS URL so transport is never cleartext past
@@ -42,12 +43,12 @@ export async function echo(
     );
   }
   const started = Date.now();
-  const timedOut = () => Date.now() - started >= timeoutMs;
+  const timedOut = () => Date.now() - started >= deadline;
   try {
     const response = await fetch(connection.endpoint, {
       method: "POST",
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(deadline),
       headers: { "Content-Type": "application/json", "Idempotency-Key": operationId },
       body: JSON.stringify(input),
     });
