@@ -236,6 +236,40 @@ describe("Connection config validation (CON-01)", () => {
     ).toEqual({ endpoint: "https://us2.ninjarmm.com/api", clientIdLabel: "primary" });
   });
 
+  it("gates the echo default endpoint by deployment environment (issue #239)", () => {
+    // Local keeps the loopback fixture default, explicit or omitted. Main's
+    // #236 policy owns URL safety; this gate owns which environments may
+    // inherit the default.
+    expect(validateConnectionConfig(echoIntegrationDef, {})).toMatchObject({
+      endpoint: "http://127.0.0.1:8788/echo",
+    });
+    expect(
+      validateConnectionConfig(
+        echoIntegrationDef,
+        { endpoint: "http://127.0.0.1:8788/echo" },
+        { environment: "local" },
+      ),
+    ).toMatchObject({ endpoint: "http://127.0.0.1:8788/echo" });
+    // Non-local deployments fail closed without an explicit endpoint: the
+    // loopback default must never silently follow code to dev/preview.
+    for (const environment of ["dev", "preview", "production"]) {
+      try {
+        validateConnectionConfig(echoIntegrationDef, {}, { environment });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toMatchObject({ code: "CONNECTION_SCHEMA_INVALID" });
+        expect(JSON.stringify((error as { details?: unknown }).details)).toContain("explicit endpoint");
+      }
+      // An explicit loopback URL is rejected outside local too.
+      try {
+        validateConnectionConfig(echoIntegrationDef, { endpoint: "http://127.0.0.1:8788/echo" }, { environment });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toMatchObject({ code: "CONNECTION_SCHEMA_INVALID" });
+        expect(JSON.stringify((error as { details?: unknown }).details)).toContain("LOCAL_ENDPOINT_NOT_ALLOWED");
+      }
+    }
+  });
   it("rejects endpoint values that are not safe URLs for the Integration (issue #236)", () => {
     const detailsOf = (run: () => unknown): { field: string; code: string }[] => {
       try {

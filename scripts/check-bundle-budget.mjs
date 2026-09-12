@@ -125,6 +125,18 @@ import { join } from "node:path";
 // measures 469406 bytes (~458.4 KiB) locally (CI number governs).
 // Hand-written feature code, no new dependencies (package.json unchanged
 // versus main); deliberate feature headroom only.
+// 2026-09-12 (sec/response-hardening, issues #237 #238 #239): 450 KiB. The
+// response baseline (src/index.ts: inline security headers on the JSON
+// helper, Static Assets pass-through, and all raw file/artifact byte
+// responses; no re-wrap, no new dependencies) plus the echo
+// deployment-environment gate (src/integrations/index.ts, src/connections.ts:
+// opts.environment threading, two failure arms) measures 455735 bytes after
+// a shrink pass (direct header construction instead of Response re-wrapping):
+// 55 bytes over the 445 KiB budget. Hand-written security-boundary code,
+// package.json unchanged versus main; deliberate feature headroom only.
+// 2026-09-12 (RUN-02 re-merge over sec/response main, issue #136): 460 KiB.
+// The RUN-02 union measured 469406 bytes above; the sec/response surface
+// stays within that headroom. Remeasure after merge.
 const BUDGET_BYTES = 460 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
