@@ -207,9 +207,19 @@ it("lists organizations and truncates the persisted summary to the bound", async
   expect(result.organizations[0]).toEqual({ id: 1, name: "Org 1" });
 });
 
-it("pins the echo Integration to its fixture endpoint", async () => {
-  const fault = await faultOf(echo({ endpoint: "https://example.invalid/echo" }, { message: "hi" }, "op-1"));
+it("pins the echo Integration to its fixture endpoint or explicit HTTPS", async () => {
+  // Cleartext past loopback never reaches the vendor, in any environment.
+  const fault = await faultOf(echo({ endpoint: "http://example.invalid/echo" }, { message: "hi" }, "op-1"));
   expect(fault).toMatchObject({ status: 500, code: "INVALID_CONNECTION" });
+  // An explicit non-loopback HTTPS endpoint (issue #239) passes the gate and
+  // reaches the vendor — mocked at the Integration boundary here.
+  mockVendor((url) => {
+    if (url === "https://echo.example.com/hook") return jsonResponse({ message: "hi" });
+    throw new Error(`Unexpected outbound request: ${url}`);
+  });
+  await expect(echo({ endpoint: "https://echo.example.com/hook" }, { message: "hi" }, "op-1")).resolves.toEqual({
+    message: "hi",
+  });
 });
 
 it("maps echo transport faults without leaking vendor detail", async () => {

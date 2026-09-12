@@ -10,6 +10,7 @@
 // inside server-side execution (see ADR 005, Proposed).
 import { ECHO_INTEGRATION_ID, Fault, NINJA_INTEGRATION_ID, object, UUID } from "../domain";
 import type { FieldFailure } from "../domain";
+import { ECHO_FIXTURE_ENDPOINT, isEchoFixtureEndpoint, isEchoHttpsEndpoint } from "./echo";
 
 /** One non-secret Connection config field (CON-01). Portable declaration
  * only: names, types, defaults, and bounds — never tenant values. */
@@ -206,9 +207,10 @@ export const echoIntegrationDef = defineIntegration({
       name: "endpoint",
       type: "string",
       required: true,
-      default: "http://127.0.0.1:8788/echo",
+      default: ECHO_FIXTURE_ENDPOINT,
       maxLength: CONNECTION_CONFIG_MAX_LENGTH,
-      description: "Fixture echo URL. Echo accepts only its local fixture endpoint.",
+      description:
+        "Local fixture echo URL (local deployments only). Non-local deployments need an explicit HTTPS endpoint.",
     },
   ],
   requiredSecrets: [],
@@ -265,9 +267,18 @@ export function integrationByName(name: string): IntegrationDefinition | undefin
 /** Validate one non-secret Connection config object against the Integration
  * schema (CON-01). Applies declared defaults, rejects unknown keys,
  * credential-shaped keys, missing required fields, and overlong values.
- * Throws Fault 400 CONNECTION_SCHEMA_INVALID with per-field details (FORM-01
- * details channel shape: { field, code, message }[]). Pure: no D1, no env. */
-export function validateConnectionConfig(def: IntegrationDefinition, value: unknown): Record<string, string> {
+ * Echo endpoints are additionally gated by deployment environment (issue
+ * #239): the loopback fixture default serves local deployments only —
+ * non-local deployments must configure an explicit HTTPS endpoint, and
+ * cleartext past loopback is rejected everywhere. Omit opts.environment (or
+ * pass "local") for local/fixture behavior. Throws Fault 400
+ * CONNECTION_SCHEMA_INVALID with per-field details (FORM-01 details channel
+ * shape: { field, code, message }[]). Pure: no D1, no env reads. */
+export function validateConnectionConfig(
+  def: IntegrationDefinition,
+  value: unknown,
+  opts: { readonly environment?: string } = {},
+): Record<string, string> {
   const failures: FieldFailure[] = [];
   if (!object(value)) {
     throw new Fault(400, "CONNECTION_SCHEMA_INVALID", "The Connection config must be a JSON object.", [
@@ -328,6 +339,34 @@ export function validateConnectionConfig(def: IntegrationDefinition, value: unkn
       continue;
     }
     resolved[field.name] = raw;
+  }
+  // Echo endpoint gating (issue #239): the portable default is the local
+  // fixture, never a non-local default. Track whether the writer omitted the
+  // endpoint so non-local deployments fail closed instead of silently
+  // inheriting loopback.
+  if (def.name === "echo" && resolved.endpoint !== undefined) {
+    const environment = (opts.environment ?? "local").trim().toLowerCase() || "local";
+    const nonLocal = environment !== "local";
+    const omitted = !object(value) || (value as Record<string, unknown>).endpoint === undefined;
+    if (nonLocal && omitted) {
+      failures.push({
+        field: "endpoint",
+        code: "REQUIRED",
+        message: `Config field "endpoint" needs an explicit HTTPS URL outside local deployments for the "echo" Integration.`,
+      });
+    } else if (isEchoFixtureEndpoint(resolved.endpoint) && nonLocal) {
+      failures.push({
+        field: "endpoint",
+        code: "LOCAL_ENDPOINT_NOT_ALLOWED",
+        message: `Config field "endpoint" must not be the local fixture URL outside local deployments for the "echo" Integration.`,
+      });
+    } else if (!isEchoFixtureEndpoint(resolved.endpoint) && !isEchoHttpsEndpoint(resolved.endpoint)) {
+      failures.push({
+        field: "endpoint",
+        code: "INSECURE_ENDPOINT",
+        message: `Config field "endpoint" must be the local fixture URL or an explicit HTTPS URL for the "echo" Integration.`,
+      });
+    }
   }
   if (failures.length > 0) {
     throw new Fault(400, "CONNECTION_SCHEMA_INVALID", "The Connection config failed schema validation.", failures);

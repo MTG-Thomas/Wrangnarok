@@ -233,4 +233,69 @@ describe("Connection config validation (CON-01)", () => {
       }),
     ).toEqual({ endpoint: "https://us2.ninjarmm.com/api", clientIdLabel: "primary" });
   });
+
+  it("gates the echo endpoint by deployment environment (issue #239)", () => {
+    // Local keeps the loopback fixture default, explicit or omitted.
+    expect(validateConnectionConfig(echoIntegrationDef, {})).toMatchObject({
+      endpoint: "http://127.0.0.1:8788/echo",
+    });
+    expect(
+      validateConnectionConfig(
+        echoIntegrationDef,
+        { endpoint: "http://127.0.0.1:8788/echo" },
+        { environment: "local" },
+      ),
+    ).toMatchObject({ endpoint: "http://127.0.0.1:8788/echo" });
+    // Explicit HTTPS endpoints pass in every environment.
+    expect(validateConnectionConfig(echoIntegrationDef, { endpoint: "https://echo.example.com/hook" })).toMatchObject({
+      endpoint: "https://echo.example.com/hook",
+    });
+    expect(
+      validateConnectionConfig(
+        echoIntegrationDef,
+        { endpoint: "https://echo.example.com/hook" },
+        { environment: "dev" },
+      ),
+    ).toMatchObject({ endpoint: "https://echo.example.com/hook" });
+    // Non-local deployments fail closed without an explicit endpoint: the
+    // loopback default must never silently follow code to dev/preview.
+    for (const environment of ["dev", "preview", "production"]) {
+      try {
+        validateConnectionConfig(echoIntegrationDef, {}, { environment });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toMatchObject({ code: "CONNECTION_SCHEMA_INVALID" });
+        expect(JSON.stringify((error as { details?: unknown }).details)).toContain("explicit HTTPS");
+      }
+      // An explicit loopback URL is rejected outside local too.
+      try {
+        validateConnectionConfig(echoIntegrationDef, { endpoint: "http://127.0.0.1:8788/echo" }, { environment });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toMatchObject({ code: "CONNECTION_SCHEMA_INVALID" });
+        expect(JSON.stringify((error as { details?: unknown }).details)).toContain("LOCAL_ENDPOINT_NOT_ALLOWED");
+      }
+    }
+    // Cleartext past loopback is rejected in every environment, local included.
+    for (const environment of [undefined, "local", "dev"]) {
+      try {
+        validateConnectionConfig(
+          echoIntegrationDef,
+          { endpoint: "http://echo.example.com/hook" },
+          environment === undefined ? {} : { environment },
+        );
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toMatchObject({ code: "CONNECTION_SCHEMA_INVALID" });
+        expect(JSON.stringify((error as { details?: unknown }).details)).toContain("INSECURE_ENDPOINT");
+      }
+    }
+    // HTTPS loopback impostors stay rejected: scheme alone is not enough.
+    try {
+      validateConnectionConfig(echoIntegrationDef, { endpoint: "https://127.0.0.1/hook" });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toMatchObject({ code: "CONNECTION_SCHEMA_INVALID" });
+    }
+  });
 });
