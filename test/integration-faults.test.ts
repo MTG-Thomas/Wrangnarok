@@ -212,6 +212,27 @@ it("pins the echo Integration to its fixture endpoint", async () => {
   expect(fault).toMatchObject({ status: 500, code: "INVALID_CONNECTION" });
 });
 
+it("fails closed on unsafe persisted endpoints before any vendor fetch (issue #236)", async () => {
+  // Unsafe values never reach fetch: the guard parses first, so the mock
+  // would explode if the Action attempted a request.
+  mockVendor(() => {
+    throw new Error("must not fetch an unsafe endpoint");
+  });
+  const secrets = { clientId: "id", clientSecret: "secret" };
+  expect(await faultOf(listOrganizations({ endpoint: "http://10.9.9.9/api" }, secrets))).toMatchObject({
+    status: 500,
+    code: "INVALID_CONNECTION",
+  });
+  expect(await faultOf(listOrganizations({ endpoint: "not-a-url" }, secrets))).toMatchObject({
+    status: 500,
+    code: "INVALID_CONNECTION",
+  });
+  expect(await faultOf(echo({ endpoint: "http://10.9.9.9/echo" }, { message: "hi" }, "op-1"))).toMatchObject({
+    status: 500,
+    code: "INVALID_CONNECTION",
+  });
+});
+
 it("maps echo transport faults without leaking vendor detail", async () => {
   const input = { message: "hi" };
   mockVendor(() => new Response(null, { status: 302 }));

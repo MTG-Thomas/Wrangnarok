@@ -91,14 +91,31 @@ import { join } from "node:path";
 // ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
 // feature code, no new dependencies (package.json unchanged versus main);
 // deliberate feature headroom only.
-// 2026-09-12 (AUTH-02 merge over RUN-01/AUTH-01 main, issue #143): 465 KiB.
+// 2026-09-12 (RUN-01 stacked over OPS-02, issue #135): 435 KiB. Persisted
+// per-Saga runtime policy (2 routes, D1 table, per-Execution snapshot,
+// policy-gated submit plus snapshot-resolved retries/deadlines) stacks on
+// the OPS-02 surface above. Same deliberate feature headroom, not dependency
+// bloat: package.json is unchanged versus main.
+// 2026-09-12 (AUTH-01 second re-drive over RUN-01 main): 440 KiB. The union
+// of the AUTH-01 org-lifecycle surface (cascading-delete accounting over all
+// org-owned tables plus R2 bytes) with the RUN-01 policy surface measures
+// 446392 bytes: 952 bytes over the 435 KiB budget. Hand-written feature code,
+// no new dependencies (package.json unchanged versus main); deliberate
+// feature headroom only.
+// 2026-09-12 (sec-endpoint, issue #236): 445 KiB. The endpoint safe-URL policy
+// (src/integrations/index.ts: URL parse plus per-Integration transport/host
+// policy at persist time, assertSafeEndpoint guards in the echo/ninjaone
+// Actions and the management probe) measures 451460 bytes after a shrink pass
+// (short messages, no dead helpers): 900 bytes over the 440 KiB budget.
+// Hand-written security-boundary code, no new dependencies (package.json
+// unchanged versus main); deliberate feature headroom only.
+// 2026-09-12 (AUTH-02 merge over RUN-01/AUTH-01/sec main, issue #143): 465 KiB.
 // The union of the AUTH-02 resource-role control plane (src/roles.ts, 15
 // role/policy admin routes, grant enforcement) with the OBS-02/OPS-02/RUN-01
-// surfaces measures ~459 KiB combined (re-measure after merge; shrink if the
-// union lands lower). Hand-written feature code, no new dependencies
-// (package.json unchanged versus main); deliberate feature headroom only.
-// (Prior main entries retained: RUN-01 435 KiB over OPS-02, AUTH-01 second
-// re-drive 440 KiB with the RUN-01 policy surface.)
+// surfaces plus the sec endpoint safe-URL policy measures ~459 KiB combined
+// (re-measure after merge; shrink if the union lands lower). Hand-written
+// feature code, no new dependencies (package.json unchanged versus main);
+// deliberate feature headroom only.
 const BUDGET_BYTES = 465 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
