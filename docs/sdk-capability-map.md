@@ -19,7 +19,7 @@ context, and typed errors. Wrangnarok maps them as follows:
 | --- | --- | --- | --- |
 | `workflows` (list, metadata) | `listSagas` / `inspectSaga` in `src/sdk.ts` over `GET /api/sagas` | Supported | Git-owned static Catalog (ADR 002), not a runtime registry. |
 | `executions` (list) | `listHistory` / `getExecution` over `GET /api/executions[/:id]` | Supported | Summaries only on list; input/result only on detail. Cursor pagination. |
-| `workflows.execute` + WebSocket tail | `submitExecution` over `POST /api/executions` + terminal poll | Partial | No WebSocket/log stream. Submit returns 202 + `statusUrl`; the client polls to terminal. Live logs belong to OBS-02. |
+| `workflows.execute` + WebSocket tail | `submitExecution` over `POST /api/executions` + terminal poll; author logs via `tailLogs`/`searchLogs` over `GET /api/executions/:id/logs` and `GET /api/logs` | Partial | Submit returns 202 + `statusUrl`; the client polls to terminal. Author logs are durable D1 rows with cursor-poll reconnect (no WebSocket/log stream; live-push needs an earned ADR). |
 | `workflows` cancel | `cancelExecution` over `POST /api/executions/:id/cancel` | Supported | Owner-only, exact 64-hex ID; same caller policy as the UI. |
 | `@workflow` decorator + `context` / `ExecutionContext` | `defineSaga` + `SagaStep` (`step.do`/`step.sleep`) in `src/saga.ts` | Supported | Determinism rules enforced by `test/saga-contract.test.ts`. |
 | `data_provider` decorator | None | Tracked | Bounded sync/provider execution belongs to RUN-03. |
@@ -53,7 +53,7 @@ the UI: Bearer token, Organization from auth context, exact IDs only):
 | --- | --- | --- |
 | `workflows list` (`GET /api/workflows`) | `sagas` (`GET /api/sagas`) | Supported |
 | `workflows get <ref>` (list-and-filter; no per-record GET upstream) | `inspect --saga NAME\|UUID` (`GET /api/sagas` + local resolve) | Supported |
-| `workflows execute <ref>` + log tail | `submit --saga NAME\|UUID [--input JSON\|@FILE] [--key KEY] [--no-wait]` (202 + poll to terminal) | Partial (poll, no log stream) |
+| `workflows execute <ref>` + log tail | `submit --saga NAME\|UUID [--input JSON\|@FILE] [--key KEY] [--no-wait]` (202 + poll to terminal); `logs --id HEX [--level L] [--follow]`, `log-search [--level L] [--saga NAME\|UUID] [--from DATE] [--to DATE]` (cursor-poll over durable rows) | Partial (poll, no log stream) |
 | `workflows update/delete/grant-role/revoke-role` | None (Git-owned registration; no runtime mutation) | Tracked (AUTH-02 for grants) |
 | `workflows register` (workspace `.py` file) | `scaffold --name SLUG --id UUID` (offline `defineSaga` template; registration stays Git-owned) | Partial (adapted: no runtime registration by design) |
 | `run` (direct local workflow file, silent JSON) | `preview --saga NAME\|UUID [--input JSON\|@FILE] [--check-env]` (read-only `POST /api/dev/preview`: authoritative parse, no D1 writes, no dispatch) | Supported (adapted: `wrangler dev` is the edit loop; preview is the validation loop) |

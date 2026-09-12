@@ -17,6 +17,11 @@ import { join } from "node:path";
 // fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
 // shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
 // 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
+// 2026-09-11 (OBS-02, issue #153): stacks within the 380 KiB headroom.
+// The bounded author-log surface (src/logs.ts domain: parsers, cursor
+// pagination, retention, SEC-01 write/read paths, plus two routes, SDK
+// tail/search, and hello-pilot emission) measures within the deliberate
+// feature headroom above; package.json is unchanged versus main.
 // 2026-09-11 (TRG-02, issue #138): 210 KiB. The endpoint/webhook Trigger
 // surface (src/endpoints.ts: key/HMAC verification, rate limits, challenge,
 // delivery protocol, operator management; 3 public plus 6 management routes
@@ -62,12 +67,24 @@ import { join } from "node:path";
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged. Remeasure after merge; shrink the raise if the combined bundle
 // lands lower.
-// 2026-09-11 (RUN-01 stacked over OPS-01, issue #135): 390 KiB. Persisted
+// 2026-09-11 (OBS-02 merge over current main, issue #153): 405 KiB. The
+// union of the OBS-02 author-log surface (src/logs.ts, two routes, SDK
+// tail/search, CLI logs/log-search) with the newer main surfaces measures
+// ~388 KiB combined. Hand-written feature code, no new dependencies
+// (package.json unchanged versus main); deliberate feature headroom only.
+// 2026-09-12 (OPS-02, issue #173): 425 KiB. The diagnostics/repair surface
+// (src/ops.ts: version/health/metrics/scheduler/jobs/preflight/connections
+// plus five inspect-then-act repairs; 8 routes in src/index.ts; SDK guards
+// plus client plus descriptor entries; CLI commands plus selftest) measures
+// ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
+// feature code, no new dependencies (package.json unchanged versus main);
+// deliberate feature headroom only.
+// 2026-09-12 (RUN-01 stacked over OPS-02, issue #135): 435 KiB. Persisted
 // per-Saga runtime policy (2 routes, D1 table, per-Execution snapshot,
 // policy-gated submit plus snapshot-resolved retries/deadlines) stacks on
-// the OPS-01 surface above. Same deliberate feature headroom, not dependency
+// the OPS-02 surface above. Same deliberate feature headroom, not dependency
 // bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 390 * 1024;
+const BUDGET_BYTES = 435 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
