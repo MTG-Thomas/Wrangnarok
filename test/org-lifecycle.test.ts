@@ -437,7 +437,7 @@ it("fails closed without migration 0007 and refuses cross-org elevation", async 
   expect(orgB.length).toBe(36);
 });
 
-it("pins admin validation, error, and filter branches", { timeout: 30000 }, async () => {
+it("pins admin validation, error, and filter branches", async () => {
   const FRESH = "00000000-0000-4000-8000-000000000101";
   const UNKNOWN_ORG = "aaaaaaaa-1111-4111-8111-111111111112";
   const orgB = await seedSecondOrg();
