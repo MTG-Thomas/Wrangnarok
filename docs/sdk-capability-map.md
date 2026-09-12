@@ -37,7 +37,7 @@ context, and typed errors. Wrangnarok maps them as follows:
 | `events` (sources/subscriptions) | None | Tracked | Events belong to TRG-03. |
 | Typed errors (`UserError`, `WorkflowError`, `ValidationError`, ...) | `SdkError` + `SDK_ERROR_CODES` in `src/sdk.ts` | Supported | Same envelope `{ error: { code, message } }`; callers switch on `code`. |
 | Enums (`ExecutionStatus`, `ConfigType`, `FormFieldType`) | `SDK_TERMINAL_STATUSES`, `SDK_ERROR_CODES`, `ExecutionStatus` in `src/domain.ts` plus `FORM_FIELD_TYPES` in `src/forms.ts` | Supported | Statuses, error codes, and the closed 17-type form field set are modeled; config types stay with CON-02. |
-| SDK models (single source of truth) | Wire guards (`parseSagaCatalog`, `parseExecutionDetail`, `parseHistoryPage`, `parseFormList`, `parseFormDetail`, `parseFormStartup`, `parseFormProviders`, `parseFormSubmit`) | Supported | Guards fail loud with `SDK_CLIENT_MISMATCH` instead of trusting the wire. |
+| SDK models (single source of truth) | Wire guards (`parseSagaCatalog`, `parseExecutionDetail`, `parseHistoryPage`, `parseFormList`, `parseFormDetail`, `parseFormStartup`, `parseFormProviders`, `parseFormSubmit`, `parseProviderOutcome`) | Supported | Guards fail loud with `SDK_CLIENT_MISMATCH` instead of trusting the wire. |
 
 ## 2. CLI surface (`api/bifrost/cli.py` vs `scripts/wrangnarok.mjs`)
 
@@ -54,6 +54,7 @@ the UI: Bearer token, Organization from auth context, exact IDs only):
 | `workflows list` (`GET /api/workflows`) | `sagas` (`GET /api/sagas`) | Supported |
 | `workflows get <ref>` (list-and-filter; no per-record GET upstream) | `inspect --saga NAME\|UUID` (`GET /api/sagas` + local resolve) | Supported |
 | `workflows execute <ref>` + log tail | `submit --saga NAME\|UUID [--input JSON\|@FILE] [--key KEY] [--no-wait]` (202 + poll to terminal); `logs --id HEX [--level L] [--follow]`, `log-search [--level L] [--saga NAME\|UUID] [--from DATE] [--to DATE]` (cursor-poll over durable rows) | Partial (poll, no log stream) |
+| `workflows execute --sync` / data-provider inline results | `client.runProvider({ saga, input })` over `POST /api/executions/provider` (RUN-03, ADR 023): eligible read-only Sagas return inline with the durable receipt; async-only Sagas answer `PROVIDER_NOT_SUPPORTED`; `sync`/`transient` flags stay named exceptions; inline `code` has no route | Supported (adapted: bounded inline execution with persistence, never queue-plus-BLPOP) |
 | `workflows update/delete/grant-role/revoke-role` | None (Git-owned registration; no runtime mutation) | Tracked (AUTH-02 for grants) |
 | `workflows register` (workspace `.py` file) | `scaffold --name SLUG --id UUID` (offline `defineSaga` template; registration stays Git-owned) | Partial (adapted: no runtime registration by design) |
 | `run` (direct local workflow file, silent JSON) | `preview --saga NAME\|UUID [--input JSON\|@FILE] [--check-env]` (read-only `POST /api/dev/preview`: authoritative parse, no D1 writes, no dispatch) | Supported (adapted: `wrangler dev` is the edit loop; preview is the validation loop) |
