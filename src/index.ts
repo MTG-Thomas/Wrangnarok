@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0
-import { authenticate } from "./auth";
+import { authenticate, describeCaller } from "./auth";
 import type { Bindings } from "./bindings";
 import {
   appDetail,
@@ -451,6 +451,15 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (isOrgPath) {
       const orgRoute = await routeOrgs(request, env, ctx, url);
       if (orgRoute) return orgRoute;
+    }
+    if (url.pathname === "/api/auth/me" && request.method === "GET") {
+      // AUTH-03 caller identity (issue #144): read-only proof of which
+      // credential class verified this caller (human, service, fixture, or
+      // endpoint). The membership gate above already proved authorization, so
+      // strangers and revoked callers never reach this view. Query strings
+      // stay deny-by-default like every other single-resource route.
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ caller: describeCaller(identity, request), role: ctx.role, kind: ctx.kind });
     }
     if (url.pathname === "/api/sagas" && request.method === "GET")
       // Static Git-owned Catalog (ADR 002): discovery metadata only.

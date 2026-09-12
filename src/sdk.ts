@@ -725,6 +725,60 @@ export interface SdkUpdateConfigOptions {
   readonly description?: string;
 }
 
+// --- Caller identity (AUTH-03, issue #144) ------------------------------------
+// Read-only proof of which credential class verified the caller. Discovery,
+// CLI, and MCP clients preserve the same identity by calling the same
+// authenticated GET /api/auth/me route as the browser UI — the class is
+// derived server-side from the verified Principal, never from client input.
+
+/** Credential classes a verified caller can hold (mirrors access.ts). */
+export type SdkCredentialClass = "human" | "service" | "fixture" | "endpoint";
+
+export interface SdkCallerIdentity {
+  readonly userId: string;
+  readonly orgId: string;
+  readonly credentialClass: SdkCredentialClass;
+  readonly viaAccess: boolean;
+  readonly fixture: boolean;
+  readonly role: string | null;
+  readonly kind: string | null;
+}
+
+function isCredentialClass(value: unknown): value is SdkCredentialClass {
+  return value === "human" || value === "service" || value === "fixture" || value === "endpoint";
+}
+
+/** Guard a GET /api/auth/me payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseCallerIdentity(value: unknown): SdkCallerIdentity {
+  if (!isRecord(value) || !isRecord(value.caller)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The caller identity has an unexpected shape.");
+  }
+  const caller = value.caller;
+  if (
+    typeof caller.userId !== "string" ||
+    typeof caller.orgId !== "string" ||
+    !isCredentialClass(caller.credentialClass) ||
+    typeof caller.viaAccess !== "boolean" ||
+    typeof caller.fixture !== "boolean"
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The caller identity has an unexpected shape.");
+  }
+  const role = value.role;
+  const kind = value.kind;
+  if ((role !== null && typeof role !== "string") || (kind !== null && typeof kind !== "string")) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The caller identity has an unexpected shape.");
+  }
+  return {
+    userId: caller.userId,
+    orgId: caller.orgId,
+    credentialClass: caller.credentialClass,
+    viaAccess: caller.viaAccess,
+    fixture: caller.fixture,
+    role,
+    kind,
+  };
+}
+
 // --- Offline authoring helpers ----------------------------------------------
 
 const SAGA_SLUG = /^[a-z0-9][a-z0-9.-]*$/;
@@ -1051,6 +1105,10 @@ export interface SdkClient {
   updateConfig(options: SdkUpdateConfigOptions): Promise<SdkConfigEntry>;
   /** CON-02 scoped config (DELETE /api/config/:id). */
   deleteConfig(id: string): Promise<void>;
+  /** AUTH-03 caller identity (GET /api/auth/me): which credential class
+   * verified this caller, plus the membership role/kind. Same route as the
+   * browser UI, so discovery/CLI/MCP clients preserve the same identity. */
+  whoAmI(): Promise<SdkCallerIdentity>;
   getContract(): Promise<SdkContractDescriptor>;
 }
 
@@ -1344,6 +1402,10 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       );
       await readJson(response, "config delete");
     },
+    async whoAmI(): Promise<SdkCallerIdentity> {
+      const response = await guard(() => fetchImpl(`${base}/api/auth/me`, { headers }), "caller identity");
+      return parseCallerIdentity(await readJson(response, "caller identity"));
+    },
     async getContract(): Promise<SdkContractDescriptor> {
       const response = await guard(() => fetchImpl(`${base}${SDK_DOC_PATH}`, { headers }), "sdk contract");
       const data: unknown = await readJson(response, "sdk contract");
@@ -1382,6 +1444,12 @@ export function describeContract(): SdkContractDescriptor {
     version: SDK_VERSION,
     routes: [
       { method: "GET", path: "/api/sdk", description: "This contract descriptor (authenticated)." },
+      {
+        method: "GET",
+        path: "/api/auth/me",
+        description:
+          "Caller identity: verified userId/orgId, credential class (human/service/fixture/endpoint), and membership role/kind.",
+      },
       { method: "GET", path: "/api/sagas", description: "Saga discovery catalog (read-only metadata)." },
       {
         method: "POST",
@@ -1888,6 +1956,12 @@ export function describeContract(): SdkContractDescriptor {
         status: "supported",
         detail:
           "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 019): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
+      },
+      {
+        name: "credential-identity",
+        status: "supported",
+        detail:
+          "Scoped machine credentials with caller identity proof (AUTH-03, issue #144): Access service tokens (common_name allowlist) and TRG-02 endpoint keys (per-endpoint digest, expiry, disable/rotate) with least privilege, no raw-secret readback, and GET /api/auth/me reporting the verified credential class. LAB fixture auth is local/CI only, never production. Delegated human identity (SSO/MFA/passkeys) stays the IdP's job via Access verification; the Adaptation Mapping section of ADR 014 records the non-equivalent outcomes.",
       },
       {
         name: "resource-management",

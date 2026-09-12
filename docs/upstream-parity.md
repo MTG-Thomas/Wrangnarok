@@ -21,7 +21,7 @@ Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 22 Par
 | DEV-02 | Preview, sync and deploy author source with explicit dependency compatibility | 5 | Partial | DEV-01, SOL-01 | new |
 | AUTH-01 | Replace the single-org allowlist with Organization and user lifecycle management | 3 | Partial | — | new |
 | AUTH-02 | Enforce resource roles, claims and explicit delegated authorization end to end | 3 | Missing | AUTH-01 | new |
-| AUTH-03 | Manage scoped machine credentials and verify delegated human identity parity | 3 | Partial | AUTH-01, AUTH-02 | new |
+| AUTH-03 | Manage scoped machine credentials and verify delegated human identity parity | 3 | Partial | AUTH-01, AUTH-02 | #144 |
 | SEC-01 | Enforce execution-scoped secret registration and universal output scrubbing | 3 | Partial | — | new |
 | CON-01 | Manage Integration definitions and scoped Connection mappings through authorized APIs | 3 | Complete (pending review) | AUTH-02, SEC-01 | #146 |
 | CON-02 | Expose scoped configuration and secret-reference APIs to authors and operators | 3 | Implemented | AUTH-02, SEC-01, CON-01 | #147 |
@@ -300,9 +300,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## AUTH-03: Manage scoped machine credentials and verify delegated human identity parity
 
-Phase 3; **Partial**; existing issue: new
+Phase 3; **Partial**; existing issue: #144
 
-Local status: Access service allowlists and LAB fixtures exist; user API keys/workflow keys/device login/session lifecycle are not a product surface.
+Local status: Adapted parity slice (ADR 014 Adaptation Mapping, `test/machine-credentials.test.ts`): delegated human/service identity via Access verification (email + service `common_name` allowlists, per-request membership gate with invited-activation), scoped endpoint credentials as the workflow-key analogue (per-endpoint digest, expiry, disable/rotate, derived `wep-` delivery keys, no raw-secret readback), and `GET /api/auth/me` plus SDK `whoAmI()` reporting the verified credential class. LAB fixture auth is flagged non-production. Remaining gaps: no user-minted/self-service keys, no per-key scopes beyond the bound Saga, service tokens still allowlist-gated, no in-app MFA/passkey enrollment (IdP-owned).
 
 Depends: AUTH-01, AUTH-02
 
