@@ -1125,9 +1125,28 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## OPS-02: Expose Cloudflare-native diagnostics, operational jobs and repair workflows
 
-Phase 4; **Partial**; existing issue: new
+Phase 4; **Partial**; existing issue: #173
 
-Local status: Native Workers observability and application usage blocks exist, but no product health/version/metrics/job/scheduler/repair dashboard.
+Local status: Cloudflare-native diagnostics ship on Worker + D1 only (issue
+#173): GET /api/ops/version (SDK/catalog/migration contract), /health
+(Worker/D1 liveness), /metrics (per-status counts, undispatched-Pending
+backlog, recent failure codes), /scheduled-tasks (durable endpoint
+inventory, cadence honestly null until TRG-01), /jobs (Execution backlog
+plus app deploy aggregates with interrupted flags), /preflight (static
+mapping/credential presence), /connections (per-Integration health with
+registry hints), and POST /api/ops/repairs (inspect-then-act:
+retry-execution with original-input replay, cancel-execution, stuck-build
+restore, pending-upload and expired-token sweeps; dryRun inspects, explicit
+dryRun:false executes behind the admin gate with audit emission). Typed SDK
+client, CLI (ops-version/health/metrics/tasks/jobs/preflight/connections/
+repair with --execute), and contract descriptor entries ship too.
+Native Workers observability and application usage blocks predate this.
+
+Explicit gaps: no recurring-schedule rows (TRG-01 owns them), no live
+vendor probes in preflight (the per-Connection test route owns probes), no
+documentation/index repair (no search index exists), no distributed upload
+locks (single-Writer D1 needs none), no provider metering (unavailable,
+never fabricated), and no scheduled production jobs (manual per ADR 004).
 
 Depends: OBS-01, OPS-01, TRG-01
 

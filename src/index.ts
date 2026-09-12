@@ -118,12 +118,21 @@ import { deleteConfig, listConfigs, parseUpdateConfigInput, setConfig, updateCon
 import {
   createNotification,
   dismissNotification,
+  inspectRepair,
   listAudit,
   listNotifications,
+  opsConnectionHealth,
+  opsJobs,
+  opsMetrics,
+  opsPreflight,
+  opsScheduledTasks,
+  opsVersion,
   parseAuditQuery,
   parseNotificationId,
   parseNotificationLimit,
+  parseRepairBody,
   recordAudit,
+  runRepair,
   visibleNotification,
 } from "./ops";
 import {
@@ -210,7 +219,7 @@ import {
   updateRow,
 } from "./tables";
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "./sagas";
-import { describeContract, SDK_DOC_PATH } from "./sdk";
+import { describeContract, SDK_DOC_PATH, SDK_VERSION } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
 import { listExecutionLogs, parseLogSearchQuery, parseLogTailQuery, searchExecutionLogs } from "./logs";
 import { deploymentSecretsFromEnv, scrubValueWithDeploymentSecrets } from "./secrets";
@@ -419,9 +428,19 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const tableQueryList =
       request.method === "GET" && /^\/api\/tables\/[a-z0-9][a-z0-9-]{0,63}\/(rows|count)$/.test(url.pathname);
     // OPS-01 (ADR 020): the audit list and notifications list take query
-    // strings too, each through its own allowlisted parser.
+    // strings too, each through its own allowlisted parser. OPS-02 (issue
+    // #173): the ops metrics/jobs reads take the same allowlisted keys as
+    // the Execution history list (status filters, cursor paging); each
+    // route validates its keys below.
     const opsQueryList =
       (url.pathname === "/api/audit" || url.pathname === "/api/notifications") && request.method === "GET";
+    const opsDiagQueryList =
+      request.method === "GET" &&
+      (url.pathname === "/api/ops/metrics" ||
+        url.pathname === "/api/ops/jobs" ||
+        url.pathname === "/api/ops/scheduled-tasks" ||
+        url.pathname === "/api/ops/preflight" ||
+        url.pathname === "/api/ops/connections");
     // FILE-02 artifact routes take their own allowlisted keys (upload
     // ?name=/?mime=, list ?limit=, binding ?scope=/?refId=); each route
     // validates its keys below.
@@ -441,6 +460,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       !logQueryList &&
       !tableQueryList &&
       !opsQueryList &&
+      !opsDiagQueryList &&
       !artifactQuery &&
       !appTableRowsRead &&
       !appRuntimeFileDelete &&
@@ -1166,6 +1186,132 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       const dismissed = await dismissNotification(env.DB, caller, parseNotificationId(notifOne[1]));
       if (!dismissed) return json({ error: { code: "NOTIFICATION_NOT_FOUND", message: "Not found." } }, 404);
       return json({ dismissed: true });
+    }
+    // Cloudflare-native diagnostics (OPS-02, issue #173): product health,
+    // version, metrics, scheduled-task status, platform job progress, and
+    // Connection health. Every read is Organization-scoped; missing
+    // provider metrics answer unavailable, never fabricated. Query strings
+    // stay deny-by-default: only the allowlisted keys below pass the gate.
+    if (url.pathname === "/api/ops/version" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({
+        version: await opsVersion(env.DB, { sdkVersion: SDK_VERSION, catalog: SAGA_CATALOG }),
+      });
+    }
+    if (url.pathname === "/api/ops/health" && request.method === "GET") {
+      // Liveness over durable state: the membership gate already read D1
+      // before reaching this route, so a SELECT 1 here proves the Worker
+      // can serve traffic. No vendor, no metering, no secrets. A genuine
+      // storage failure surfaces as 500 via the shared handler, never a
+      // fabricated degraded payload.
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      await env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
+      return json({ status: "ok", database: "ok", worker: "ok", checkedAt: new Date().toISOString() });
+    }
+    if (url.pathname === "/api/ops/metrics" && request.method === "GET") {
+      // Upstream metrics.py maps to per-status Execution counts plus the
+      // undispatched-Pending admission backlog and recent failure codes.
+      // ?recent=N bounds the failure tail (1-50, default 10).
+      const recentRaw = url.searchParams.get("recent");
+      for (const key of url.searchParams.keys()) {
+        if (key !== "recent") {
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only recent is supported here.");
+        }
+      }
+      let recent = 10;
+      if (recentRaw !== null) {
+        if (!/^\d+$/.test(recentRaw) || Number(recentRaw) < 1 || Number(recentRaw) > 50) {
+          throw new Fault(400, "INVALID_LIMIT", "Recent must be an integer from 1 to 50.");
+        }
+        recent = Number(recentRaw);
+      }
+      return json(scrubValueWithDeploymentSecrets({ metrics: await opsMetrics(env.DB, caller, recent) }, env));
+    }
+    if (url.pathname === "/api/ops/scheduled-tasks" && request.method === "GET") {
+      // Upstream scheduler_diagnostics.py maps to the durable endpoint
+      // inventory (the trigger surface that actually exists); cadence stays
+      // honestly null until TRG-01 recurring schedules land.
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(await opsScheduledTasks(env.DB, caller));
+    }
+    if (url.pathname === "/api/ops/jobs" && request.method === "GET") {
+      // Upstream jobs.py + platform_jobs.py map to Execution backlog
+      // counters plus per-app deploy-job aggregates with interrupted flags.
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(scrubValueWithDeploymentSecrets({ jobs: await opsJobs(env.DB, caller) }, env));
+    }
+    if (url.pathname === "/api/ops/preflight" && request.method === "GET") {
+      // Upstream maintenance.py preflight maps to static per-Integration
+      // mapping/credential presence: no vendor HTTP, no secret values.
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(await opsPreflight(env.DB, caller, env as unknown as Record<string, string | undefined>));
+    }
+    if (url.pathname === "/api/ops/connections" && request.method === "GET") {
+      // Upstream platform/workers.py maps to per-Integration Connection
+      // health with registry test hints; live probes stay on the explicit
+      // per-Connection test route.
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(await opsConnectionHealth(env.DB, caller));
+    }
+    // Operational repairs (OPS-02, issue #173): inspect-then-act behind the
+    // double-commit contract. POST with dryRun omitted or true only
+    // inspects (no writes, no dispatch, no deletes); dryRun:false executes
+    // behind the admin gate and emits a best-effort audit event. Production
+    // stays manual per ADR 004; nothing here runs on a schedule.
+    if (url.pathname === "/api/ops/repairs" && request.method === "POST") {
+      requireJson(request);
+      const repair = parseRepairBody(await boundedJson(request.body));
+      const admin = isAdminCaller(ctx);
+      if (repair.dryRun) {
+        return json({ repair: await inspectRepair(env.DB, caller, repair) });
+      }
+      if (!admin) {
+        throw new Fault(403, "REPAIR_FORBIDDEN", "Only an admin may run operational repairs.");
+      }
+      const outcome = await runRepair(env.DB, caller, repair, {
+        admin,
+        secrets: deploymentSecretsFromEnv(env),
+        retry: async (key: string, sagaId: string, retryInput: unknown) => {
+          const target = SAGA_DEFINITIONS.find((entry) => entry.id === sagaId);
+          if (!target) throw new Fault(404, "UNKNOWN_SAGA", "The Saga for this Execution is no longer deployed.");
+          const accepted = await submit(env, caller, parseCallerKey(key), target, target.parse(retryInput));
+          return { executionId: accepted.executionId, replayed: accepted.replayed };
+        },
+        cancel: async (executionId: string) => {
+          // UPDATE-first like the interactive cancel route: the fenced
+          // write decides, then the row is re-read. A lost race (or an
+          // already-terminal row) answers the current status with
+          // cancelled:false instead of rewriting history.
+          const marked = await env.DB.prepare(
+            "UPDATE executions SET status='Cancelling' WHERE id=? AND status IN ('Pending','Running')",
+          )
+            .bind(executionId)
+            .run();
+          const current = await visibleExecution(env.DB, executionId, caller);
+          if (marked.meta.changes === 0) {
+            return { status: current.status, cancelled: false };
+          }
+          try {
+            await (await workflowForSaga(env, current.saga_id).get(executionId)).terminate();
+          } catch {
+            // Best-effort native stop: the D1 marker below is the durable
+            // repair record either way (the interactive cancel route keeps
+            // the stricter classify-and-confirm contract).
+          }
+          await cancelExecution(env.DB, executionId);
+          return { status: "Cancelled", cancelled: true };
+        },
+      });
+      await recordAudit(
+        env.DB,
+        caller,
+        `ops.repair.${repair.kind}`,
+        repair.targetId ? { type: "ops-repair", id: repair.targetId } : { type: "ops-repair" },
+        "success",
+        { kind: repair.kind, targetId: repair.targetId ?? null },
+        deploymentSecretsFromEnv(env),
+      );
+      return json(scrubValueWithDeploymentSecrets({ repair: outcome }, env));
     }
     // Generated Artifacts (FILE-02, ADR 019): Organization-scoped records
     // with R2 bytes, attachment bindings, and explicit retention cleanup.
