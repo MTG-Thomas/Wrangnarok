@@ -66,7 +66,9 @@ export const CONNECTION_CONFIG_MAX_LENGTH = 512;
 
 /** Hosts that only ever serve the local echo fixture (issue #236). The exact
  * endpoint pin stays at use in src/integrations/echo.ts; this set gates which
- * hosts may be persisted or probed at all. */
+ * hosts may be persisted or probed at all. Members are compared bare: the
+ * workerd URL parser strips IPv6 brackets, but node keeps them, so both
+ * runtimes normalize through stripBrackets. */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /** Suffixes a NinjaOne Connection endpoint may live under: the regional
@@ -84,23 +86,21 @@ function isIPv4Literal(host: string): boolean {
 }
 
 function isPrivateIPv4(host: string): boolean {
+  // Callers pass regex-validated dotted quads, so parts.length is always 4.
   const parts = host.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
   const a = parts[0] as number;
   const b = parts[1] as number;
+  if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
   if (a === 10 || a === 127 || a === 0) return true;
   if (a === 169 && b === 254) return true;
   if (a === 192 && b === 168) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  return false;
+  return a === 172 && b >= 16 && b <= 31;
 }
 
 function isInternalIPv6(host: string): boolean {
   const value = stripBrackets(host).toLowerCase();
   if (value === "::1" || value === "::") return true;
   // Link-local and unique-local literals never serve a Connection endpoint.
-  // Mapped/compat forms (::ffff:a.b.c.d) normalize through the v4 check via
-  // isInternalLiteralHost's dotted branch only when written dotted.
   return value.startsWith("fe80") || value.startsWith("fc") || value.startsWith("fd");
 }
 
@@ -156,53 +156,35 @@ function checkEndpointUrl(integrationName: string, raw: string): EndpointFailure
     return { code: "INVALID_URL", message: `Config field "endpoint" must be an absolute URL.` };
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return {
-      code: "INVALID_SCHEME",
-      message: `Config field "endpoint" must use http or https, not "${url.protocol.replace(/:$/, "")}".`,
-    };
+    return { code: "INVALID_SCHEME", message: `Config field "endpoint" must use http or https.` };
   }
   if (url.username || url.password) {
     return { code: "ENDPOINT_NOT_ALLOWED", message: `Config field "endpoint" must not embed credentials.` };
   }
   const policy = endpointPolicyFor(integrationName);
-  const host = url.hostname.toLowerCase();
+  const host = stripBrackets(url.hostname).toLowerCase();
   if (isLoopbackHost(host)) {
     if (!policy.allowLoopback) {
-      return {
-        code: "ENDPOINT_NOT_ALLOWED",
-        message: `Config field "endpoint" must not target a loopback address for the "${integrationName}" Integration.`,
-      };
+      return { code: "ENDPOINT_NOT_ALLOWED", message: `Config field "endpoint" must not target loopback.` };
     }
     if (url.protocol !== "http:") {
-      return {
-        code: "INVALID_SCHEME",
-        message: `Config field "endpoint" must use http for the local "${integrationName}" fixture.`,
-      };
+      return { code: "INVALID_SCHEME", message: `Config field "endpoint" must use http for the local fixture.` };
     }
     return null;
   }
   if (policy.loopbackOnly) {
-    return {
-      code: "ENDPOINT_NOT_ALLOWED",
-      message: `Config field "endpoint" must target the local "${integrationName}" fixture, not a public host.`,
-    };
+    return { code: "ENDPOINT_NOT_ALLOWED", message: `Config field "endpoint" must target the local fixture.` };
   }
   if (isInternalLiteralHost(host)) {
-    return {
-      code: "ENDPOINT_NOT_ALLOWED",
-      message: `Config field "endpoint" must not target an internal address for the "${integrationName}" Integration.`,
-    };
+    return { code: "ENDPOINT_NOT_ALLOWED", message: `Config field "endpoint" must not target an internal address.` };
   }
   if (policy.requireHttps && url.protocol !== "https:") {
-    return {
-      code: "INVALID_SCHEME",
-      message: `Config field "endpoint" must use https for the "${integrationName}" Integration.`,
-    };
+    return { code: "INVALID_SCHEME", message: `Config field "endpoint" must use https.` };
   }
   if (policy.allowedSuffixes.length > 0 && !policy.allowedSuffixes.some((suffix) => host.endsWith(suffix))) {
     return {
       code: "ENDPOINT_NOT_ALLOWED",
-      message: `Config field "endpoint" must live under ${policy.allowedSuffixes.join(" or ")} for the "${integrationName}" Integration.`,
+      message: `Config field "endpoint" must live under ${policy.allowedSuffixes.join(" or ")}.`,
     };
   }
   return null;
