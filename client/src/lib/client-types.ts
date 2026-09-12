@@ -200,6 +200,65 @@ export interface AppDetail extends AppSummary {
   activeDeployment: AppDeployment | null;
 }
 
+/** One administrative audit event (GET /api/audit; OPS-01, ADR 020). */
+export interface AuditEvent {
+  id: string;
+  orgId: string;
+  actorUserId: string;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  outcome: "success" | "failure";
+  detail: unknown;
+  createdAt: string;
+}
+
+export interface AuditResponse {
+  events: AuditEvent[];
+  hasMore: boolean;
+  /** Opaque page marker for the next GET /api/audit call; null when done. */
+  nextCursor: string | null;
+}
+
+/** One operational notification (GET /api/notifications; OPS-01, ADR 020). */
+export interface AppNotification {
+  id: string;
+  orgId: string;
+  userId: string;
+  scope: "personal" | "org";
+  category: string;
+  title: string;
+  body: string | null;
+  status: "pending" | "running" | "awaiting_action" | "completed" | "failed" | "cancelled";
+  progressPercent: number | null;
+  detail: unknown;
+  createdAt: string;
+  updatedAt: string;
+  dismissedAt: string | null;
+}
+
+export interface NotificationsResponse {
+  notifications: AppNotification[];
+}
+
+/** Artifact status values served by the Wrangnarök Worker (ADR 018). */
+export type ArtifactStatus = "active" | "deleted";
+
+/** Attachment-binding scopes: which surface the Artifact backs. */
+export type ArtifactBindingScope = "execution" | "workspace" | "conversation";
+
+/** Row shape for GET /api/artifacts (summaries + hasMore, never bytes). */
+export interface ArtifactSummary {
+  id: string;
+  name: string;
+  mime: string;
+  sizeBytes: number;
+  version: number;
+  status: ArtifactStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Row shape for GET /api/config (CON-02, ADR 020): typed values for this
  * Organization; secret rows answer "[SECRET]", never values. */
 export interface ConfigEntry {
@@ -300,6 +359,38 @@ export interface FileMeta {
   status: "pending" | "ready";
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ArtifactsResponse {
+  artifacts: ArtifactSummary[];
+  hasMore: boolean;
+}
+
+export interface ArtifactVersion {
+  version: number;
+  mime: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface ArtifactBinding {
+  scope: ArtifactBindingScope;
+  refId: string;
+}
+
+/** Detail shape for GET /api/artifacts/:id. */
+export interface ArtifactDetail extends ArtifactSummary {
+  orgId: string;
+  creatorUserId: string;
+  deletedAt: string | null;
+  versions: ArtifactVersion[];
+  bindings: ArtifactBinding[];
+}
+
+/** Generated-output format subcapability (all deferred: no Python rendering on Workers). */
+export interface ArtifactFormat {
+  format: string;
+  status: string;
 }
 
 export interface FilesResponse {

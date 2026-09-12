@@ -50,13 +50,26 @@ import { join } from "node:path";
 // APP-02 surface and measures ~334 KiB combined. Same deliberate feature
 // headroom as the earlier raises, not dependency bloat: package.json is
 // unchanged versus main.
-// 2026-09-11 (AUTH-02, issue #143): 365 KiB. The resource-role control plane
-// (src/roles.ts: 4-table CRUD plus per-request grant evaluation, grant
-// enforcement on direct submits plus form/app routes, 15 role/policy admin
-// routes, SDK error codes; no new dependencies) stacks on the CON-02
-// surface above and measures 368916 bytes. Same deliberate feature
-// headroom, not dependency bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 365 * 1024;
+// 2026-09-11 (FILE-02 stacked over APP-02/CON-02, issue #158): 365 KiB. The
+// generated-artifacts surface (19 routes plus the artifacts domain) stacks
+// with the same deliberate feature headroom, not dependency bloat:
+// package.json is unchanged versus main. Combined measures ~357 KiB locally
+// (CI number governs).
+// 2026-09-11 (OPS-01, issue #172): 380 KiB. The audit/notifications slice
+// (src/ops.ts: audit + notification domain, keyset pagination, reconcile;
+// 4 read routes plus audit emission on 5 app routes and the cancel route;
+// SDK audit/notification surface) stacks on the FILE-02 surface with the
+// same deliberate feature headroom, not dependency bloat: package.json is
+// unchanged. Remeasure after merge; shrink the raise if the combined bundle
+// lands lower.
+// 2026-09-11 (AUTH-02, issue #143): resource-role control plane (src/roles.ts:
+// 4-table CRUD plus per-request grant evaluation, grant enforcement on direct
+// submits plus form/app routes, 15 role/policy admin routes, SDK error codes;
+// no new dependencies) stacked on the CON-02 surface and measured 368916
+// bytes solo. Combined with FILE-02/OPS-01 above: keep the 380 KiB budget
+// and remeasure after merge; raise deliberately only if the combined bundle
+// lands higher.
+const BUDGET_BYTES = 380 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

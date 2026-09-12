@@ -2,7 +2,7 @@
 src/ops.ts
 src/index.ts
 src/sdk.ts
-migrations/0007_ops.sql
+migrations/0018_ops.sql
 test/ops.test.ts
 test/ops-branches.test.ts
 test/ops-ui.test.tsx
@@ -14,11 +14,11 @@ client/src/lib/client-types.ts
 client/src/App.tsx
 client/src/components/Nav.tsx
 client/src/components/StatusBadge.tsx
-docs/architecture/018-ops-audit-notifications.md
+docs/architecture/020-ops-audit-notifications.md
 docs/sdk.md
 docs/sdk-capability-map.md
 docs/upstream-parity.md
 scripts/check-bundle-budget.mjs
 scripts/wrangnarok.mjs
 scopes/ops-01.scope
-package.json
+test/org-lifecycle.test.ts

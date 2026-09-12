@@ -53,11 +53,18 @@ export const SDK_ERROR_CODES = [
   "DISPATCH_UNCONFIRMED",
   "EXECUTION_NOT_FOUND",
   "EXECUTION_NOT_CANCELLABLE",
+  "CANCELLATION_UNCONFIRMED",
   "UNSUPPORTED_QUERY",
   "INVALID_STATUS",
   "INVALID_SAGA_ID",
   "INVALID_LIMIT",
   "INVALID_CURSOR",
+  "INVALID_ACTION_PREFIX",
+  "INVALID_OUTCOME",
+  "INVALID_SEARCH",
+  "INVALID_NOTIFICATION",
+  "INVALID_NOTIFICATION_ID",
+  "NOTIFICATION_NOT_FOUND",
   "INTEGRATION_REQUIREMENT_UNSATISFIED",
   "FORM_VALIDATION_FAILED",
   "ECHO_VENDOR_TIMEOUT",
@@ -73,6 +80,25 @@ export const SDK_ERROR_CODES = [
   "SMOKE_WRITE_UNVERIFIED",
   "SMOKE_READ_UNVERIFIED",
   "EXECUTION_FAILED",
+  "INVALID_ARTIFACT",
+  "INVALID_ARTIFACT_ID",
+  "ARTIFACT_NOT_FOUND",
+  "ARTIFACT_FORBIDDEN",
+  "ARTIFACT_GONE",
+  "ARTIFACT_TOO_LARGE",
+  "EMPTY_ARTIFACT",
+  "BYTES_REQUIRED",
+  "ARTIFACT_WRITE_FAILED",
+  "ARTIFACT_BYTES_MISSING",
+  "ARTIFACT_STORE_NOT_CONFIGURED",
+  "INVALID_VERSION",
+  "VERSION_LIMIT",
+  "VERSION_RACE",
+  "INVALID_BINDING",
+  "BINDING_EXISTS",
+  "BINDING_NOT_FOUND",
+  "INVALID_RETENTION",
+  "RETENTION_FORBIDDEN",
   "INVALID_APP",
   "INVALID_SLUG",
   "INVALID_APP_ID",
@@ -322,6 +348,124 @@ export interface SdkCancelReceipt {
   readonly executionId: string;
   readonly status: string;
   readonly cancelled: boolean;
+}
+
+// --- Administrative audit trail and operational notifications (OPS-01) -----
+// Wire mirrors of the served shapes in src/ops.ts. Deliberately duplicated
+// from client/src/lib/client-types.ts: the Worker bundle must not depend on
+// the browser app, and the drift test asserts both agree with live responses.
+
+export interface SdkAuditEvent {
+  readonly id: string;
+  readonly orgId: string;
+  readonly actorUserId: string;
+  readonly action: string;
+  readonly targetType: string | null;
+  readonly targetId: string | null;
+  readonly outcome: string;
+  readonly detail: unknown;
+  readonly createdAt: string;
+}
+
+export interface SdkAuditPage {
+  readonly events: readonly SdkAuditEvent[];
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
+}
+
+export interface SdkAuditQuery {
+  readonly action?: string;
+  readonly outcome?: string;
+  readonly search?: string;
+  readonly from?: string;
+  readonly to?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface SdkNotification {
+  readonly id: string;
+  readonly orgId: string;
+  readonly userId: string;
+  readonly scope: string;
+  readonly category: string;
+  readonly title: string;
+  readonly body: string | null;
+  readonly status: string;
+  readonly progressPercent: number | null;
+  readonly detail: unknown;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly dismissedAt: string | null;
+}
+
+function isAuditEvent(value: unknown): value is SdkAuditEvent {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.orgId === "string" &&
+    typeof value.actorUserId === "string" &&
+    typeof value.action === "string" &&
+    (value.targetType === null || typeof value.targetType === "string") &&
+    (value.targetId === null || typeof value.targetId === "string") &&
+    typeof value.outcome === "string" &&
+    "detail" in value &&
+    typeof value.createdAt === "string"
+  );
+}
+
+/** Guard a GET /api/audit payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseAuditPage(value: unknown): SdkAuditPage {
+  if (!isRecord(value) || !Array.isArray(value.events) || typeof value.hasMore !== "boolean") {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The audit trail has an unexpected shape.");
+  }
+  for (const entry of value.events) {
+    if (!isAuditEvent(entry)) throw new SdkError("SDK_CLIENT_MISMATCH", "The audit trail has an unexpected shape.");
+  }
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && nextCursor !== null && typeof nextCursor !== "string") {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The audit trail has an unexpected shape.");
+  }
+  return {
+    events: value.events as unknown as readonly SdkAuditEvent[],
+    hasMore: value.hasMore,
+    nextCursor: (nextCursor ?? null) as string | null,
+  };
+}
+
+function isNotification(value: unknown): value is SdkNotification {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.orgId === "string" &&
+    typeof value.userId === "string" &&
+    typeof value.scope === "string" &&
+    typeof value.category === "string" &&
+    typeof value.title === "string" &&
+    (value.body === null || typeof value.body === "string") &&
+    typeof value.status === "string" &&
+    (value.progressPercent === null || typeof value.progressPercent === "number") &&
+    "detail" in value &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string" &&
+    (value.dismissedAt === null || typeof value.dismissedAt === "string")
+  );
+}
+
+/** Guard a GET /api/notifications payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseNotifications(value: unknown): readonly SdkNotification[] {
+  if (!isRecord(value) || !Array.isArray(value.notifications) || !value.notifications.every(isNotification)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The notifications inbox has an unexpected shape.");
+  }
+  return value.notifications;
+}
+
+/** Guard a GET /api/notifications/:id payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseNotification(value: unknown): SdkNotification {
+  if (!isRecord(value) || !isNotification(value.notification)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The notification has an unexpected shape.");
+  }
+  return value.notification;
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
@@ -771,10 +915,17 @@ export interface SdkHistoryQuery {
 
 const EXECUTION_ID_RE = /^[a-f0-9]{64}$/;
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._:-]{16,128}$/;
+const NOTIFICATION_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 function checkExecutionId(id: string): void {
   if (!EXECUTION_ID_RE.test(id)) {
     throw new SdkError("SDK_INVALID_REF", "Execution lookups need the exact 64-hex Execution ID.");
+  }
+}
+
+function checkNotificationId(id: string): void {
+  if (!NOTIFICATION_ID_RE.test(id)) {
+    throw new SdkError("SDK_INVALID_REF", "Notification lookups need the exact notification UUID.");
   }
 }
 
@@ -825,6 +976,14 @@ export interface SdkClient {
   cancelExecution(id: string): Promise<SdkCancelReceipt>;
   listHistory(query?: SdkHistoryQuery): Promise<SdkHistoryPage>;
   diagnoseExecution(id: string): Promise<SdkDiagnosis>;
+  /** OPS-01 audit trail (GET /api/audit): Organization-scoped events. */
+  listAuditEvents(query?: SdkAuditQuery): Promise<SdkAuditPage>;
+  /** OPS-01 notifications inbox (GET /api/notifications). */
+  listNotifications(limit?: number): Promise<readonly SdkNotification[]>;
+  /** OPS-01 notification detail (GET /api/notifications/:id). */
+  getNotification(id: string): Promise<SdkNotification>;
+  /** OPS-01 dismissal (DELETE /api/notifications/:id). */
+  dismissNotification(id: string): Promise<void>;
   /** CON-02 scoped config (GET /api/config): typed rows for this
    * Organization; secret rows answer "[SECRET]", never values. */
   listConfigs(): Promise<readonly SdkConfigEntry[]>;
@@ -1019,6 +1178,39 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
         hint: hintFor(detail.error),
       };
     },
+    async listAuditEvents(query: SdkAuditQuery = {}): Promise<SdkAuditPage> {
+      const params = new URLSearchParams();
+      if (query.action !== undefined) params.set("action", query.action);
+      if (query.outcome !== undefined) params.set("outcome", query.outcome);
+      if (query.search !== undefined) params.set("search", query.search);
+      if (query.from !== undefined) params.set("startDate", query.from);
+      if (query.to !== undefined) params.set("endDate", query.to);
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
+      if (query.cursor !== undefined) params.set("cursor", query.cursor);
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const response = await guard(() => fetchImpl(`${base}/api/audit${suffix}`, { headers }), "audit trail");
+      return parseAuditPage(await readJson(response, "audit trail"));
+    },
+    async listNotifications(limit?: number): Promise<readonly SdkNotification[]> {
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.set("limit", String(limit));
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const response = await guard(() => fetchImpl(`${base}/api/notifications${suffix}`, { headers }), "notifications");
+      return parseNotifications(await readJson(response, "notifications"));
+    },
+    async getNotification(id: string): Promise<SdkNotification> {
+      checkNotificationId(id);
+      const response = await guard(() => fetchImpl(`${base}/api/notifications/${id}`, { headers }), "notification");
+      return parseNotification(await readJson(response, "notification"));
+    },
+    async dismissNotification(id: string): Promise<void> {
+      checkNotificationId(id);
+      const response = await guard(
+        () => fetchImpl(`${base}/api/notifications/${id}`, { method: "DELETE", headers }),
+        "notification dismissal",
+      );
+      await readJson(response, "notification dismissal");
+    },
     async listConfigs(): Promise<readonly SdkConfigEntry[]> {
       const response = await guard(() => fetchImpl(`${base}/api/config`, { headers }), "config list");
       return parseConfigList(await readJson(response, "config list"));
@@ -1172,6 +1364,72 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/apps/:id/assets/*",
         description: "Serve one active-deployment file.",
       },
+      { method: "GET", path: "/api/artifacts", description: "Artifact summaries for this Organization (FILE-02)." },
+      {
+        method: "PUT",
+        path: "/api/artifacts",
+        description: "Upload bytes (?name=, ?mime=, octet-stream body); same-filename re-upload versions the same row.",
+      },
+      {
+        method: "GET",
+        path: "/api/artifacts/:id",
+        description: "Artifact detail with versions and attachment bindings (creator-or-admin).",
+      },
+      { method: "DELETE", path: "/api/artifacts/:id", description: "Soft-delete: metadata survives, bytes removed." },
+      { method: "GET", path: "/api/artifacts/:id/preview", description: "Current-version bytes inline." },
+      {
+        method: "GET",
+        path: "/api/artifacts/:id/download",
+        description: "Current-version bytes as an attachment download.",
+      },
+      {
+        method: "GET",
+        path: "/api/artifacts/:id/versions/:n",
+        description: "One addressed older-version byte snapshot.",
+      },
+      {
+        method: "PUT",
+        path: "/api/artifacts/:id/bytes",
+        description: "Upload a new version to one Artifact row (octet-stream body).",
+      },
+      { method: "POST", path: "/api/artifacts/:id/rename", description: "Rename the canonical record." },
+      {
+        method: "POST",
+        path: "/api/artifacts/:id/bindings",
+        description: "Bind the Artifact to an execution/workspace/conversation reference.",
+      },
+      {
+        method: "DELETE",
+        path: "/api/artifacts/:id/bindings",
+        description: "Remove one attachment binding (bytes untouched).",
+      },
+      {
+        method: "GET",
+        path: "/api/artifacts/bindings",
+        description: "List attachment triples for one (?scope=, ?refId=) reference (no bytes).",
+      },
+      {
+        method: "GET",
+        path: "/api/artifacts/:id/export",
+        description: "Portable metadata-only manifest (never runtime bytes).",
+      },
+      { method: "GET", path: "/api/artifacts/formats", description: "Generated-output format subcapabilities." },
+      { method: "GET", path: "/api/artifacts/retention", description: "Read the retention policy (default 90 days)." },
+      {
+        method: "PUT",
+        path: "/api/artifacts/retention",
+        description: "Set the retention window, 1-3650 days (admin only).",
+      },
+      {
+        method: "GET",
+        path: "/api/artifacts/cleanup/preview",
+        description: "List what retention cleanup would delete (no writes).",
+      },
+      {
+        method: "POST",
+        path: "/api/artifacts/cleanup/run",
+        description: "Delete one bounded expired batch with per-row outcomes (admin only).",
+      },
       { method: "GET", path: "/api/apps/:id/grants", description: "List app grants." },
       { method: "POST", path: "/api/apps/:id/grants", description: "Create an app grant." },
       {
@@ -1246,6 +1504,27 @@ export function describeContract(): SdkContractDescriptor {
         method: "DELETE",
         path: "/api/apps/:id/runtime/files/*",
         description: "Version-aware file delete.",
+      },
+      {
+        method: "GET",
+        path: "/api/audit",
+        description:
+          "Administrative audit trail (action/outcome/search/startDate/endDate/limit/cursor; Organization-scoped).",
+      },
+      {
+        method: "GET",
+        path: "/api/notifications",
+        description: "Operational inbox: own personal rows plus same-org org-scoped rows.",
+      },
+      {
+        method: "GET",
+        path: "/api/notifications/:id",
+        description: "One notification (owner-only for personal rows).",
+      },
+      {
+        method: "DELETE",
+        path: "/api/notifications/:id",
+        description: "Dismiss a notification (owner-only for personal rows).",
       },
       {
         method: "GET",
@@ -1452,6 +1731,12 @@ export function describeContract(): SdkContractDescriptor {
       },
       { name: "execute-status-cancel", status: "supported", detail: "Submit, poll, detail, history, and cancel." },
       {
+        name: "generated-artifacts",
+        status: "supported",
+        detail:
+          "Generated/uploaded Artifacts on Worker + D1 + R2 (FILE-02, ADR 019): upload with same-filename versioning, list/preview/download/rename/delete, execution/workspace/conversation attachment bindings with the canonical-versus-binding access split, configurable retention with explicit preview/run cleanup. Portable exports are metadata-only; Python rendering libraries are not required.",
+      },
+      {
         name: "authored-apps",
         status: "supported",
         detail: "Independent apps: create, edit, validate, build, jobs, swap, delete, asset serving (ADR 017).",
@@ -1473,6 +1758,12 @@ export function describeContract(): SdkContractDescriptor {
         status: "supported",
         detail:
           "No-registration local preview (POST /api/dev/preview): authoritative parse, no D1 writes, no dispatch; opt-in read-only environment check. Sync/Git/lock/deploy guidance lives in docs/dev-preview.md (DEV-02).",
+      },
+      {
+        name: "ops-audit-notifications",
+        status: "supported",
+        detail:
+          "Administrative audit trail (GET /api/audit) plus operational notifications inbox with dismiss (ADR 020).",
       },
       {
         name: "connection-management",
