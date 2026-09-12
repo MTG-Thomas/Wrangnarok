@@ -16,6 +16,11 @@ import {
   localCatalog,
   parseAuditPage,
   parseExecutionDetail,
+  parseFormDetail,
+  parseFormList,
+  parseFormProviders,
+  parseFormStartup,
+  parseFormSubmit,
   parseHistoryPage,
   parseNotification,
   parseNotifications,
@@ -83,6 +88,32 @@ describe("SDK contract version and descriptor (issue #140)", () => {
       expect.arrayContaining(["GET /api/config", "POST /api/config", "PUT /api/config/:id"]),
     );
     for (const code of ["CONFIG_REQUIREMENT_UNSATISFIED", "SECRET_NOT_CONFIGURED", "MANAGED_RESOURCE"]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
+    // FORM-02 (issue #155): dynamic forms are a supported capability with
+    // designer, startup, provider, and submit routes plus error codes.
+    expect(descriptor.capabilities.find((entry) => entry.name === "dynamic-forms")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining([
+        "GET /api/forms",
+        "POST /api/forms",
+        "GET /api/forms/:name",
+        "PUT /api/forms/:name",
+        "DELETE /api/forms/:name",
+        "POST /api/forms/:name/startup",
+        "GET /api/forms/:name/providers",
+        "POST /api/forms/:name/submit",
+      ]),
+    );
+    for (const code of [
+      "INVALID_FORM",
+      "FORM_NOT_FOUND",
+      "STALE_FORM_HANDLE",
+      "INVALID_PREFILL",
+      "PREFILL_NOT_ALLOWED",
+      "INVALID_SCHEDULE",
+      "IDEMPOTENCY_CONFLICT",
+    ]) {
       expect(SDK_ERROR_CODES).toContain(code);
     }
     for (const capability of descriptor.capabilities) {
@@ -728,5 +759,264 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     expect(() => scaffoldSaga({ ...good, description: "" })).toThrow(/1-280/);
     expect(() => scaffoldSaga({ ...good, revision: "" })).toThrow(/diagnostic marker/);
     expect(localCatalog()).toHaveLength(SAGA_CATALOG.length);
+  });
+
+  it("guards every form wire shape against drift", () => {
+    expect(() => parseFormList({})).toThrow(/unexpected shape/);
+    expect(() => parseFormList({ forms: [{ id: 1 }] })).toThrow(/unexpected shape/);
+    expect(parseFormList({ forms: [] })).toEqual([]);
+    const detail = {
+      form: {
+        id: "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5",
+        name: "contact",
+        sagaId: helloSaga.id,
+        allowPrefill: false,
+        fields: [{ name: "name", type: "text", required: true, maxLength: 1024 }],
+      },
+    };
+    expect(parseFormDetail(detail).name).toBe("contact");
+    expect(() => parseFormDetail({})).toThrow(/unexpected shape/);
+    expect(() => parseFormDetail({ form: { name: 1 } })).toThrow(/unexpected shape/);
+    expect(() =>
+      parseFormDetail({
+        form: { ...detail.form, fields: [{ name: "x", type: "watermelon", required: false, maxLength: 8 }] },
+      }),
+    ).toThrow(/unexpected shape/);
+    const started = { form: "contact", handle: "h", expiresAt: "t", snapshot: {}, options: {} };
+    expect(() => parseFormStartup(started)).toThrow(/unexpected shape/);
+    expect(parseFormStartup({ ...started, handle: "a".repeat(64) }).handle).toBe("a".repeat(64));
+    expect(() => parseFormStartup({})).toThrow(/unexpected shape/);
+    expect(parseFormProviders({ form: "c", options: {} }).errors).toEqual({});
+    expect(() => parseFormProviders({})).toThrow(/unexpected shape/);
+    expect(() => parseFormList({ forms: [{ id: "x", name: "contact", sagaId: helloSaga.id }] })).toThrow(
+      /unexpected shape/,
+    );
+    const receipt = {
+      form: "contact",
+      executionId: "a".repeat(64),
+      replayed: false,
+      statusUrl: `/api/executions/${"a".repeat(64)}`,
+    };
+    expect(parseFormSubmit(receipt).executionId).toBe("a".repeat(64));
+    expect(() => parseFormSubmit({ ...receipt, replayed: "yes" })).toThrow(/unexpected shape/);
+    expect(() => parseFormSubmit({ ...receipt, scheduled: 1 })).toThrow(/unexpected shape/);
+    expect(() => parseFormSubmit({})).toThrow(/unexpected shape/);
+    // Guard chains short-circuit on non-records and on every field failure,
+    // so malformed wire shapes fail loud instead of trusting partial data.
+    expect(() => parseFormList(null)).toThrow(/unexpected shape/);
+    expect(() => parseFormList({ forms: [null] })).toThrow(/unexpected shape/);
+    expect(() => parseFormDetail(null)).toThrow(/unexpected shape/);
+    expect(() => parseFormStartup({ ...started, snapshot: null })).toThrow(/unexpected shape/);
+    expect(() => parseFormStartup({ ...started, options: null })).toThrow(/unexpected shape/);
+    expect(() => parseFormProviders({ form: "c", options: null })).toThrow(/unexpected shape/);
+    expect(() => parseFormSubmit({ ...receipt, executionId: "short" })).toThrow(/unexpected shape/);
+    expect(() => parseFormSubmit({ ...receipt, statusUrl: 7 })).toThrow(/unexpected shape/);
+  });
+
+  it("drives forms through the typed client with offline guards", async () => {
+    const detail = {
+      form: {
+        id: "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5",
+        name: "contact",
+        sagaId: helloSaga.id,
+        allowPrefill: false,
+        fields: [{ name: "name", type: "text", required: true, maxLength: 1024 }],
+      },
+    };
+    const started = { form: "contact", handle: "a".repeat(64), expiresAt: "t", snapshot: {}, options: {} };
+    const receiptId = "b".repeat(64);
+    const receipt = {
+      form: "contact",
+      executionId: receiptId,
+      replayed: false,
+      statusUrl: `/api/executions/${receiptId}`,
+    };
+    const { fetchImpl } = stub([
+      json({
+        forms: [{ id: "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5", name: "contact", sagaId: helloSaga.id }],
+      }),
+      json(detail),
+      json(detail),
+      json(detail),
+      json({ deleted: "contact" }),
+      json(started),
+      json({ form: "contact", options: {}, errors: {} }),
+      json(receipt),
+    ]);
+    const client = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl });
+    expect(await client.listForms()).toHaveLength(1);
+    expect((await client.getForm("contact")).name).toBe("contact");
+    const fields = [{ name: "name", type: "text", required: true }];
+    expect((await client.createForm({ name: "contact", sagaId: helloSaga.id, fields })).name).toBe("contact");
+    expect((await client.updateForm("contact", { sagaId: helloSaga.id, fields })).name).toBe("contact");
+    await client.deleteForm("contact");
+    expect((await client.startForm("contact")).handle).toBe("a".repeat(64));
+    expect((await client.getFormProviders("contact")).form).toBe("contact");
+    const submitted = await client.submitForm({ form: "contact", handle: "a".repeat(64), key: "form-sdk-test-0001" });
+    expect(submitted.executionId).toBe(receiptId);
+    await expect(client.getForm("Bad Name")).rejects.toMatchObject({ code: "SDK_INVALID_REF" });
+    await expect(client.submitForm({ form: "contact", handle: "nope" })).rejects.toMatchObject({
+      code: "SDK_INVALID_REF",
+    });
+    const malformed = stub([json({ nope: true })]);
+    await expect(
+      createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: malformed.fetchImpl }).listForms(),
+    ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+  });
+
+  it("covers client optional branches: history, config, forms, submit, readJson", async () => {
+    // listHistory with no query sends a bare URL (empty suffix branch).
+    const bare = stub([json({ executions: [], hasMore: false, nextCursor: null })]);
+    const bareClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: bare.fetchImpl });
+    expect((await bareClient.listHistory()).executions).toEqual([]);
+    expect(bare.calls[0]?.url).toBe("http://local.test/api/executions");
+    // listHistory with a cursor appends the cursor param.
+    const paged = stub([
+      json(catalog),
+      json({
+        executions: [{ executionId: "d".repeat(64), sagaId: helloSaga.id, status: "Failed" }],
+        hasMore: false,
+        nextCursor: null,
+      }),
+    ]);
+    const pagedClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: paged.fetchImpl });
+    await pagedClient.listHistory({ saga: "hello", cursor: "abc" });
+    expect(paged.calls[1]?.url).toContain("cursor=abc");
+    // listNotifications with and without a limit (suffix branches).
+    const noLimit = stub([json({ notifications: [] })]);
+    const noLimitClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: noLimit.fetchImpl });
+    expect(await noLimitClient.listNotifications()).toEqual([]);
+    expect(noLimit.calls[0]?.url).toBe("http://local.test/api/notifications");
+    const withLimit = stub([json({ notifications: [] })]);
+    const withLimitClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: withLimit.fetchImpl,
+    });
+    await withLimitClient.listNotifications(5);
+    expect(withLimit.calls[0]?.url).toContain("limit=5");
+    // setConfig without value/description omits both keys (spread branches).
+    const entry = {
+      config: {
+        id: "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5",
+        key: "k",
+        type: "int",
+        value: 1,
+        description: null,
+        managedBy: null,
+        updatedAt: "t",
+        updatedBy: "u",
+      },
+    };
+    const setBare = stub([json(entry)]);
+    const setBareClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: setBare.fetchImpl });
+    await setBareClient.setConfig({ key: "k", type: "int" });
+    expect(JSON.parse(String(setBare.calls[0]?.init.body))).toEqual({ key: "k", type: "int" });
+    // updateConfig with a full patch sends every key; bad ids fail offline.
+    const setFull = stub([json(entry)]);
+    const setFullClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: setFull.fetchImpl });
+    await setFullClient.updateConfig({
+      id: "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5",
+      key: "k",
+      type: "int",
+      value: 2,
+      description: "d",
+    });
+    expect(JSON.parse(String(setFull.calls[0]?.init.body))).toMatchObject({ key: "k", value: 2 });
+    await expect(setFullClient.updateConfig({ id: "nope" })).rejects.toMatchObject({ code: "SDK_INVALID_REF" });
+    await expect(setFullClient.deleteConfig("nope")).rejects.toMatchObject({ code: "SDK_INVALID_REF" });
+    // Form create/update with all optional metadata sends every key.
+    const detailAll = {
+      form: {
+        id: "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5",
+        name: "contact",
+        sagaId: helloSaga.id,
+        title: "T",
+        description: "D",
+        allowPrefill: true,
+        fields: [],
+      },
+    };
+    const formStub = stub([
+      json(detailAll),
+      json(detailAll),
+      json({ form: "contact", handle: "a".repeat(64), expiresAt: "t", snapshot: {}, options: {} }),
+    ]);
+    const formClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: formStub.fetchImpl });
+    const fullFields = [{ name: "name", type: "text", required: true }];
+    await formClient.createForm({
+      name: "contact",
+      sagaId: helloSaga.id,
+      title: "T",
+      description: "D",
+      allowPrefill: true,
+      fields: fullFields,
+    });
+    expect(JSON.parse(String(formStub.calls[0]?.init.body))).toMatchObject({ title: "T", allowPrefill: true });
+    await formClient.updateForm("contact", {
+      sagaId: helloSaga.id,
+      title: "T",
+      description: "D",
+      allowPrefill: true,
+      fields: fullFields,
+    });
+    expect(JSON.parse(String(formStub.calls[1]?.init.body))).toMatchObject({ title: "T", allowPrefill: true });
+    // startForm with prefill wraps it; submitForm with all optionals sends them.
+    await formClient.startForm("contact", { name: "Ada" });
+    expect(JSON.parse(String(formStub.calls[2]?.init.body))).toEqual({ prefill: { name: "Ada" } });
+    const receiptId = "c".repeat(64);
+    const receiptStub = stub([
+      json({ form: "contact", executionId: receiptId, replayed: false, statusUrl: `/api/executions/${receiptId}` }),
+    ]);
+    const receiptClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: receiptStub.fetchImpl,
+    });
+    const future = new Date(Date.now() + 3600 * 1000).toISOString();
+    await receiptClient.submitForm({
+      form: "contact",
+      handle: "a".repeat(64),
+      values: { name: "Ada" },
+      scheduleAt: future,
+      key: "form-sdk-full-0001",
+    });
+    expect(JSON.parse(String(receiptStub.calls[0]?.init.body))).toMatchObject({ scheduleAt: future });
+    await expect(
+      receiptClient.submitForm({ form: "contact", handle: "a".repeat(64), key: "bad key!!" }),
+    ).rejects.toMatchObject({ code: "SDK_INVALID_REF" });
+    // readJson on a failed response without an envelope keeps the fallback
+    // message; a non-Error throw becomes SDK_CLIENT_NETWORK.
+    const failedBare = stub([json({ nope: true }, 422)]);
+    const failedClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: failedBare.fetchImpl,
+    });
+    await expect(failedClient.getForm("contact")).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+    const boom = stub([new Error("down")]);
+    const boomClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: boom.fetchImpl });
+    await expect(boomClient.listForms()).rejects.toMatchObject({ code: "SDK_CLIENT_NETWORK" });
+    // previewSaga without input sends {} (default-arg branch).
+    const previewStub = stub([
+      json(catalog),
+      json({
+        preview: {
+          saga: { id: helloSaga.id, name: "hello", revision: "hello-v1" },
+          input: {},
+          environmentChecked: false,
+          environment: [],
+          persisted: false,
+          dispatched: false,
+        },
+      }),
+    ]);
+    const previewClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: previewStub.fetchImpl,
+    });
+    expect((await previewClient.previewSaga({ saga: "hello" })).input).toEqual({});
+    expect(JSON.parse(String(previewStub.calls[1]?.init.body))).toMatchObject({ input: {} });
   });
 });

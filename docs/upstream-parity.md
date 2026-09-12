@@ -34,7 +34,7 @@ Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 21 Par
 | TABLE-01 | Deliver the existing minimal author Tables migration slice | 4 | Partial | AUTH-02 | #117 |
 | TABLE-02 | Extend author Tables to policy-safe querying, batch mutations and realtime visibility | 4 | Partial | TABLE-01, AUTH-02, OBS-02 | #154 |
 | FORM-01 | Deliver the existing Forms-to-Saga input binding slice | 4 | Partial | — | #118 |
-| FORM-02 | Deliver usable dynamic forms with safe startup, providers and submissions | 4 | Missing | FORM-01, RUN-03, TRG-01, AUTH-02, FILE-01 | new |
+| FORM-02 | Deliver usable dynamic forms with safe startup, providers and submissions | 4 | Partial | FORM-01, RUN-03, TRG-01, AUTH-02, FILE-01 | #155 |
 | EMBED-01 | Publish and embed forms/apps with revocable external capabilities | 4 | Missing | FORM-02, APP-01, AUTH-03, AUTH-02 | new |
 | FILE-01 | Deliver managed file locations with policy-checked upload, download and mutation | 4 | Implemented | AUTH-02, SEC-01 | #157 |
 | FILE-02 | Manage generated artifacts and attachment lifecycles with retention | 4+6 | Partial | FILE-01, AUTH-02 | #158 |
@@ -634,9 +634,46 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## FORM-02: Deliver usable dynamic forms with safe startup, providers and submissions
 
-Phase 4; **Missing**; existing issue: new
+Phase 4; **Partial**; existing issue: #155
 
-Local status: Input parsing is not a form renderer/designer, startup session, dynamic provider or submission lifecycle.
+Local status: Usable dynamic forms over the same D1 `forms` table (no new
+DDL): designer CRUD (`GET/POST /api/forms`, `GET/PUT/DELETE
+/api/forms/:name`), 17 field types (text, number, boolean, email, date,
+time, datetime, select, multiselect, textarea, url, tel, file, hidden plus
+display-only heading/paragraph/divider), declared defaults with
+submission-wins merge, `visibleWhen` conditionals (hidden values dropped,
+smuggled values fail closed), static + Table option providers resolved
+through the caller Table gate (denied tables yield empty lists, never
+leaks; membership re-checked at submit), session-bound 30-minute startup
+handles (`POST /api/forms/:name/startup`, peeked for validation and
+consumed only after validation passes, org/user/form bound, `STALE_FORM_HANDLE` on
+unknown/expired/foreign/replayed),
+delegated form-to-Saga submit (the consumed handle is the grant; no
+separate direct-Saga grant required), immediate dispatch down the standard
+Execution path or `{ scheduleAt }` deferred receipt (undispatched Pending
+row with `__scheduleAt` linkage, TRG-01 owns promotion), FILE-01
+file-field re-validation (ready/size/type against live rows), opt-in URL
+prefill (`allowPrefill`; unknown/display-only names fail closed), and a
+Forms renderer (`/forms`, `/forms/:name`) with per-field errors plus
+execution linkage. The renderer evaluates conditional visibility over the
+startup snapshot under operator edits (edits win), matching the server
+gate — a prefilled trigger reveals its dependent immediately, and clearing
+the trigger hides it again. Submit sends snapshot-backed values for
+visible fields (cleared fields send explicit null, which the server reads
+as a gap for defaults to fill).
+Unknown or stale handles dispatch nothing. Proven in
+workerd (`test/form-lifecycle.test.ts`: designer, startup, providers,
+submit, scheduled, file, drift) plus unit pins
+(`test/form-binding.test.ts`), SDK client + guards (`test/sdk.test.ts`),
+and renderer tests (`test/form-ui.test.tsx`). `GET
+/api/forms/:name/providers` exposes resolved options; the SDK
+`dynamic-forms` capability is supported.
+
+Explicitly deferred (retain until verified): public/embed publication
+with capability fingerprints and origin fencing (EMBED-01); scheduled
+promotion/due-time dispatch (TRG-01); realtime provider refresh (polling
+only); rich-text/signature/cascading-provider field kinds beyond the 17
+shipped.
 
 Depends: FORM-01, RUN-03, TRG-01, AUTH-02, FILE-01
 

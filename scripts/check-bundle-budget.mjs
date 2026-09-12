@@ -62,7 +62,15 @@ import { join } from "node:path";
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged. Remeasure after merge; shrink the raise if the combined bundle
 // lands lower.
-const BUDGET_BYTES = 380 * 1024;
+// 2026-09-11 (FORM-02, issue #155): 445 KiB. The dynamic-forms surface (8
+// routes plus the forms domain: 17 field types, startup handles, Table and
+// static providers, delegated submit, scheduled receipts, file-field
+// re-validation; plus the Forms renderer and SDK descriptor entries) stacks
+// on the OPS-01 surface with the same deliberate feature headroom, not
+// dependency bloat: package.json is unchanged versus main. Combined measures
+// ~426 KiB locally (436028 bytes; CI number governs); shrink the raise if it
+// lands lower.
+const BUDGET_BYTES = 445 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

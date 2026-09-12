@@ -397,3 +397,67 @@ export interface FilesResponse {
   files: FileMeta[];
   nextCursor: string | null;
 }
+
+/** Dynamic form declaration (FORM-02, issue #155): server-authoritative
+ * field list with display-only layout kinds, defaults, conditionals,
+ * providers, and file policies. */
+export interface FormFieldDef {
+  name: string;
+  type: string;
+  label?: string;
+  required: boolean;
+  maxLength: number;
+  default?: unknown;
+  options?: string[];
+  provider?: unknown;
+  visibleWhen?: { field: string; equals: string | number | boolean };
+  file?: { location: string; maxMb?: number; contentTypes?: string[] };
+  min?: number;
+  max?: number;
+  pattern?: string;
+  content?: string;
+}
+
+export interface FormSummary {
+  id: string;
+  name: string;
+  sagaId: string;
+}
+
+export interface FormsResponse {
+  forms: FormSummary[];
+}
+
+export interface FormDetail extends FormSummary {
+  title?: string;
+  description?: string;
+  allowPrefill: boolean;
+  fields: FormFieldDef[];
+}
+
+export interface FormResponse {
+  form: FormDetail;
+}
+
+export interface FormStartupResponse {
+  form: string;
+  handle: string;
+  expiresAt: string;
+  snapshot: Record<string, unknown>;
+  options: Record<string, string[]>;
+}
+
+export interface FormProvidersResponse {
+  form: string;
+  options: Record<string, string[]>;
+  errors: Record<string, string>;
+}
+
+export interface FormSubmitResponse {
+  form: string;
+  executionId: string;
+  replayed: boolean;
+  statusUrl: string;
+  scheduled?: boolean;
+  scheduleAt?: string;
+}
