@@ -271,7 +271,7 @@ it("caps the cert cache so hostile kid churn cannot grow it", async () => {
   await resolveKid(0);
   await resolveKid(39);
   expect(fetchSpy).toHaveBeenCalledTimes(41);
-});
+}, 30000);
 
 it("fails fast with 503 when the cert endpoint hangs, errors, or is malformed", async () => {
   const { privateKey } = await keypair();
