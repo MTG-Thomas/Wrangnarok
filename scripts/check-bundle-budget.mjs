@@ -66,6 +66,19 @@ import { join } from "node:path";
 // no new dependencies) stacked on the CON-02 surface and measured 368916
 // bytes solo. Combined with FILE-02/OPS-01 above: remeasured after merge;
 // the union with the OBS-02/OPS-02 surfaces below governs the budget.
+// 2026-09-11 (OPS-01, issue #172): 380 KiB. The audit/notifications slice
+// (src/ops.ts: audit + notification domain, keyset pagination, reconcile;
+// 4 read routes plus audit emission on 5 app routes and the cancel route;
+// SDK audit/notification surface) stacks on the FILE-02 surface with the
+// same deliberate feature headroom, not dependency bloat: package.json is
+// unchanged. Remeasure after merge; shrink the raise if the combined bundle
+// lands lower.
+// 2026-09-11 (AUTH-01 follow-up): 390 KiB. Cascading-delete accounting over
+// every post-AUTH-01 org-owned table (forms, apps, tables, files, artifacts,
+// endpoints, configs, audit; R2 bytes first, managed rows block) stacks on
+// the OPS-01 surface: 385797 bytes baseline, 394934 bytes with the slice, so
+// 390 KiB keeps the same deliberate feature headroom. No new dependencies:
+// package.json is unchanged versus main.
 // 2026-09-11 (OBS-02 merge over current main, issue #153): 405 KiB. The
 // union of the OBS-02 author-log surface (src/logs.ts, two routes, SDK
 // tail/search, CLI logs/log-search) with the newer main surfaces measures
@@ -78,12 +91,14 @@ import { join } from "node:path";
 // ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
 // feature code, no new dependencies (package.json unchanged versus main);
 // deliberate feature headroom only.
-// 2026-09-12 (AUTH-02 merge over OBS-02/OPS-02 main, issue #143): 465 KiB.
+// 2026-09-12 (AUTH-02 merge over RUN-01/AUTH-01 main, issue #143): 465 KiB.
 // The union of the AUTH-02 resource-role control plane (src/roles.ts, 15
-// role/policy admin routes, grant enforcement) with the OBS-02/OPS-02
-// surfaces measures ~449 KiB combined. Hand-written feature code, no new
-// dependencies (package.json unchanged versus main); deliberate feature
-// headroom only.
+// role/policy admin routes, grant enforcement) with the OBS-02/OPS-02/RUN-01
+// surfaces measures ~459 KiB combined (re-measure after merge; shrink if the
+// union lands lower). Hand-written feature code, no new dependencies
+// (package.json unchanged versus main); deliberate feature headroom only.
+// (Prior main entries retained: RUN-01 435 KiB over OPS-02, AUTH-01 second
+// re-drive 440 KiB with the RUN-01 policy surface.)
 const BUDGET_BYTES = 465 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
