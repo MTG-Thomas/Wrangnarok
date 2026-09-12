@@ -474,9 +474,13 @@ export async function deleteSchedule(db: D1Database, caller: Principal, name: st
   // Delivery rows reference the schedule row (migration 0016 FK), so they go
   // in the same delete: the window-to-Execution mapping is schedule-scoped
   // metadata, while ExecutionHistory provenance survives on the executions
-  // rows themselves (keyed by Execution ID, never by schedule).
-  await db.prepare("DELETE FROM schedule_deliveries WHERE schedule_id=?").bind(row.id).run();
-  await db.prepare("DELETE FROM schedules WHERE id=?").bind(row.id).run();
+  // rows themselves (keyed by Execution ID, never by schedule). One batch
+  // keeps the pair atomic: a failed schedule delete never strands an
+  // already-cleared delivery table.
+  await db.batch([
+    db.prepare("DELETE FROM schedule_deliveries WHERE schedule_id=?").bind(row.id),
+    db.prepare("DELETE FROM schedules WHERE id=?").bind(row.id),
+  ]);
 }
 
 export interface PromotionResult {
