@@ -126,6 +126,32 @@ export interface ExecutionDetail extends ExecutionSummary {
   operations: OperationSummary[];
 }
 
+/** OBS-02 author log level: DEBUG rows persist but are hidden from default
+ * reads (the caller must ask for level=DEBUG explicitly). */
+export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "PROGRESS";
+
+/** One durable author log row with execution/org/caller attribution. */
+export interface LogEntry {
+  seq: number;
+  executionId: string;
+  sagaId: string;
+  sagaName: string;
+  orgId: string;
+  userId: string;
+  level: LogLevel;
+  message: string;
+  data: unknown;
+  createdAt: string;
+}
+
+/** Cursor-paginated log page: D1 is the source of truth, this is a polling
+ * view (refetch from nextCursor after a disconnect; dedupe by seq). */
+export interface LogPage {
+  logs: LogEntry[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
 /** Application status values served by the Wrangnarök Worker (ADR 017). */
 export type AppStatus = "created" | "ready" | "building" | "live" | "failed";
 

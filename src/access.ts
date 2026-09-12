@@ -112,6 +112,50 @@ export async function verifyAccess(
   throw new Fault(403, "FORBIDDEN", "Forbidden.");
 }
 
+/** Credential classes a verified Principal can hold.
+ *
+ * AUTH-03 (issue #144): upstream Bifrost distinguishes delegated human
+ * identity (login/SSO/MFA/passkeys, `api/src/routers/auth.py`,
+ * `oauth_sso.py`, `mfa.py`, `passkeys.py`) from scoped machine credentials
+ * (user API keys and per-workflow keys, `api/src/routers/workflow_keys.py`).
+ * Locally both arrive through the same two gates: a Cloudflare Access
+ * assertion (human email or service common_name, ADR 014) or the LAB fixture
+ * bearer (local only, never production). The class is derived from the
+ * Principal shape alone, so routes, audit rows, and the SDK identity surface
+ * share one definition instead of re-parsing prefixes. */
+export type CredentialClass = "human" | "service" | "fixture" | "endpoint";
+
+const SERVICE_PREFIX = "service:";
+const ENDPOINT_PREFIX = "endpoint:";
+
+/** True for Access service-token principals (`service:<client-id>`), minted
+ * by verifyAccess from an allowlisted assertion common_name. Service tokens
+ * carry no email and authenticate through Access client-credentials, the
+ * local analogue of upstream OAuth2 M2M API Services. */
+export function isServicePrincipal(userId: string): boolean {
+  return userId.startsWith(SERVICE_PREFIX) && userId.length > SERVICE_PREFIX.length;
+}
+
+/** True for TRG-02 scoped endpoint-delivery principals (`endpoint:<id>`),
+ * minted by verifyEndpointKey/verifyWebhookSignature from a per-endpoint
+ * credential. Endpoint principals are the local analogue of upstream
+ * per-workflow keys: least-privilege, expiry/rotation-aware, and bound to a
+ * single Saga binding instead of an operator session. */
+export function isEndpointPrincipal(userId: string): boolean {
+  return userId.startsWith(ENDPOINT_PREFIX) && userId.length > ENDPOINT_PREFIX.length;
+}
+
+/** Classify a verified caller Principal into its credential class. Endpoint
+ * delivery principals are checked before service principals so a future
+ * `service:`-prefixed endpoint id can never be mistaken for an Access
+ * service token. Anything else verified through the fixture or Access human
+ * path is a delegated human identity (Access email) or the local fixture. */
+export function credentialClassFor(userId: string, viaAccess: boolean): CredentialClass {
+  if (isEndpointPrincipal(userId)) return "endpoint";
+  if (isServicePrincipal(userId)) return "service";
+  return viaAccess ? "human" : "fixture";
+}
+
 /** Test hook: drop cached certs (rotation tests, suite isolation). */
 export function clearAccessCertCache(): void {
   certCache.clear();

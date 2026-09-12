@@ -17,6 +17,11 @@ import { join } from "node:path";
 // fixture bootstrap; no new dependencies) measures ~144 KiB combined after a
 // shrink pass on the bootstrap DDL. Same deliberate feature headroom as the
 // 120 KiB raise, not dependency bloat: package.json is unchanged versus main.
+// 2026-09-11 (OBS-02, issue #153): stacks within the 380 KiB headroom.
+// The bounded author-log surface (src/logs.ts domain: parsers, cursor
+// pagination, retention, SEC-01 write/read paths, plus two routes, SDK
+// tail/search, and hello-pilot emission) measures within the deliberate
+// feature headroom above; package.json is unchanged versus main.
 // 2026-09-11 (TRG-02, issue #138): 210 KiB. The endpoint/webhook Trigger
 // surface (src/endpoints.ts: key/HMAC verification, rate limits, challenge,
 // delivery protocol, operator management; 3 public plus 6 management routes
@@ -55,21 +60,25 @@ import { join } from "node:path";
 // with the same deliberate feature headroom, not dependency bloat:
 // package.json is unchanged versus main. Combined measures ~357 KiB locally
 // (CI number governs).
-// 2026-09-11 (OPS-01, issue #172): 380 KiB. The audit/notifications slice
-// (src/ops.ts: audit + notification domain, keyset pagination, reconcile;
-// 4 read routes plus audit emission on 5 app routes and the cancel route;
-// SDK audit/notification surface) stacks on the FILE-02 surface with the
-// same deliberate feature headroom, not dependency bloat: package.json is
-// unchanged. Remeasure after merge; shrink the raise if the combined bundle
-// lands lower.
 // 2026-09-11 (AUTH-02, issue #143): resource-role control plane (src/roles.ts:
 // 4-table CRUD plus per-request grant evaluation, grant enforcement on direct
 // submits plus form/app routes, 15 role/policy admin routes, SDK error codes;
 // no new dependencies) stacked on the CON-02 surface and measured 368916
-// bytes solo. Combined with FILE-02/OPS-01 above: keep the 380 KiB budget
-// and remeasure after merge; raise deliberately only if the combined bundle
-// lands higher.
-const BUDGET_BYTES = 380 * 1024;
+// bytes solo. Combined with FILE-02/OPS-01 above: remeasured after merge;
+// the union with the OBS-02/OPS-02 surfaces below governs the budget.
+// 2026-09-11 (OBS-02 merge over current main, issue #153): 405 KiB. The
+// union of the OBS-02 author-log surface (src/logs.ts, two routes, SDK
+// tail/search, CLI logs/log-search) with the newer main surfaces measures
+// ~388 KiB combined. Hand-written feature code, no new dependencies
+// (package.json unchanged versus main); deliberate feature headroom only.
+// 2026-09-12 (OPS-02, issue #173): 425 KiB. The diagnostics/repair surface
+// (src/ops.ts: version/health/metrics/scheduler/jobs/preflight/connections
+// plus five inspect-then-act repairs; 8 routes in src/index.ts; SDK guards
+// plus client plus descriptor entries; CLI commands plus selftest) measures
+// ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
+// feature code, no new dependencies (package.json unchanged versus main);
+// deliberate feature headroom only.
+const BUDGET_BYTES = 425 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

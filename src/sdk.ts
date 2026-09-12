@@ -57,6 +57,11 @@ export const SDK_ERROR_CODES = [
   "UNSUPPORTED_QUERY",
   "INVALID_STATUS",
   "INVALID_SAGA_ID",
+  "INVALID_SAGA_NAME",
+  "INVALID_START_DATE",
+  "INVALID_END_DATE",
+  "INVALID_DATE_RANGE",
+  "INVALID_LEVEL",
   "INVALID_LIMIT",
   "INVALID_CURSOR",
   "INVALID_ACTION_PREFIX",
@@ -140,6 +145,13 @@ export const SDK_ERROR_CODES = [
   "INVALID_ACTION",
   "INVALID_GRANT",
   "INVALID_GRANTEE",
+  "INVALID_REPAIR",
+  "INVALID_REPAIR_KIND",
+  "INVALID_REPAIR_TARGET",
+  "INVALID_REPAIR_KEY",
+  "EXECUTION_NOT_REPAIRABLE",
+  "REPAIR_FORBIDDEN",
+  "REPAIR_UNAVAILABLE",
   "INVALID_CONFIG",
   "INVALID_CONFIG_KEY",
   "INVALID_CONFIG_TYPE",
@@ -336,6 +348,40 @@ export interface SdkHistoryPage {
   readonly executions: readonly SdkExecutionSummary[];
   readonly hasMore: boolean;
   readonly nextCursor: string | null;
+}
+
+export type SdkLogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "PROGRESS";
+
+export interface SdkLogEntry {
+  readonly seq: number;
+  readonly executionId: string;
+  readonly sagaId: string;
+  readonly sagaName: string;
+  readonly orgId: string;
+  readonly userId: string;
+  readonly level: SdkLogLevel;
+  readonly message: string;
+  readonly data: unknown;
+  readonly createdAt: string;
+}
+
+export interface SdkLogPage {
+  readonly logs: readonly SdkLogEntry[];
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
+}
+
+export interface SdkLogTailQuery {
+  readonly level?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface SdkLogSearchQuery extends SdkLogTailQuery {
+  readonly saga?: string;
+  readonly sagaName?: string;
+  readonly from?: string;
+  readonly to?: string;
 }
 
 export interface SdkSubmitReceipt {
@@ -559,6 +605,34 @@ export function parseHistoryPage(value: unknown): SdkHistoryPage {
   };
 }
 
+/** Guard a GET /api/executions/:id/logs or GET /api/logs payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseLogPage(value: unknown): SdkLogPage {
+  if (!isRecord(value) || !Array.isArray(value.logs) || typeof value.hasMore !== "boolean") {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The log page has an unexpected shape.");
+  }
+  for (const entry of value.logs) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.seq !== "number" ||
+      typeof entry.executionId !== "string" ||
+      typeof entry.message !== "string" ||
+      typeof entry.level !== "string" ||
+      typeof entry.createdAt !== "string"
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The log page has an unexpected shape.");
+    }
+  }
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && nextCursor !== null && typeof nextCursor !== "string") {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The log page has an unexpected shape.");
+  }
+  return {
+    logs: value.logs as unknown as readonly SdkLogEntry[],
+    hasMore: value.hasMore,
+    nextCursor: (nextCursor ?? null) as string | null,
+  };
+}
+
 export interface SdkPreviewEnvironment {
   readonly integrationId: string;
   readonly configured: boolean;
@@ -672,6 +746,60 @@ export interface SdkUpdateConfigOptions {
   readonly type?: string;
   readonly value?: unknown;
   readonly description?: string;
+}
+
+// --- Caller identity (AUTH-03, issue #144) ------------------------------------
+// Read-only proof of which credential class verified the caller. Discovery,
+// CLI, and MCP clients preserve the same identity by calling the same
+// authenticated GET /api/auth/me route as the browser UI — the class is
+// derived server-side from the verified Principal, never from client input.
+
+/** Credential classes a verified caller can hold (mirrors access.ts). */
+export type SdkCredentialClass = "human" | "service" | "fixture" | "endpoint";
+
+export interface SdkCallerIdentity {
+  readonly userId: string;
+  readonly orgId: string;
+  readonly credentialClass: SdkCredentialClass;
+  readonly viaAccess: boolean;
+  readonly fixture: boolean;
+  readonly role: string | null;
+  readonly kind: string | null;
+}
+
+function isCredentialClass(value: unknown): value is SdkCredentialClass {
+  return value === "human" || value === "service" || value === "fixture" || value === "endpoint";
+}
+
+/** Guard a GET /api/auth/me payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseCallerIdentity(value: unknown): SdkCallerIdentity {
+  if (!isRecord(value) || !isRecord(value.caller)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The caller identity has an unexpected shape.");
+  }
+  const caller = value.caller;
+  if (
+    typeof caller.userId !== "string" ||
+    typeof caller.orgId !== "string" ||
+    !isCredentialClass(caller.credentialClass) ||
+    typeof caller.viaAccess !== "boolean" ||
+    typeof caller.fixture !== "boolean"
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The caller identity has an unexpected shape.");
+  }
+  const role = value.role;
+  const kind = value.kind;
+  if ((role !== null && typeof role !== "string") || (kind !== null && typeof kind !== "string")) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The caller identity has an unexpected shape.");
+  }
+  return {
+    userId: caller.userId,
+    orgId: caller.orgId,
+    credentialClass: caller.credentialClass,
+    viaAccess: caller.viaAccess,
+    fixture: caller.fixture,
+    role,
+    kind,
+  };
 }
 
 // --- Offline authoring helpers ----------------------------------------------
@@ -873,6 +1001,319 @@ export function validateAgainstSchema(value: unknown, schema: IoSchema | undefin
   return { ok: true };
 }
 
+// --- OPS-02 diagnostics (issue #173) ------------------------------------------
+// Typed mirrors of the served /api/ops/* shapes. Counts/IDs/statuses only:
+// no inputs, results, secret values, or Cloudflare metering ride these
+// payloads. Guards below throw SDK_CLIENT_MISMATCH on drift.
+
+export interface SdkOpsVersion {
+  readonly sdkVersion: string;
+  readonly sagaCatalog: { readonly count: number; readonly revision: string };
+  readonly migrationsApplied: readonly string[];
+}
+
+export interface SdkOpsHealth {
+  readonly status: string;
+  readonly database: string;
+  readonly worker: string;
+  readonly checkedAt: string;
+}
+
+export interface SdkOpsMetrics {
+  readonly generatedAt: string;
+  readonly executions: {
+    readonly total: number;
+    readonly pending: number;
+    readonly pendingUndispatched: number;
+    readonly running: number;
+    readonly cancelling: number;
+    readonly succeeded: number;
+    readonly failed: number;
+    readonly timedOut: number;
+    readonly cancelled: number;
+  };
+  readonly recentFailures: readonly {
+    readonly executionId: string;
+    readonly sagaName: string;
+    readonly status: string;
+    readonly code: string | null;
+    readonly completedAt: string | null;
+  }[];
+}
+
+export interface SdkOpsScheduledTask {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: string;
+  readonly enabled: boolean;
+  readonly cadence: string | null;
+  readonly detail: string;
+}
+
+export interface SdkOpsJobs {
+  readonly generatedAt: string;
+  readonly executions: SdkOpsMetrics["executions"];
+  readonly appBuilds: {
+    readonly queued: number;
+    readonly running: number;
+    readonly succeeded: number;
+    readonly failed: number;
+    readonly interrupted: readonly { readonly appId: string; readonly appName: string }[];
+  };
+}
+
+export interface SdkOpsPreflight {
+  readonly checkedAt: string;
+  readonly integrations: readonly {
+    readonly integrationId: string;
+    readonly integrationName: string;
+    readonly connected: boolean;
+    readonly enabled: boolean;
+    readonly missingSecrets: readonly string[];
+    readonly ready: boolean;
+  }[];
+}
+
+export interface SdkOpsConnectionHealth {
+  readonly connections: readonly {
+    readonly integrationId: string;
+    readonly integrationName: string;
+    readonly connected: boolean;
+    readonly enabled: boolean;
+    readonly testHint: string;
+    readonly remediation: string;
+  }[];
+}
+
+export type SdkOpsRepairKind =
+  "retry-execution" | "cancel-execution" | "cleanup-pending-uploads" | "cleanup-expired-tokens" | "repair-stuck-build";
+
+export interface SdkOpsRepairOptions {
+  readonly kind: SdkOpsRepairKind;
+  readonly targetId?: string;
+  readonly idempotencyKey?: string;
+  /** Defaults to true: inspect without mutating. Pass false to execute
+   * behind the admin gate. */
+  readonly dryRun?: boolean;
+}
+
+export interface SdkOpsRepairOutcome {
+  readonly kind: string;
+  readonly dryRun: boolean;
+  readonly targetId: string | null;
+  readonly action: string;
+  readonly result: unknown;
+}
+
+function isOpsCounters(value: unknown): value is SdkOpsMetrics["executions"] {
+  if (!isRecord(value)) return false;
+  for (const key of [
+    "total",
+    "pending",
+    "pendingUndispatched",
+    "running",
+    "cancelling",
+    "succeeded",
+    "failed",
+    "timedOut",
+    "cancelled",
+  ]) {
+    if (typeof value[key] !== "number") return false;
+  }
+  return true;
+}
+
+/** Guard a GET /api/ops/version payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsVersion(value: unknown): SdkOpsVersion {
+  if (!isRecord(value) || !isRecord(value.version)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops version has an unexpected shape.");
+  }
+  const version = value.version;
+  if (
+    typeof version.sdkVersion !== "string" ||
+    !isRecord(version.sagaCatalog) ||
+    typeof version.sagaCatalog.count !== "number" ||
+    typeof version.sagaCatalog.revision !== "string" ||
+    !isStringArray(version.migrationsApplied)
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops version has an unexpected shape.");
+  }
+  return {
+    sdkVersion: version.sdkVersion,
+    sagaCatalog: { count: version.sagaCatalog.count, revision: version.sagaCatalog.revision },
+    migrationsApplied: version.migrationsApplied,
+  };
+}
+
+/** Guard a GET /api/ops/health payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsHealth(value: unknown): SdkOpsHealth {
+  if (
+    !isRecord(value) ||
+    typeof value.status !== "string" ||
+    typeof value.database !== "string" ||
+    typeof value.worker !== "string" ||
+    typeof value.checkedAt !== "string"
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops health has an unexpected shape.");
+  }
+  return { status: value.status, database: value.database, worker: value.worker, checkedAt: value.checkedAt };
+}
+
+/** Guard a GET /api/ops/metrics payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsMetrics(value: unknown): SdkOpsMetrics {
+  if (!isRecord(value) || !isRecord(value.metrics)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops metrics have an unexpected shape.");
+  }
+  const metrics = value.metrics;
+  if (typeof metrics.generatedAt !== "string" || !isOpsCounters(metrics.executions)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops metrics have an unexpected shape.");
+  }
+  if (!Array.isArray(metrics.recentFailures)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops metrics have an unexpected shape.");
+  }
+  for (const entry of metrics.recentFailures) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.executionId !== "string" ||
+      typeof entry.sagaName !== "string" ||
+      typeof entry.status !== "string" ||
+      (entry.code !== null && typeof entry.code !== "string") ||
+      (entry.completedAt !== null && typeof entry.completedAt !== "string")
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The ops metrics have an unexpected shape.");
+    }
+  }
+  return {
+    generatedAt: metrics.generatedAt,
+    executions: metrics.executions,
+    recentFailures: metrics.recentFailures as SdkOpsMetrics["recentFailures"],
+  };
+}
+
+/** Guard a GET /api/ops/scheduled-tasks payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsScheduledTasks(value: unknown): readonly SdkOpsScheduledTask[] {
+  if (!isRecord(value) || !Array.isArray(value.tasks)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops scheduled tasks have an unexpected shape.");
+  }
+  for (const entry of value.tasks) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      typeof entry.name !== "string" ||
+      typeof entry.kind !== "string" ||
+      typeof entry.enabled !== "boolean" ||
+      (entry.cadence !== null && typeof entry.cadence !== "string") ||
+      typeof entry.detail !== "string"
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The ops scheduled tasks have an unexpected shape.");
+    }
+  }
+  return value.tasks as readonly SdkOpsScheduledTask[];
+}
+
+/** Guard a GET /api/ops/jobs payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsJobs(value: unknown): SdkOpsJobs {
+  if (!isRecord(value) || !isRecord(value.jobs)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops jobs have an unexpected shape.");
+  }
+  const jobs = value.jobs;
+  if (typeof jobs.generatedAt !== "string" || !isOpsCounters(jobs.executions) || !isRecord(jobs.appBuilds)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops jobs have an unexpected shape.");
+  }
+  const builds = jobs.appBuilds;
+  if (
+    typeof builds.queued !== "number" ||
+    typeof builds.running !== "number" ||
+    typeof builds.succeeded !== "number" ||
+    typeof builds.failed !== "number" ||
+    !Array.isArray(builds.interrupted)
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops jobs have an unexpected shape.");
+  }
+  for (const entry of builds.interrupted) {
+    if (!isRecord(entry) || typeof entry.appId !== "string" || typeof entry.appName !== "string") {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The ops jobs have an unexpected shape.");
+    }
+  }
+  return {
+    generatedAt: jobs.generatedAt,
+    executions: jobs.executions,
+    appBuilds: {
+      queued: builds.queued,
+      running: builds.running,
+      succeeded: builds.succeeded,
+      failed: builds.failed,
+      interrupted: builds.interrupted as SdkOpsJobs["appBuilds"]["interrupted"],
+    },
+  };
+}
+
+/** Guard a GET /api/ops/preflight payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsPreflight(value: unknown): SdkOpsPreflight {
+  if (!isRecord(value) || typeof value.checkedAt !== "string" || !Array.isArray(value.integrations)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops preflight has an unexpected shape.");
+  }
+  for (const entry of value.integrations) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.integrationId !== "string" ||
+      typeof entry.integrationName !== "string" ||
+      typeof entry.connected !== "boolean" ||
+      typeof entry.enabled !== "boolean" ||
+      !isStringArray(entry.missingSecrets) ||
+      typeof entry.ready !== "boolean"
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The ops preflight has an unexpected shape.");
+    }
+  }
+  return { checkedAt: value.checkedAt, integrations: value.integrations as SdkOpsPreflight["integrations"] };
+}
+
+/** Guard a GET /api/ops/connections payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsConnectionHealth(value: unknown): SdkOpsConnectionHealth {
+  if (!isRecord(value) || !Array.isArray(value.connections)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops connection health has an unexpected shape.");
+  }
+  for (const entry of value.connections) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.integrationId !== "string" ||
+      typeof entry.integrationName !== "string" ||
+      typeof entry.connected !== "boolean" ||
+      typeof entry.enabled !== "boolean" ||
+      typeof entry.testHint !== "string" ||
+      typeof entry.remediation !== "string"
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The ops connection health has an unexpected shape.");
+    }
+  }
+  return { connections: value.connections as SdkOpsConnectionHealth["connections"] };
+}
+
+/** Guard a POST /api/ops/repairs payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseOpsRepairOutcome(value: unknown): SdkOpsRepairOutcome {
+  if (!isRecord(value) || !isRecord(value.repair)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops repair has an unexpected shape.");
+  }
+  const repair = value.repair;
+  if (
+    typeof repair.kind !== "string" ||
+    typeof repair.dryRun !== "boolean" ||
+    (repair.targetId !== null && typeof repair.targetId !== "string") ||
+    typeof repair.action !== "string" ||
+    !("result" in repair)
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The ops repair has an unexpected shape.");
+  }
+  return {
+    kind: repair.kind,
+    dryRun: repair.dryRun,
+    targetId: repair.targetId,
+    action: repair.action,
+    result: repair.result,
+  };
+}
+
 // --- Automation client ------------------------------------------------------
 // Thin typed calls over the Worker HTTP API only — no Saga logic here, the
 // same rule as scripts/wrangnarok.mjs. Caller policy matches the browser UI
@@ -975,6 +1416,11 @@ export interface SdkClient {
   getExecution(id: string): Promise<SdkExecutionDetail>;
   cancelExecution(id: string): Promise<SdkCancelReceipt>;
   listHistory(query?: SdkHistoryQuery): Promise<SdkHistoryPage>;
+  /** OBS-02 scoped tail for one Execution (GET /api/executions/:id/logs).
+   * Polling view over durable rows; reconnect by refetching from nextCursor. */
+  tailLogs(id: string, query?: SdkLogTailQuery): Promise<SdkLogPage>;
+  /** OBS-02 operator search across the caller's own rows (GET /api/logs). */
+  searchLogs(query?: SdkLogSearchQuery): Promise<SdkLogPage>;
   diagnoseExecution(id: string): Promise<SdkDiagnosis>;
   /** OPS-01 audit trail (GET /api/audit): Organization-scoped events. */
   listAuditEvents(query?: SdkAuditQuery): Promise<SdkAuditPage>;
@@ -984,6 +1430,25 @@ export interface SdkClient {
   getNotification(id: string): Promise<SdkNotification>;
   /** OPS-01 dismissal (DELETE /api/notifications/:id). */
   dismissNotification(id: string): Promise<void>;
+  /** OPS-02 diagnostics: product version contract (GET /api/ops/version). */
+  getOpsVersion(): Promise<SdkOpsVersion>;
+  /** OPS-02 diagnostics: Worker/D1 liveness (GET /api/ops/health). */
+  getOpsHealth(): Promise<SdkOpsHealth>;
+  /** OPS-02 diagnostics: Execution counts, admission backlog, recent
+   * failures (GET /api/ops/metrics). */
+  getOpsMetrics(recent?: number): Promise<SdkOpsMetrics>;
+  /** OPS-02 diagnostics: scheduled-task status (GET
+   * /api/ops/scheduled-tasks). */
+  listOpsScheduledTasks(): Promise<readonly SdkOpsScheduledTask[]>;
+  /** OPS-02 diagnostics: platform job progress (GET /api/ops/jobs). */
+  getOpsJobs(): Promise<SdkOpsJobs>;
+  /** OPS-02 diagnostics: dependency preflight (GET /api/ops/preflight). */
+  getOpsPreflight(): Promise<SdkOpsPreflight>;
+  /** OPS-02 diagnostics: Connection health (GET /api/ops/connections). */
+  getOpsConnectionHealth(): Promise<SdkOpsConnectionHealth>;
+  /** OPS-02 repair: inspect-then-act (POST /api/ops/repairs). dryRun
+   * defaults to true; dryRun:false executes behind the admin gate. */
+  runOpsRepair(options: SdkOpsRepairOptions): Promise<SdkOpsRepairOutcome>;
   /** CON-02 scoped config (GET /api/config): typed rows for this
    * Organization; secret rows answer "[SECRET]", never values. */
   listConfigs(): Promise<readonly SdkConfigEntry[]>;
@@ -995,6 +1460,10 @@ export interface SdkClient {
   updateConfig(options: SdkUpdateConfigOptions): Promise<SdkConfigEntry>;
   /** CON-02 scoped config (DELETE /api/config/:id). */
   deleteConfig(id: string): Promise<void>;
+  /** AUTH-03 caller identity (GET /api/auth/me): which credential class
+   * verified this caller, plus the membership role/kind. Same route as the
+   * browser UI, so discovery/CLI/MCP clients preserve the same identity. */
+  whoAmI(): Promise<SdkCallerIdentity>;
   getContract(): Promise<SdkContractDescriptor>;
 }
 
@@ -1166,6 +1635,32 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       const response = await guard(() => fetchImpl(`${base}/api/executions${suffix}`, { headers }), "history");
       return parseHistoryPage(await readJson(response, "history"));
     },
+    async tailLogs(id: string, query: SdkLogTailQuery = {}): Promise<SdkLogPage> {
+      checkExecutionId(id);
+      const params = new URLSearchParams();
+      if (query.level !== undefined) params.set("level", query.level);
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
+      if (query.cursor !== undefined) params.set("cursor", query.cursor);
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const response = await guard(
+        () => fetchImpl(`${base}/api/executions/${id}/logs${suffix}`, { headers }),
+        "log tail",
+      );
+      return parseLogPage(await readJson(response, "log tail"));
+    },
+    async searchLogs(query: SdkLogSearchQuery = {}): Promise<SdkLogPage> {
+      const params = new URLSearchParams();
+      if (query.level !== undefined) params.set("level", query.level);
+      if (query.saga !== undefined) params.set("sagaId", await resolveSagaId(query.saga));
+      if (query.sagaName !== undefined) params.set("sagaName", query.sagaName);
+      if (query.from !== undefined) params.set("startDate", query.from);
+      if (query.to !== undefined) params.set("endDate", query.to);
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
+      if (query.cursor !== undefined) params.set("cursor", query.cursor);
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const response = await guard(() => fetchImpl(`${base}/api/logs${suffix}`, { headers }), "log search");
+      return parseLogPage(await readJson(response, "log search"));
+    },
     async diagnoseExecution(id: string): Promise<SdkDiagnosis> {
       const detail = await this.getExecution(id);
       return {
@@ -1210,6 +1705,61 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
         "notification dismissal",
       );
       await readJson(response, "notification dismissal");
+    },
+    async getOpsVersion(): Promise<SdkOpsVersion> {
+      const response = await guard(() => fetchImpl(`${base}/api/ops/version`, { headers }), "ops version");
+      return parseOpsVersion(await readJson(response, "ops version"));
+    },
+    async getOpsHealth(): Promise<SdkOpsHealth> {
+      const response = await guard(() => fetchImpl(`${base}/api/ops/health`, { headers }), "ops health");
+      return parseOpsHealth(await readJson(response, "ops health"));
+    },
+    async getOpsMetrics(recent?: number): Promise<SdkOpsMetrics> {
+      if (recent !== undefined && (!Number.isInteger(recent) || recent < 1 || recent > 50)) {
+        throw new SdkError("SDK_INVALID_REF", "Recent must be an integer from 1 to 50.");
+      }
+      const suffix = recent === undefined ? "" : `?recent=${recent}`;
+      const response = await guard(() => fetchImpl(`${base}/api/ops/metrics${suffix}`, { headers }), "ops metrics");
+      return parseOpsMetrics(await readJson(response, "ops metrics"));
+    },
+    async listOpsScheduledTasks(): Promise<readonly SdkOpsScheduledTask[]> {
+      const response = await guard(
+        () => fetchImpl(`${base}/api/ops/scheduled-tasks`, { headers }),
+        "ops scheduled tasks",
+      );
+      return parseOpsScheduledTasks(await readJson(response, "ops scheduled tasks"));
+    },
+    async getOpsJobs(): Promise<SdkOpsJobs> {
+      const response = await guard(() => fetchImpl(`${base}/api/ops/jobs`, { headers }), "ops jobs");
+      return parseOpsJobs(await readJson(response, "ops jobs"));
+    },
+    async getOpsPreflight(): Promise<SdkOpsPreflight> {
+      const response = await guard(() => fetchImpl(`${base}/api/ops/preflight`, { headers }), "ops preflight");
+      return parseOpsPreflight(await readJson(response, "ops preflight"));
+    },
+    async getOpsConnectionHealth(): Promise<SdkOpsConnectionHealth> {
+      const response = await guard(
+        () => fetchImpl(`${base}/api/ops/connections`, { headers }),
+        "ops connection health",
+      );
+      return parseOpsConnectionHealth(await readJson(response, "ops connection health"));
+    },
+    async runOpsRepair(options: SdkOpsRepairOptions): Promise<SdkOpsRepairOutcome> {
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/ops/repairs`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              kind: options.kind,
+              ...(options.targetId === undefined ? {} : { targetId: options.targetId }),
+              ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
+              dryRun: options.dryRun ?? true,
+            }),
+          }),
+        "ops repair",
+      );
+      return parseOpsRepairOutcome(await readJson(response, "ops repair"));
     },
     async listConfigs(): Promise<readonly SdkConfigEntry[]> {
       const response = await guard(() => fetchImpl(`${base}/api/config`, { headers }), "config list");
@@ -1262,6 +1812,10 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       );
       await readJson(response, "config delete");
     },
+    async whoAmI(): Promise<SdkCallerIdentity> {
+      const response = await guard(() => fetchImpl(`${base}/api/auth/me`, { headers }), "caller identity");
+      return parseCallerIdentity(await readJson(response, "caller identity"));
+    },
     async getContract(): Promise<SdkContractDescriptor> {
       const response = await guard(() => fetchImpl(`${base}${SDK_DOC_PATH}`, { headers }), "sdk contract");
       const data: unknown = await readJson(response, "sdk contract");
@@ -1300,6 +1854,12 @@ export function describeContract(): SdkContractDescriptor {
     version: SDK_VERSION,
     routes: [
       { method: "GET", path: "/api/sdk", description: "This contract descriptor (authenticated)." },
+      {
+        method: "GET",
+        path: "/api/auth/me",
+        description:
+          "Caller identity: verified userId/orgId, credential class (human/service/fixture/endpoint), and membership role/kind.",
+      },
       { method: "GET", path: "/api/sagas", description: "Saga discovery catalog (read-only metadata)." },
       {
         method: "POST",
@@ -1317,6 +1877,18 @@ export function describeContract(): SdkContractDescriptor {
         method: "GET",
         path: "/api/executions/:id",
         description: "Execution detail with Operations, result, and safe error.",
+      },
+      {
+        method: "GET",
+        path: "/api/executions/:id/logs",
+        description:
+          "OBS-02 scoped log tail for one Execution (level, limit, cursor; DEBUG hidden unless asked). Polling view over durable rows.",
+      },
+      {
+        method: "GET",
+        path: "/api/logs",
+        description:
+          "OBS-02 operator log search across the caller's own rows (level, sagaId, sagaName, startDate, endDate, limit, cursor).",
       },
       { method: "POST", path: "/api/executions/:id/cancel", description: "Owner-only cancellation (exact ID)." },
       {
@@ -1526,6 +2098,38 @@ export function describeContract(): SdkContractDescriptor {
         path: "/api/notifications/:id",
         description: "Dismiss a notification (owner-only for personal rows).",
       },
+      { method: "GET", path: "/api/ops/version", description: "Product version contract (OPS-02 diagnostics)." },
+      { method: "GET", path: "/api/ops/health", description: "Worker/D1 liveness (OPS-02 diagnostics)." },
+      {
+        method: "GET",
+        path: "/api/ops/metrics",
+        description: "Execution counts, admission backlog, recent failures (?recent=, OPS-02 diagnostics).",
+      },
+      {
+        method: "GET",
+        path: "/api/ops/scheduled-tasks",
+        description: "Scheduled-task status over the durable endpoint inventory (OPS-02 diagnostics).",
+      },
+      {
+        method: "GET",
+        path: "/api/ops/jobs",
+        description: "Platform job progress: Execution backlog plus app deploy jobs (OPS-02 diagnostics).",
+      },
+      {
+        method: "GET",
+        path: "/api/ops/preflight",
+        description: "Static dependency preflight: mapping and credential presence (OPS-02 diagnostics).",
+      },
+      {
+        method: "GET",
+        path: "/api/ops/connections",
+        description: "Per-Integration Connection health with registry test hints (OPS-02 diagnostics).",
+      },
+      {
+        method: "POST",
+        path: "/api/ops/repairs",
+        description: "Inspect-then-act repairs: dryRun inspects, dryRun:false executes (admin only, OPS-02).",
+      },
       {
         method: "GET",
         path: "/api/file-locations",
@@ -1731,6 +2335,12 @@ export function describeContract(): SdkContractDescriptor {
       },
       { name: "execute-status-cancel", status: "supported", detail: "Submit, poll, detail, history, and cancel." },
       {
+        name: "author-logs",
+        status: "supported",
+        detail:
+          "OBS-02 bounded author logs/progress (tailLogs/searchLogs over GET /api/executions/:id/logs and GET /api/logs; SEC-01 scrubbed, DEBUG hidden unless asked, cursor-poll reconnect).",
+      },
+      {
         name: "generated-artifacts",
         status: "supported",
         detail:
@@ -1766,6 +2376,12 @@ export function describeContract(): SdkContractDescriptor {
           "Administrative audit trail (GET /api/audit) plus operational notifications inbox with dismiss (ADR 020).",
       },
       {
+        name: "ops-diagnostics-repairs",
+        status: "supported",
+        detail:
+          "Cloudflare-native diagnostics (GET /api/ops/version, /health, /metrics, /scheduled-tasks, /jobs, /preflight, /connections) plus inspect-then-act repairs (POST /api/ops/repairs, admin-gated execute; OPS-02).",
+      },
+      {
         name: "connection-management",
         status: "supported",
         detail:
@@ -1788,6 +2404,12 @@ export function describeContract(): SdkContractDescriptor {
         status: "supported",
         detail:
           "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 019): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
+      },
+      {
+        name: "credential-identity",
+        status: "supported",
+        detail:
+          "Scoped machine credentials with caller identity proof (AUTH-03, issue #144): Access service tokens (common_name allowlist) and TRG-02 endpoint keys (per-endpoint digest, expiry, disable/rotate) with least privilege, no raw-secret readback, and GET /api/auth/me reporting the verified credential class. LAB fixture auth is local/CI only, never production. Delegated human identity (SSO/MFA/passkeys) stays the IdP's job via Access verification; the Adaptation Mapping section of ADR 014 records the non-equivalent outcomes.",
       },
       {
         name: "resource-management",
