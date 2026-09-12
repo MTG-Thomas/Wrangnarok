@@ -132,9 +132,13 @@ import { join } from "node:path";
 // and provenance) stack on the 450 KiB surface above. Hand-written feature
 // code, no new dependencies (package.json unchanged versus main);
 // deliberate feature headroom only.
-// 2026-09-12 (AUTH-02 rebase over TOOL-01 main, issue #143): union budget,
-// measured below after merge; deliberate feature headroom only.
-const BUDGET_BYTES = 500 * 1024;
+// 2026-09-12 (AUTH-02 rebase over TOOL-01 main, issue #143): 525 KiB.
+// The union of the AUTH-02 resource-role control plane with the TOOL-01
+// tool registry plus inbound MCP gateway plus HaloPSA Code Mode host,
+// stacked on the sec endpoint safe-URL policy and response baseline,
+// measures 530653 bytes. Hand-written feature code, no new dependencies
+// (package.json unchanged versus main); deliberate feature headroom only.
+const BUDGET_BYTES = 525 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
