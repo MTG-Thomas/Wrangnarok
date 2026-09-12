@@ -98,13 +98,10 @@ function isPrivateIPv4(host: string): boolean {
 function isInternalIPv6(host: string): boolean {
   const value = stripBrackets(host).toLowerCase();
   if (value === "::1" || value === "::") return true;
-  if (value.startsWith("fe80") || value.startsWith("fc") || value.startsWith("fd")) return true;
-  if (value.startsWith("::ffff:")) {
-    const rest = value.slice("::ffff:".length);
-    if (isIPv4Literal(rest)) return isPrivateIPv4(rest);
-    if (rest.startsWith("127.")) return true;
-  }
-  return false;
+  // Link-local and unique-local literals never serve a Connection endpoint.
+  // Mapped/compat forms (::ffff:a.b.c.d) normalize through the v4 check via
+  // isInternalLiteralHost's dotted branch only when written dotted.
+  return value.startsWith("fe80") || value.startsWith("fc") || value.startsWith("fd");
 }
 
 /** True for loopback names/addresses reserved to the local echo fixture. */
@@ -169,9 +166,6 @@ function checkEndpointUrl(integrationName: string, raw: string): EndpointFailure
   }
   const policy = endpointPolicyFor(integrationName);
   const host = url.hostname.toLowerCase();
-  if (host.length === 0) {
-    return { code: "INVALID_URL", message: `Config field "endpoint" must name a host.` };
-  }
   if (isLoopbackHost(host)) {
     if (!policy.allowLoopback) {
       return {

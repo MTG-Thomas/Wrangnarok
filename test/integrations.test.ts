@@ -10,6 +10,8 @@ import {
   INTEGRATION_DEFINITIONS,
   integrationById,
   integrationByName,
+  isInternalLiteralHost,
+  isLoopbackHost,
   ninjaIntegrationDef,
   validateConnectionConfig,
 } from "../src/integrations";
@@ -340,5 +342,28 @@ describe("Connection config validation (CON-01)", () => {
       field: "endpoint",
       code: "ENDPOINT_NOT_ALLOWED",
     });
+  });
+
+  it("classifies loopback and internal literal hosts (issue #236)", () => {
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("example.com")).toBe(false);
+    expect(isInternalLiteralHost("127.0.0.1")).toBe(true);
+    expect(isInternalLiteralHost("10.0.0.9")).toBe(true);
+    expect(isInternalLiteralHost("172.16.4.2")).toBe(true);
+    expect(isInternalLiteralHost("172.15.0.1")).toBe(false);
+    expect(isInternalLiteralHost("192.168.0.1")).toBe(true);
+    expect(isInternalLiteralHost("169.254.9.9")).toBe(true);
+    expect(isInternalLiteralHost("0.0.0.0")).toBe(true);
+    expect(isInternalLiteralHost("8.8.8.8")).toBe(false);
+    expect(isInternalLiteralHost("999.1.1.1")).toBe(false);
+    expect(isInternalLiteralHost("[::1]")).toBe(true);
+    expect(isInternalLiteralHost("[::]")).toBe(true);
+    expect(isInternalLiteralHost("[fe80::1]")).toBe(true);
+    expect(isInternalLiteralHost("[fc00::1]")).toBe(true);
+    expect(isInternalLiteralHost("[fd00::1]")).toBe(true);
+    expect(isInternalLiteralHost("[2001:db8::1]")).toBe(false);
+    expect(isInternalLiteralHost("example.com")).toBe(false);
   });
 });
