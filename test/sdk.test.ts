@@ -533,6 +533,35 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     ).rejects.toMatchObject({ code: "SDK_CLIENT_NETWORK" });
   });
 
+  it("reads and writes saga runtime policy through the typed client", async () => {
+    const served = {
+      policy: {
+        sagaId: helloSaga.id,
+        sagaName: "hello",
+        version: 2,
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        timeout: { vendorTimeoutMs: 250, stepTimeout: "10 seconds" },
+        retry: { checkpointRetries: 2, vendorRetries: 1 },
+        admission: { enabled: true, maxConcurrent: 3 },
+      },
+    };
+    const got = stub([json(catalog), json(served)]);
+    const reader = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: got.fetchImpl });
+    expect(await reader.getSagaPolicy("hello")).toMatchObject({ sagaId: helloSaga.id, version: 2 });
+    expect(got.calls[1]?.url).toBe(`http://local.test/api/sagas/${helloSaga.id}/policy`);
+    const put = stub([json(served)]);
+    const writer = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: put.fetchImpl });
+    expect(await writer.updateSagaPolicy(helloSaga.id, { admission: { maxConcurrent: 3 } })).toMatchObject({
+      admission: { maxConcurrent: 3 },
+    });
+    expect(put.calls[0]?.init.method).toBe("PUT");
+    expect(String(put.calls[0]?.init.body)).toContain("maxConcurrent");
+    const fallback = stub([json(catalog), json(served)]);
+    const fallbackClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: fallback.fetchImpl });
+    expect(await fallbackClient.updateSagaPolicy("hello", undefined)).toMatchObject({ version: 2 });
+    expect(String(fallback.calls[1]?.init.body)).toBe("{}");
+  });
+
   it("cancels with exact IDs and guards the cancel shape", async () => {
     const id = "c".repeat(64);
     const { calls, fetchImpl } = stub([json({ executionId: id, status: "Cancelled", cancelled: true })]);

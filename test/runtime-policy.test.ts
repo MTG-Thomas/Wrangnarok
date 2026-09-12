@@ -121,6 +121,10 @@ describe("RUN-01 policy parsing (pure)", () => {
     expect(() => parseSagaPolicy({ admission: { enabled: "yes" } })).toThrow(/enabled/);
     expect(() => parseSagaPolicy({ admission: { maxConcurrent: 101 } })).toThrow(/maxConcurrent/);
     expect(() => parseSagaPolicy({ retry: { bogus: 1 } })).toThrow(/Unknown retry field/);
+    expect(() => parseSagaPolicy({ timeout: "nope" })).toThrow(/must be objects/);
+    expect(() => parseSagaPolicy({ retry: "nope" })).toThrow(/must be objects/);
+    expect(() => parseSagaPolicy({ timeout: { bogus: 1 } })).toThrow(/Unknown timeout field/);
+    expect(() => parseSagaPolicy({ admission: { bogus: 1 } })).toThrow(/Unknown admission field/);
     expect(() => parseSagaPolicy(null)).toThrow(/JSON object/);
   });
   it("resolves deadlines and retry limits through the operator ceiling", () => {
@@ -175,10 +179,15 @@ describe("RUN-01 policy parsing (pure)", () => {
       }),
     ).toBeDefined();
     expect(() => parseRuntimePolicy({ policy: { nope: true } })).toThrow(/unexpected shape/);
+    expect(() => parseRuntimePolicy(null)).toThrow(/unexpected shape/);
+    expect(() => parseRuntimePolicy({ policy: null })).toThrow(/unexpected shape/);
   });
 });
 
 describe("RUN-01 operator inspect/change (workerd)", () => {
+  it("rejects malformed policy route identifiers", async () => {
+    expect((await worker.fetch(policyGet("0".repeat(36)), bindings)).status).toBe(400);
+  });
   it("serves the default policy to any caller and gates writes to operators", async () => {
     const got = await worker.fetch(policyGet(echoSaga.id), bindings);
     expect(got.status).toBe(200);
