@@ -19,7 +19,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { HALO_INTEGRATION_ID } from "../src/domain";
-import { HALO_ALLOWED_ORIGIN, HALO_SPEC_VERSION } from "../src/integrations/halo";
+import {
+  HALO_ALLOWED_ORIGIN,
+  HALO_SPEC_VERSION,
+  executeHaloOperation,
+  inspectHaloOperation,
+  requireHaloSecrets,
+  searchHaloOperations,
+} from "../src/integrations/halo";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration4 from "../migrations/0004_solutions_install.sql?raw";
@@ -269,5 +276,133 @@ describe("HaloPSA Code Mode proof (TOOL-01 acceptance)", () => {
     );
     expect(denied.status).toBe(502);
     expect(await denied.json()).toMatchObject({ error: { code: "HALO_NOT_CONFIGURED" } });
+  });
+
+  it("covers host defensive branches: missing/disabled/malformed connections and vendor faults", async () => {
+    mockHalo();
+    const env = haloEnv();
+    const caller = { orgId: ORG, userId: "00000000-0000-4000-8000-000000000002" };
+    // Missing Connection answers OPENAPI_CONNECTION_MISSING.
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        {
+          operationId: "Ticket_Get",
+          path: { id: "7" },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "OPENAPI_CONNECTION_MISSING" });
+    await createHaloConnection();
+    // Disabled Connection answers 404-mapped OPENAPI_CONNECTION_MISSING.
+    await bindings.DB.prepare("UPDATE connections SET enabled=0 WHERE org_id=? AND integration_id=?")
+      .bind(ORG, HALO_INTEGRATION_ID)
+      .run();
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        {
+          operationId: "Ticket_Get",
+          path: { id: "7" },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "OPENAPI_CONNECTION_MISSING" });
+    await bindings.DB.prepare("UPDATE connections SET enabled=1 WHERE org_id=? AND integration_id=?")
+      .bind(ORG, HALO_INTEGRATION_ID)
+      .run();
+    // Malformed endpoint answers OPENAPI_ORIGIN_FORBIDDEN.
+    await bindings.DB.prepare("UPDATE connections SET endpoint=? WHERE org_id=? AND integration_id=?")
+      .bind(":::not-a-url", ORG, HALO_INTEGRATION_ID)
+      .run();
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        {
+          operationId: "Ticket_Get",
+          path: { id: "7" },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "OPENAPI_ORIGIN_FORBIDDEN" });
+    await bindings.DB.prepare("UPDATE connections SET endpoint=? WHERE org_id=? AND integration_id=?")
+      .bind(HALO_ALLOWED_ORIGIN, ORG, HALO_INTEGRATION_ID)
+      .run();
+    // Vendor redirect, error status, unreadable body, and transport throw.
+    const redirectFetch = (async () => Response.redirect("https://halo-lab.example.com/x")) as typeof fetch;
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        { operationId: "Ticket_Get", path: { id: "7" } },
+        { fetchImpl: redirectFetch },
+      ),
+    ).rejects.toMatchObject({ code: "OPENAPI_EXECUTION_FAILED" });
+    const errorFetch = (async () => Response.json({ e: 1 }, { status: 500 })) as typeof fetch;
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        { operationId: "Ticket_Get", path: { id: "7" } },
+        { fetchImpl: errorFetch },
+      ),
+    ).rejects.toMatchObject({ code: "OPENAPI_EXECUTION_FAILED" });
+    const garbageFetch = (async () => new Response("not-json{{{", { status: 200 })) as typeof fetch;
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        { operationId: "Ticket_Get", path: { id: "7" } },
+        { fetchImpl: garbageFetch },
+      ),
+    ).rejects.toMatchObject({ code: "OPENAPI_EXECUTION_FAILED" });
+    const throwFetch = (async () => {
+      throw new Error("down");
+    }) as typeof fetch;
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        { operationId: "Ticket_Get", path: { id: "7" } },
+        { fetchImpl: throwFetch },
+      ),
+    ).rejects.toMatchObject({ code: "OPENAPI_EXECUTION_FAILED" });
+    // Empty body resolves to null result.
+    const emptyFetch = (async () => new Response("", { status: 200 })) as typeof fetch;
+    const empty = await executeHaloOperation(
+      bindings.DB,
+      caller,
+      { clientId: HALO_ID, clientSecret: HALO_SECRET },
+      { operationId: "Ticket_Get", path: { id: "7" } },
+      { fetchImpl: emptyFetch },
+    );
+    expect(empty.result).toBe(null);
+    // A Fault thrown by the transport propagates unchanged (not wrapped).
+    const faultFetch = (async () => {
+      const { Fault } = await import("../src/domain");
+      throw new Fault(503, "DISPATCH_UNCONFIRMED", "Vendor control plane failed.");
+    }) as typeof fetch;
+    await expect(
+      executeHaloOperation(
+        bindings.DB,
+        caller,
+        { clientId: HALO_ID, clientSecret: HALO_SECRET },
+        { operationId: "Ticket_Get", path: { id: "7" } },
+        { fetchImpl: faultFetch },
+      ),
+    ).rejects.toMatchObject({ code: "DISPATCH_UNCONFIRMED" });
+    // Search/inspect helpers: unknown operation fails closed.
+    expect(searchHaloOperations("zzz-no-match-xyz")).toEqual([]);
+    expect(() => inspectHaloOperation("Nope_Missing")).toThrow();
+    // Secret presence helper: partial credentials fail.
+    expect(() => requireHaloSecrets({})).toThrow();
+    void env;
   });
 });

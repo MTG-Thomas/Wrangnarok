@@ -229,7 +229,7 @@ export function indexOperations(
  * proportional to need, not to spec size. */
 export function searchOperations(
   operations: readonly ContractOperation[],
-  query: string,
+  query = "",
   limit = 10,
 ): readonly ContractOperation[] {
   const tokens = query

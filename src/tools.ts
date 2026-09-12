@@ -134,10 +134,9 @@ function describe(
  * Stale rows (Saga renamed, removed, or revised since enrollment) are inert:
  * omitted from discovery and rejected at execution with TOOL_STALE. */
 function liveRow(
-  row: ToolEnrollmentRow | null,
+  row: ToolEnrollmentRow,
   catalog: readonly ToolCatalogSaga[],
 ): { row: ToolEnrollmentRow; stale: boolean } | null {
-  if (!row) return null;
   if ((row.enabled ?? 1) === 0) return null;
   const saga = catalog.find((entry) => entry.id === row.saga_id);
   if (!saga || saga.revision !== row.saga_revision) return { row, stale: true };
@@ -153,8 +152,7 @@ async function ownedRow(db: D1Database, orgId: string, toolName: string): Promis
       .bind(orgId, toolName)
       .first<ToolEnrollmentRow>();
   } catch {
-    // Pre-migration databases (no tool_enrollments table): no tools exist,
-    // so discovery is empty and execution fails TOOL_NOT_FOUND, never 500.
+    // Pre-migration databases (no tool_enrollments table): no tools exist.
     return null;
   }
 }
@@ -169,6 +167,7 @@ async function listRows(db: D1Database, orgId: string): Promise<readonly ToolEnr
       .all<ToolEnrollmentRow>();
     return rows.results;
   } catch {
+    // Pre-migration databases (no tool_enrollments table): no tools exist.
     return [];
   }
 }
@@ -196,7 +195,6 @@ export const toolRegistry: ToolRegistry = {
         throw invalid("TOOL_EXISTS", `Tool "${name}" is already enrolled for this Organization.`, 409);
       throw invalid("TOOL_EXISTS", `Tool name "${name}" is already taken for this Organization.`, 409);
     }
-    if (!UUID.test(saga.id)) throw invalid("UNKNOWN_SAGA", "Unknown Saga id.", 404);
     const now = new Date().toISOString();
     try {
       await db
@@ -229,6 +227,9 @@ export const toolRegistry: ToolRegistry = {
       const live = liveRow(row, catalog);
       if (!live || live.stale) continue;
       const saga = catalog.find((entry) => entry.id === row.saga_id);
+      // Defense in depth: liveRow already gates on catalog membership, so a
+      // live row always resolves here. The check stays so a catalog mutated
+      // between the two lookups degrades to omission, never a crash.
       if (!saga) continue;
       tools.push(describe(row, saga));
     }
@@ -249,9 +250,7 @@ export const toolRegistry: ToolRegistry = {
         409,
       );
     }
-    const full = catalog.find((entry) => entry.id === row.saga_id);
-    if (!full) throw invalid("TOOL_STALE", `Tool "${toolName}" names a Saga that is no longer registered.`, 409);
-    return describe(row, full);
+    return describe(row, saga);
   },
 
   async disable(db, caller, toolName) {

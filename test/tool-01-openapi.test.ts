@@ -186,3 +186,119 @@ describe("origin allowlist enforcement", () => {
     expect(resolveRequestUrl(pinned, get, { path: { id: "7" } })).not.toContain("evil");
   });
 });
+
+describe("defensive validation branches", () => {
+  it("rejects malformed paths, methods, and ids", () => {
+    expect(codeOf(() => validateContractDocument(null))).toBe("OPENAPI_CONTRACT_INVALID");
+    expect(codeOf(() => validateContractDocument([]))).toBe("OPENAPI_CONTRACT_INVALID");
+    expect(codeOf(() => validateContractDocument({ openapi: "3.0.0" }))).toBe("OPENAPI_CONTRACT_INVALID");
+    expect(
+      codeOf(() =>
+        validateContractDocument({
+          openapi: "3.0.0",
+          info: { version: "x" },
+          paths: { "no-slash": { get: { operationId: "Ok" } } },
+        }),
+      ),
+    ).toBe("OPENAPI_CONTRACT_INVALID");
+    expect(
+      codeOf(() => validateContractDocument({ openapi: "3.0.0", info: { version: "x" }, paths: { "/a": null } })),
+    ).toBe("OPENAPI_CONTRACT_INVALID");
+    expect(
+      codeOf(() =>
+        validateContractDocument({
+          openapi: "3.0.0",
+          info: { version: "x" },
+          paths: { "/a": { get: { operationId: "bad id!" } } },
+        }),
+      ),
+    ).toBe("OPENAPI_CONTRACT_INVALID");
+    // Non-object method defs are skipped, then the empty contract fails.
+    expect(
+      codeOf(() =>
+        validateContractDocument({ openapi: "3.0.0", info: { version: "x" }, paths: { "/a": { get: null } } }),
+      ),
+    ).toBe("OPENAPI_CONTRACT_INVALID");
+  });
+  it("covers pinning guards: JSON, origins, and size", async () => {
+    await expect(pinContract({ id: "h", name: "h" }, "not-json", ["https://h.example.com"])).rejects.toMatchObject({
+      code: "OPENAPI_CONTRACT_INVALID",
+    });
+    await expect(pinContract({ id: "h", name: "h" }, JSON.stringify(SPEC), ["not a url"])).rejects.toMatchObject({
+      code: "OPENAPI_CONTRACT_INVALID",
+    });
+    await expect(
+      pinContract({ id: "h", name: "h" }, JSON.stringify(SPEC), ["ftp://h.example.com"]),
+    ).rejects.toMatchObject({ code: "OPENAPI_CONTRACT_INVALID" });
+  });
+  it("covers indexing skips and method defaults", () => {
+    const doc = {
+      openapi: "3.0.3",
+      info: { version: "v", title: "t" },
+      paths: {
+        "/ok": { get: { operationId: "Ok_Read", summary: 7 } },
+        "/skip": null,
+        "/skip2": "nope",
+        "/post": { post: { operationId: "Ok_Write" } },
+        "/arr": { get: [{ operationId: "Ok_No" }] },
+        "/bad": { get: { operationId: "bad id!" } },
+        "/null": { get: null },
+      },
+    } as unknown as OpenApiDocument;
+    const indexed = indexOperations(doc);
+    expect(indexed.find((entry) => entry.operationId === "Ok_Read")).toMatchObject({ risk: "read", summary: "" });
+    expect(indexed.find((entry) => entry.operationId === "Ok_Write")).toMatchObject({ risk: "mutation" });
+    // Unknown classification strings fall back to method defaults.
+    const weird = indexOperations(doc, { Ok_Write: "nonsense" as never });
+    expect(weird.find((entry) => entry.operationId === "Ok_Write")).toMatchObject({ risk: "mutation" });
+    // Search guards: overlong tokens match nothing; limits clamp.
+    expect(searchOperations(indexed, "x".repeat(129))).toEqual([]);
+    expect(searchOperations(indexed, "ok", 100)).toHaveLength(2);
+    expect(searchOperations(indexed, "ok", 1)).toHaveLength(1);
+  });
+  it("covers URL resolution guards", async () => {
+    const pinned = await pinContract({ id: "halo", name: "halo" }, JSON.stringify(SPEC), ["https://halo.example.com"]);
+    const operations = indexOperations(SPEC, CLASSIFICATIONS);
+    const get = inspectOperation(operations, "Ticket_Get");
+    // Unsafe path chars, traversal, bad query keys/values.
+    expect(codeOf(() => resolveRequestUrl(pinned, get, { path: { id: "a/b" } }))).toBe("OPENAPI_INVALID_PARAMS");
+    expect(codeOf(() => resolveRequestUrl(pinned, get, { path: { id: "a?b" } }))).toBe("OPENAPI_INVALID_PARAMS");
+    expect(codeOf(() => resolveRequestUrl(pinned, { ...get, path: "no-slash" }, {}))).toBe("OPENAPI_INVALID_PARAMS");
+    expect(codeOf(() => resolveRequestUrl(pinned, get, { query: { "bad key!": "v" } }))).toBe("OPENAPI_INVALID_PARAMS");
+    expect(codeOf(() => resolveRequestUrl(pinned, get, { query: { ok: "x".repeat(1025) } }))).toBe(
+      "OPENAPI_INVALID_PARAMS",
+    );
+    // Missing allowlist origin fails closed.
+    expect(codeOf(() => resolveRequestUrl({ ...pinned, allowedOrigins: [] }, get, { path: { id: "1" } }))).toBe(
+      "OPENAPI_ORIGIN_FORBIDDEN",
+    );
+    // A protocol-relative path from a hostile spec resolves off-origin: the
+    // allowlist check skips the malformed entry (catch arm) and fails
+    // closed rather than throwing.
+    expect(
+      codeOf(() =>
+        resolveRequestUrl(
+          { ...pinned, allowedOrigins: ["https://halo.example.com", "not a url"] },
+          { ...get, path: "//evil.example.com/x" },
+          {},
+        ),
+      ),
+    ).toBe("OPENAPI_ORIGIN_FORBIDDEN");
+  });
+  it("covers version slicing and default index/search limits", async () => {
+    // info.version without slice coverage: long versions truncate to 64.
+    const long = await pinContract(
+      { id: "h", name: "h" },
+      JSON.stringify({ openapi: "3.0.0", info: { version: "v".repeat(100) }, paths: SPEC.paths }),
+      ["https://h.example.com"],
+    );
+    expect(long.specVersion).toHaveLength(64);
+    // indexOperations and searchOperations default parameters.
+    expect(indexOperations(SPEC)).toHaveLength(4);
+    expect(searchOperations(indexOperations(SPEC))).toEqual([]);
+    // Deny-by-default risk enabled explicitly: destructive executes when listed.
+    const destructive = inspectOperation(indexOperations(SPEC, CLASSIFICATIONS), "Ticket_Delete");
+    const enabled = { enabledOperations: ["Ticket_Delete"], deniedOperations: [], enabledRisks: [] as const };
+    expect(() => authorizeOperation(destructive, enabled)).not.toThrow();
+  });
+});

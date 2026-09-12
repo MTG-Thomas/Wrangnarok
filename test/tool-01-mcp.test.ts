@@ -11,7 +11,14 @@ import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { HALO_INTEGRATION_ID, echoSaga, helloSaga } from "../src/domain";
 import { Fault } from "../src/domain";
-import { mcpResult, parseMcpRequest, searchTools } from "../src/mcp";
+import {
+  mcpResult,
+  parseMcpCallParams,
+  parseMcpDescribeParams,
+  parseMcpRequest,
+  parseMcpSearchParams,
+  searchTools,
+} from "../src/mcp";
 
 function envelopeCode(fn: () => void): string | null {
   try {
@@ -104,6 +111,28 @@ describe("MCP envelope parsing (pure)", () => {
         "zzz-no-match",
       ),
     ).toEqual([]);
+    expect(searchTools([], "   ")).toEqual([]);
+  });
+
+  it("covers every parser rejection branch", () => {
+    expect(envelopeCode(() => parseMcpRequest(null))).toBe("MCP_INVALID_REQUEST");
+    expect(envelopeCode(() => parseMcpRequest([]))).toBe("MCP_INVALID_REQUEST");
+    expect(envelopeCode(() => parseMcpRequest({ jsonrpc: "2.0", id: {}, method: "tools/list" }))).toBe(
+      "MCP_INVALID_REQUEST",
+    );
+    expect(parseMcpRequest({ jsonrpc: "2.0", id: null, method: "tools/list" }).id).toBe(null);
+    expect(envelopeCode(() => parseMcpCallParams(null))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpCallParams({ tool: "", input: {} }))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpCallParams({ tool: "x".repeat(65), input: {} }))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpCallParams({ tool: "ok", input: "nope" }))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpCallParams({ tool: "ok", input: null }))).toBe("MCP_INVALID_PARAMS");
+    expect(parseMcpCallParams({ tool: "ok" })).toEqual({ tool: "ok", input: {} });
+    expect(envelopeCode(() => parseMcpSearchParams(null))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpSearchParams({ query: "  " }))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpSearchParams({ query: "x".repeat(129) }))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpDescribeParams(null))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpDescribeParams({ name: "" }))).toBe("MCP_INVALID_PARAMS");
+    expect(envelopeCode(() => parseMcpDescribeParams({ name: "x".repeat(129) }))).toBe("MCP_INVALID_PARAMS");
   });
 });
 
@@ -204,5 +233,78 @@ describe("MCP gateway over the local Worker (real client)", () => {
     expect(ORG).toBe("00000000-0000-4000-8000-000000000001");
     expect(HALO_INTEGRATION_ID).toBe("a1b2c3d4-0000-4111-8111-000000000001");
     expect(echoSaga.id).toBe("720b9ebf-9b6a-4eac-bae9-6ed22c970401");
+  });
+
+  it("covers gateway call branches: bad operation ids, denied executes, and tool faults", async () => {
+    // halo_api_execute without an operationId answers call-level invalid params.
+    const noOp = await mcp("tools/call", { tool: "halo_api_execute", input: {} });
+    expect(noOp.status).toBe(200);
+    expect((noOp.body.result as { error: { code: string } }).error.code).toBe("MCP_INVALID_PARAMS");
+    // halo_api_execute with an unknown operation denies through the host.
+    const unknown = await mcp("tools/call", {
+      tool: "halo_api_execute",
+      input: { operationId: "Nope_Missing", params: {} },
+    });
+    expect(unknown.status).toBe(200);
+    expect((unknown.body.result as { error: { code: string } }).error).toBeDefined();
+    // halo_api_search with a non-string query matches nothing (never throws).
+    const search = await mcp("tools/call", { tool: "halo_api_search", input: { query: 7 } });
+    expect(search.status).toBe(200);
+    expect((search.body.result as { tools: unknown[] }).tools).toEqual([]);
+    // tools/call on an enrolled tool without an idempotency key faults
+    // call-level (missing key), never an envelope throw.
+    const name = await enrollHello();
+    const noKey = await mcp("tools/call", { tool: name, input: { input: { name: "Al" } } });
+    expect(noKey.status).toBe(200);
+    expect((noKey.body.result as { error: { code: string } }).error.code).toBe("INVALID_IDEMPOTENCY_KEY");
+    // tools/call with an invalid Saga input faults call-level too.
+    const badInput = await mcp("tools/call", {
+      tool: name,
+      input: { input: { name: "" }, idempotencyKey: "mcp-tool-call-badinput" },
+    });
+    expect(badInput.status).toBe(200);
+    expect((badInput.body.result as { error: { code: string } }).error.code).toBe("INVALID_INPUT");
+  });
+
+  it("covers openapi route guards: unknown integration, bad bodies, and query keys", async () => {
+    const auth = { Authorization: `Bearer ${TOKEN}` };
+    const unknownSearch = await worker.fetch(
+      new Request("http://local.test/api/openapi/search?integration=nope&q=x", { headers: auth }),
+      bindings,
+    );
+    expect(unknownSearch.status).toBe(404);
+    const badKeys = await worker.fetch(
+      new Request("http://local.test/api/openapi/search?integration=halo&bogus=1", { headers: auth }),
+      bindings,
+    );
+    expect(badKeys.status).toBe(400);
+    const unknownOp = await worker.fetch(
+      new Request("http://local.test/api/openapi/operations/Nope_Missing", { headers: auth }),
+      bindings,
+    );
+    expect(unknownOp.status).toBe(404);
+    const unknownExec = await worker.fetch(
+      new Request("http://local.test/api/openapi/execute", {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ integration: "nope", operationId: "Ticket_Get" }),
+      }),
+      bindings,
+    );
+    expect(unknownExec.status).toBe(404);
+    const noOpExec = await worker.fetch(
+      new Request("http://local.test/api/openapi/execute", {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ integration: "halo" }),
+      }),
+      bindings,
+    );
+    expect(noOpExec.status).toBe(400);
+    const queryInspect = await worker.fetch(
+      new Request("http://local.test/api/openapi/operations/Ticket_Get?x=1", { headers: auth }),
+      bindings,
+    );
+    expect(queryInspect.status).toBe(400);
   });
 });
