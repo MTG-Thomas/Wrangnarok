@@ -47,6 +47,9 @@ Classifications: **free** (fits Free for a small useful deployment), **paid-adap
 | Usage metering/billing accuracy (OPS-04) | redesign | Application-observed counters are honest estimates, not provider meters. Financial claims need deployed metering plus explicit assumptions. |
 | Encrypted export/restore (OPS-03) | free | Bounded durable export jobs with download expiry; ciphertext never in portable source. |
 | Python workload import (arbitrary upstream packages/process pool) | redesign | Full product parity is not Python import compatibility. TypeScript/native adaptation per Saga; `process_pool.py` has no Cloudflare mapping. |
+| Access-gated operator/user identity | free | Cloudflare Access service-token verification in the Worker; seat count follows the account plan. No local password store exists by design; delegated human identity (SSO/MFA/passkeys) stays the IdP's job (ADR 014). |
+| Permission-scoped knowledge / vector search (AI-05) | paid-adaptation | Vectorize (or any vector index) is a separate Cloudflare primitive with its own storage/query billing, earned only by an explicit child issue and ADR. Until then, knowledge stays out of scope; no in-D1 embedding hack. |
+| Build/CI costs (Vite UI, workerd test matrix) | free | Local `vite build` plus GitHub-hosted CI minutes; no Cloudflare build product is adopted. Bundle budget (575 KiB) bounds deploy size. |
 | Self-host-anywhere deployment | unresolved | Cloudflare-native is the experiment (AGENTS.md 13). No portability abstraction is planned. |
 | Tenant scale beyond Free D1/Workflow daily caps | paid-adaptation | Paid tier or sharded databases; the MVP stays Free-viable by design. |
 
