@@ -281,6 +281,19 @@ it("delegates through authorized forms without a separate direct-workflow grant"
   await call(`/api/orgs/${ORG_A}/roles/${roleId}/assignments`, "POST", USER_ADMIN, { userId: USER_ORDINARY });
   expect(await call(`/api/forms/${FORM_NAME}`, "GET", USER_ORDINARY)).toMatchObject({ status: 200 });
   const b = { ...bindings, LAB_USER_ID: USER_ORDINARY, LAB_FIXTURE_USER_ID: USER_ADMIN, ADMIN_USER_IDS: USER_ADMIN };
+  // FORM-02 lifecycle (issue #155): startup mints the session-bound handle,
+  // submit presents it back with the values. The delegation assertion is
+  // unchanged: the form submit grant authorizes dispatch, no Saga grant.
+  const started = await worker.fetch(
+    new Request(`http://local.test/api/forms/${FORM_NAME}/startup`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+    b,
+  );
+  expect(started.status).toBe(201);
+  const { handle } = (await started.json()) as { handle: string };
   const accepted = await worker.fetch(
     new Request(`http://local.test/api/forms/${FORM_NAME}/submit`, {
       method: "POST",
@@ -289,7 +302,7 @@ it("delegates through authorized forms without a separate direct-workflow grant"
         "Content-Type": "application/json",
         "Idempotency-Key": "auth02-deleg-0001",
       },
-      body: JSON.stringify({ name: "Ada" }),
+      body: JSON.stringify({ handle, values: { name: "Ada" } }),
     }),
     b,
   );

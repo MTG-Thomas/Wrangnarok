@@ -13,6 +13,7 @@
 // to the served GET /api/sdk descriptor. test/sdk.test.ts pins the version
 // and asserts the descriptor, schemas, and error codes agree with the live
 // Worker, so drift fails CI instead of surprising callers.
+import { FORM_FIELD_TYPES } from "./forms";
 import { SAGA_CATALOG } from "./sagas";
 import type { CatalogEntry, IoSchema } from "./saga";
 
@@ -75,6 +76,12 @@ export const SDK_ERROR_CODES = [
   "SAGA_PAUSED",
   "ADMISSION_LIMITED",
   "FORM_VALIDATION_FAILED",
+  "INVALID_FORM",
+  "FORM_NOT_FOUND",
+  "STALE_FORM_HANDLE",
+  "INVALID_PREFILL",
+  "PREFILL_NOT_ALLOWED",
+  "INVALID_SCHEDULE",
   "ECHO_VENDOR_TIMEOUT",
   "ECHO_INTEGRATION_FAILED",
   "NINJA_NOT_CONFIGURED",
@@ -187,7 +194,6 @@ export const SDK_ERROR_CODES = [
   "CONFIG_CONFLICT",
   "CONFIG_REQUIREMENT_UNSATISFIED",
   "CREDENTIAL_IN_VALUE",
-  "SECRET_NOT_CONFIGURED",
   "SECRET_SCHEMA_MISMATCH",
   "INVALID_JOB_ID",
   "JOB_NOT_FOUND",
@@ -223,12 +229,9 @@ export const SDK_ERROR_CODES = [
   "INVALID_POLICY",
   "INVALID_POLICY_ACTION",
   "INVALID_POLICY_TEST",
-  "INVALID_BATCH",
   "INVALID_EXPIRY",
   "INVALID_FINALIZE",
   "INVALID_DELETE",
-  "INVALID_LIMIT",
-  "INVALID_CURSOR",
   "EMPTY_UPLOAD",
   "FILE_TOO_LARGE",
   "CONTENT_TYPE_REJECTED",
@@ -822,6 +825,191 @@ export interface SdkUpdateConfigOptions {
   readonly type?: string;
   readonly value?: unknown;
   readonly description?: string;
+}
+
+// --- Dynamic forms (FORM-02, issue #155) ------------------------------------
+// Designer CRUD, startup handles, provider fetch, and submit over the
+// Worker HTTP API only — no Saga logic here, the same rule as
+// scripts/wrangnarok.mjs. Server declarations stay authoritative; the
+// guards below fail loud on drift (SDK_CLIENT_MISMATCH).
+
+export interface SdkFormField {
+  readonly name: string;
+  readonly type: string;
+  readonly label?: string;
+  readonly required: boolean;
+  readonly maxLength: number;
+  readonly default?: unknown;
+  readonly options?: readonly string[];
+  readonly provider?: unknown;
+  readonly visibleWhen?: { readonly field: string; readonly equals: string | number | boolean };
+  readonly file?: { readonly location: string; readonly maxMb?: number; readonly contentTypes?: readonly string[] };
+  readonly min?: number;
+  readonly max?: number;
+  readonly pattern?: string;
+  readonly content?: string;
+}
+
+export interface SdkFormSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly sagaId: string;
+}
+
+export interface SdkFormDetail extends SdkFormSummary {
+  readonly title?: string;
+  readonly description?: string;
+  readonly allowPrefill: boolean;
+  readonly fields: readonly SdkFormField[];
+}
+
+export interface SdkFormStartup {
+  readonly form: string;
+  readonly handle: string;
+  readonly expiresAt: string;
+  readonly snapshot: Record<string, unknown>;
+  readonly options: Record<string, readonly string[]>;
+}
+
+export interface SdkFormProviders {
+  readonly form: string;
+  readonly options: Record<string, readonly string[]>;
+  readonly errors: Record<string, string>;
+}
+
+export interface SdkFormSubmitReceipt {
+  readonly form: string;
+  readonly executionId: string;
+  readonly replayed: boolean;
+  readonly statusUrl: string;
+  readonly scheduled?: boolean;
+  readonly scheduleAt?: string;
+}
+
+export interface SdkSaveFormOptions {
+  readonly name: string;
+  readonly sagaId: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly allowPrefill?: boolean;
+  readonly fields: unknown[];
+}
+
+export interface SdkSubmitFormOptions {
+  readonly form: string;
+  readonly handle: string;
+  readonly values?: Record<string, unknown>;
+  readonly scheduleAt?: string;
+  readonly key?: string;
+}
+
+const FORM_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const FORM_HANDLE_RE = /^[a-f0-9]{64}$/;
+
+function checkFormName(name: string): void {
+  if (!FORM_NAME_RE.test(name)) {
+    throw new SdkError("SDK_INVALID_REF", "Form lookups need the exact lowercase form name.");
+  }
+}
+
+function isFormField(value: unknown): value is SdkFormField {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.name === "string" &&
+    typeof value.type === "string" &&
+    (FORM_FIELD_TYPES as readonly string[]).includes(value.type) &&
+    typeof value.required === "boolean" &&
+    typeof value.maxLength === "number"
+  );
+}
+
+function isFormDetailValue(value: unknown): value is SdkFormDetail {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    STABLE_UUID.test(value.id) &&
+    typeof value.name === "string" &&
+    FORM_NAME_RE.test(value.name) &&
+    typeof value.sagaId === "string" &&
+    STABLE_UUID.test(value.sagaId) &&
+    typeof value.allowPrefill === "boolean" &&
+    Array.isArray(value.fields) &&
+    (value.fields as unknown[]).every(isFormField)
+  );
+}
+
+/** Guard a GET /api/forms payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseFormList(value: unknown): readonly SdkFormSummary[] {
+  if (!isRecord(value) || !Array.isArray(value.forms)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The form list has an unexpected shape.");
+  }
+  for (const entry of value.forms) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      !STABLE_UUID.test(entry.id) ||
+      typeof entry.name !== "string" ||
+      !FORM_NAME_RE.test(entry.name) ||
+      typeof entry.sagaId !== "string" ||
+      !STABLE_UUID.test(entry.sagaId)
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The form list has an unexpected shape.");
+    }
+  }
+  return value.forms as unknown as readonly SdkFormSummary[];
+}
+
+/** Guard a GET /api/forms/:name (or POST/PUT) payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseFormDetail(value: unknown): SdkFormDetail {
+  if (!isRecord(value) || !isFormDetailValue(value.form)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The form has an unexpected shape.");
+  }
+  return value.form;
+}
+
+/** Guard a POST /api/forms/:name/startup payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseFormStartup(value: unknown): SdkFormStartup {
+  if (
+    !isRecord(value) ||
+    typeof value.form !== "string" ||
+    typeof value.handle !== "string" ||
+    !FORM_HANDLE_RE.test(value.handle) ||
+    typeof value.expiresAt !== "string" ||
+    !isRecord(value.snapshot) ||
+    !isRecord(value.options)
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The form startup has an unexpected shape.");
+  }
+  return value as unknown as SdkFormStartup;
+}
+
+/** Guard a GET /api/forms/:name/providers payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseFormProviders(value: unknown): SdkFormProviders {
+  if (!isRecord(value) || typeof value.form !== "string" || !isRecord(value.options)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The form providers have an unexpected shape.");
+  }
+  return {
+    ...(value as unknown as SdkFormProviders),
+    errors: isRecord(value.errors) ? (value.errors as Record<string, string>) : {},
+  };
+}
+
+/** Guard a POST /api/forms/:name/submit payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseFormSubmit(value: unknown): SdkFormSubmitReceipt {
+  if (
+    !isRecord(value) ||
+    typeof value.form !== "string" ||
+    !FORM_NAME_RE.test(value.form) ||
+    typeof value.executionId !== "string" ||
+    !FORM_HANDLE_RE.test(value.executionId) ||
+    typeof value.statusUrl !== "string" ||
+    (value.replayed !== undefined && typeof value.replayed !== "boolean") ||
+    (value.scheduled !== undefined && typeof value.scheduled !== "boolean") ||
+    (value.scheduleAt !== undefined && typeof value.scheduleAt !== "string")
+  ) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The form submit has an unexpected shape.");
+  }
+  return value as unknown as SdkFormSubmitReceipt;
 }
 
 // --- Caller identity (AUTH-03, issue #144) ------------------------------------
@@ -1544,6 +1732,22 @@ export interface SdkClient {
   updateConfig(options: SdkUpdateConfigOptions): Promise<SdkConfigEntry>;
   /** CON-02 scoped config (DELETE /api/config/:id). */
   deleteConfig(id: string): Promise<void>;
+  /** FORM-02 designer list (GET /api/forms): org-scoped summaries. */
+  listForms(): Promise<readonly SdkFormSummary[]>;
+  /** FORM-02 designer read (GET /api/forms/:name): server-authoritative fields. */
+  getForm(name: string): Promise<SdkFormDetail>;
+  /** FORM-02 designer create (POST /api/forms): 400 INVALID_FORM on bad fields. */
+  createForm(options: SdkSaveFormOptions): Promise<SdkFormDetail>;
+  /** FORM-02 designer edit (PUT /api/forms/:name): wholesale replace. */
+  updateForm(name: string, options: Omit<SdkSaveFormOptions, "name">): Promise<SdkFormDetail>;
+  /** FORM-02 designer delete (DELETE /api/forms/:name). */
+  deleteForm(name: string): Promise<void>;
+  /** FORM-02 startup (POST /api/forms/:name/startup): session-bound handle. */
+  startForm(name: string, prefill?: Record<string, unknown>): Promise<SdkFormStartup>;
+  /** FORM-02 providers (GET /api/forms/:name/providers): resolved options. */
+  getFormProviders(name: string): Promise<SdkFormProviders>;
+  /** FORM-02 submit (POST /api/forms/:name/submit): consume handle, submit or schedule. */
+  submitForm(options: SdkSubmitFormOptions): Promise<SdkFormSubmitReceipt>;
   /** AUTH-03 caller identity (GET /api/auth/me): which credential class
    * verified this caller, plus the membership role/kind. Same route as the
    * browser UI, so discovery/CLI/MCP clients preserve the same identity. */
@@ -1914,6 +2118,107 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       );
       await readJson(response, "config delete");
     },
+    async listForms(): Promise<readonly SdkFormSummary[]> {
+      const response = await guard(() => fetchImpl(`${base}/api/forms`, { headers }), "form list");
+      return parseFormList(await readJson(response, "form list"));
+    },
+    async getForm(name: string): Promise<SdkFormDetail> {
+      checkFormName(name);
+      const response = await guard(() => fetchImpl(`${base}/api/forms/${name}`, { headers }), "form detail");
+      return parseFormDetail(await readJson(response, "form detail"));
+    },
+    async createForm(options: SdkSaveFormOptions): Promise<SdkFormDetail> {
+      checkFormName(options.name);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/forms`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              name: options.name,
+              sagaId: options.sagaId,
+              ...(options.title === undefined ? {} : { title: options.title }),
+              ...(options.description === undefined ? {} : { description: options.description }),
+              ...(options.allowPrefill === undefined ? {} : { allowPrefill: options.allowPrefill }),
+              fields: options.fields,
+            }),
+          }),
+        "form create",
+      );
+      return parseFormDetail(await readJson(response, "form create"));
+    },
+    async updateForm(name: string, options: Omit<SdkSaveFormOptions, "name">): Promise<SdkFormDetail> {
+      checkFormName(name);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/forms/${name}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({
+              sagaId: options.sagaId,
+              ...(options.title === undefined ? {} : { title: options.title }),
+              ...(options.description === undefined ? {} : { description: options.description }),
+              ...(options.allowPrefill === undefined ? {} : { allowPrefill: options.allowPrefill }),
+              fields: options.fields,
+            }),
+          }),
+        "form update",
+      );
+      return parseFormDetail(await readJson(response, "form update"));
+    },
+    async deleteForm(name: string): Promise<void> {
+      checkFormName(name);
+      const response = await guard(
+        () => fetchImpl(`${base}/api/forms/${name}`, { method: "DELETE", headers }),
+        "form delete",
+      );
+      await readJson(response, "form delete");
+    },
+    async startForm(name: string, prefill?: Record<string, unknown>): Promise<SdkFormStartup> {
+      checkFormName(name);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/forms/${name}/startup`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(prefill === undefined ? {} : { prefill }),
+          }),
+        "form startup",
+      );
+      return parseFormStartup(await readJson(response, "form startup"));
+    },
+    async getFormProviders(name: string): Promise<SdkFormProviders> {
+      checkFormName(name);
+      const response = await guard(
+        () => fetchImpl(`${base}/api/forms/${name}/providers`, { headers }),
+        "form providers",
+      );
+      return parseFormProviders(await readJson(response, "form providers"));
+    },
+    async submitForm(options: SdkSubmitFormOptions): Promise<SdkFormSubmitReceipt> {
+      checkFormName(options.form);
+      if (!FORM_HANDLE_RE.test(options.handle)) {
+        throw new SdkError("SDK_INVALID_REF", "Form submits need the 64-hex startup handle.");
+      }
+      const key = options.key ?? randomKey();
+      if (!IDEMPOTENCY_KEY_RE.test(key)) {
+        throw new SdkError("SDK_INVALID_REF", "Idempotency-Key must be 16-128 chars [A-Za-z0-9._:-].");
+      }
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/forms/${options.form}/submit`, {
+            method: "POST",
+            headers: { ...headers, "Idempotency-Key": key },
+            body: JSON.stringify({
+              handle: options.handle,
+              ...(options.values === undefined ? {} : { values: options.values }),
+              ...(options.scheduleAt === undefined ? {} : { scheduleAt: options.scheduleAt }),
+            }),
+          }),
+        "form submit",
+      );
+      return parseFormSubmit(await readJson(response, "form submit"));
+    },
     async whoAmI(): Promise<SdkCallerIdentity> {
       const response = await guard(() => fetchImpl(`${base}/api/auth/me`, { headers }), "caller identity");
       return parseCallerIdentity(await readJson(response, "caller identity"));
@@ -2005,13 +2310,43 @@ export function describeContract(): SdkContractDescriptor {
       { method: "POST", path: "/api/executions/:id/cancel", description: "Owner-only cancellation (exact ID)." },
       {
         method: "GET",
+        path: "/api/forms",
+        description: "Org-scoped form summaries (FORM-02 designer list).",
+      },
+      {
+        method: "POST",
+        path: "/api/forms",
+        description: "Create a form declaration (400 INVALID_FORM on bad fields).",
+      },
+      {
+        method: "GET",
         path: "/api/forms/:name",
-        description: "Form declaration for this Organization (FORM-01 binding slice; renderer belongs to FORM-02).",
+        description: "Form declaration for this Organization (FORM-02 metadata + fields).",
+      },
+      {
+        method: "PUT",
+        path: "/api/forms/:name",
+        description: "Replace a form declaration wholesale (FORM-02 designer edit).",
+      },
+      {
+        method: "DELETE",
+        path: "/api/forms/:name",
+        description: "Delete a form declaration (FORM-02 designer delete).",
+      },
+      {
+        method: "POST",
+        path: "/api/forms/:name/startup",
+        description: "Mint a session-bound 30-minute handle with snapshot + provider options.",
+      },
+      {
+        method: "GET",
+        path: "/api/forms/:name/providers",
+        description: "Resolved select/multiselect options through the caller Table gate.",
       },
       {
         method: "POST",
         path: "/api/forms/:name/submit",
-        description: "Validate against the declaration (422 FORM_VALIDATION_FAILED) then submit the bound Saga.",
+        description: "Consume a startup handle (422 STALE_FORM_HANDLE), validate, merge defaults, submit or schedule.",
       },
       { method: "GET", path: "/api/apps", description: "Application summaries." },
       { method: "POST", path: "/api/apps", description: "Create an independent app." },
@@ -2557,6 +2892,12 @@ export function describeContract(): SdkContractDescriptor {
           "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 019): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
       },
       {
+        name: "dynamic-forms",
+        status: "supported",
+        detail:
+          "Dynamic forms over D1 (FORM-02, issue #155): designer CRUD, 17 field types with display-only layout kinds, defaults with input merge, conditional visibility, Table/static providers with membership re-check, session-bound 30-minute startup handles (peeked for validation, consumed only after validation passes), delegated form-to-Saga submit, immediate or scheduled dispatch, FILE-01 file-field re-validation, opt-in URL prefill. Embed/publication stays deferred to EMBED-01.",
+      },
+      {
         name: "credential-identity",
         status: "supported",
         detail:
@@ -2572,7 +2913,7 @@ export function describeContract(): SdkContractDescriptor {
         name: "resource-management",
         status: "tracked",
         detail:
-          "Author Tables/files/forms/agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md); the scoped browser app runtime is the separate app-runtime capability.",
+          "Author Tables/files/agents SDK commands belong to their owning parity issues (see docs/sdk-capability-map.md); the scoped browser app runtime is the separate app-runtime capability. Dynamic forms ship as the supported dynamic-forms capability, not here.",
       },
     ],
     docs: [
