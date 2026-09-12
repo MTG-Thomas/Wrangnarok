@@ -120,7 +120,15 @@ import { join } from "node:path";
 // and provenance) stack on the 450 KiB surface above. Hand-written feature
 // code, no new dependencies (package.json unchanged versus main);
 // deliberate feature headroom only.
-const BUDGET_BYTES = 490 * 1024;
+// 2026-09-12 (FORM-02 stacked over TOOL-01 main, issue #155): 555 KiB. The
+// dynamic-forms surface (8 routes plus the forms domain: 17 field types,
+// startup handles, Table and static providers, delegated submit, scheduled
+// receipts, file-field re-validation; plus the Forms renderer and SDK
+// descriptor entries) stacks on the 490 KiB surface above with the same
+// deliberate feature headroom, not dependency bloat: package.json is
+// unchanged versus main. Combined measures 545802 bytes locally (CI number
+// governs); shrink the raise if it lands lower.
+const BUDGET_BYTES = 555 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
