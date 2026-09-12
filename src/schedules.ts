@@ -34,9 +34,6 @@ const SAFE_WINDOW_CHAR = /^[a-zA-Z0-9._:-]+$/;
  * reserve `wep-`: a caller squatting it could replay against a scheduled
  * Execution, so the submit route must reject caller keys with this prefix. */
 export const SCHEDULE_KEY_PREFIX = "sch-";
-/** One-off due-time skew bound: a tick promotes rows due at or before now,
- * never rows due more than this far in the future (clock-skew guard). */
-export const SCHEDULE_SKEW_MS = 60_000;
 /** Bounded scan/admission cost per Cron tick (Free-tier posture): the tick
  * reads at most this many due rows per Organization scan. */
 export const SCHEDULE_TICK_LIMIT = 50;
