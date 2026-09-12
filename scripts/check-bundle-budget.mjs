@@ -120,10 +120,12 @@ import { join } from "node:path";
 // (short messages, no dead helpers): 900 bytes over the 440 KiB budget.
 // Hand-written security-boundary code, no new dependencies (package.json
 // unchanged versus main); deliberate feature headroom only.
-// 2026-09-12 (RUN-02 re-merge over sec-hardening main, issue #136): 455 KiB.
-// The RUN-02 union measured 462412 bytes over the AUTH-01/RUN-01 main above;
-// the sec-endpoint surface stays within that headroom. Remeasure after merge.
-const BUDGET_BYTES = 455 * 1024;
+// 2026-09-12 (RUN-02 re-merge over sec-hardening main, issue #136): 460 KiB.
+// The union of the RUN-02 child-lineage surface with the sec-hardened main
+// measures 469406 bytes (~458.4 KiB) locally (CI number governs).
+// Hand-written feature code, no new dependencies (package.json unchanged
+// versus main); deliberate feature headroom only.
+const BUDGET_BYTES = 460 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
