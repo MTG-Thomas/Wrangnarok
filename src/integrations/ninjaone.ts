@@ -10,6 +10,7 @@ import {
   NINJA_TOKEN_PATH,
 } from "../domain";
 import type { NinjaOrgSummary, NinjaOrgsResult } from "../domain";
+import { assertSafeEndpoint } from "./index";
 import { registerExecutionSecrets, scrubTextWithSecrets } from "../secrets";
 export const ninjaIntegration = Object.freeze({ id: NINJA_INTEGRATION_ID, name: "ninjaone" });
 export interface NinjaConnection {
@@ -41,6 +42,9 @@ export async function listOrganizations(
   if (!clientId || !clientSecret) {
     throw new Fault(502, "NINJA_NOT_CONFIGURED", "NinjaOne credentials are not configured.");
   }
+  // Re-parse the persisted endpoint before any fetch: persist-time validation
+  // covers new writes, this covers rows that predate it.
+  assertSafeEndpoint("ninjaone", connection.endpoint);
   if (executionId !== undefined) registerExecutionSecrets(executionId, [clientId, clientSecret]);
   // Scrub substrings out of every outward Fault message before it can reach a
   // step result, D1 row, or Workflow terminal value. Vendor bodies are still
