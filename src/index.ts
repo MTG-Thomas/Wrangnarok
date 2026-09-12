@@ -243,49 +243,45 @@ export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow
  * posture to Static Assets pass-through and raw file/byte responses so the
  * public UI and the API share one baseline: no MIME sniffing, no framing, a
  * locked-down referrer, no powerful browser features, and HSTS on HTTPS.
- * Content-Type/Cache-Control stay caller-owned (JSON defaults, file types). */
-const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-});
+ * Content-Type/Cache-Control stay caller-owned (JSON defaults, file types).
+ * apiBytes/json build the baseline inline (one Response, no re-wrap); only
+ * the ASSETS pass-through copies headers, since fetched responses may be
+ * immutable. */
 /** Content-Security-Policy per surface: the JSON/file API carries no active
  * content, so default-src 'none'; the Static Assets UI shell needs its own
  * scripts, styles, and images, so self-only. */
 const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
 const ASSET_CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
-function withSecurity(response: Response, csp: string): Response {
+const SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "Content-Security-Policy": API_CSP,
+};
+function withAssetSecurity(response: Response): Response {
   const headers = new Headers(response.headers);
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
-    if (!headers.has(name)) headers.set(name, value);
+  for (const name of Object.keys(SECURITY_HEADERS)) {
+    if (name === "Content-Security-Policy") continue;
+    const value = SECURITY_HEADERS[name];
+    if (value !== undefined && !headers.has(name)) headers.set(name, value);
   }
-  if (!headers.has("Content-Security-Policy")) headers.set("Content-Security-Policy", csp);
+  if (!headers.has("Content-Security-Policy")) headers.set("Content-Security-Policy", ASSET_CSP);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers,
   });
 }
-/** Wrap a Static Assets pass-through response with the UI-surface baseline. */
-function withAssetSecurity(response: Response): Response {
-  return withSecurity(response, ASSET_CSP);
-}
-/** Wrap an API byte/file response with the API-surface baseline. */
-function withApiSecurity(response: Response): Response {
-  return withSecurity(response, API_CSP);
-}
 function apiBytes(body: BodyInit | null, status: number, headers: Record<string, string>): Response {
-  return withApiSecurity(new Response(body, { status, headers }));
+  return new Response(body, { status, headers: { ...SECURITY_HEADERS, ...headers } });
 }
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
-  return withApiSecurity(
-    Response.json(body, {
-      status,
-      headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...extra },
-    }),
-  );
+  return Response.json(body, {
+    status,
+    headers: { ...SECURITY_HEADERS, "Cache-Control": "no-store", ...extra },
+  });
 }
 /** Log route for the access log: raw /api/* pathname or "static". Query
  * strings never leave the URL object. */
@@ -340,12 +336,10 @@ async function handlePublicDelivery(request: Request, env: Bindings): Promise<Re
   const challengeRow = findChallengeEndpoint(rows.filter((row) => row.kind === "webhook"));
   const challenge = challengeRow ? vendorChallenge(challengeRow, url) : null;
   if (challenge !== null) {
-    return withApiSecurity(
-      new Response(challenge, {
-        status: 200,
-        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
-      }),
-    );
+    return apiBytes(challenge, 200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
   }
   if (url.search) {
     throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");

@@ -4,6 +4,7 @@ src/connections.ts
 src/integrations/index.ts
 src/integrations/echo.ts
 wrangler.jsonc
+scripts/check-bundle-budget.mjs
 docs/architecture/004-ci-cd.md
 test/response-headers.test.ts
 test/integrations.test.ts
