@@ -8,7 +8,7 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 21 Partial, 22 Missing, 2 Gated.
+Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 22 Partial, 21 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
@@ -30,7 +30,7 @@ Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 21 Par
 | RUN-03 | Define and deliver bounded synchronous and data-provider execution | 2+4 | Missing | AUTH-02, RUN-01 | new |
 | RUN-04 | Do not confirm cancellation when native Workflow termination is ambiguous | 2 | Partial | — | new |
 | OBS-01 | Complete the execution UI and CLI: results, failures, live status and history traversal | 2 | Partial | RUN-04 | new |
-| OBS-02 | Persist and stream authorized author logs and progress with reconnect recovery | 4 | Missing | SEC-01, AUTH-02, OBS-01 | new |
+| OBS-02 | Persist and stream authorized author logs and progress with reconnect recovery | 4 | Partial | SEC-01, AUTH-02, OBS-01 | #153 |
 | TABLE-01 | Deliver the existing minimal author Tables migration slice | 4 | Partial | AUTH-02 | #117 |
 | TABLE-02 | Extend author Tables to policy-safe querying, batch mutations and realtime visibility | 4 | Partial | TABLE-01, AUTH-02, OBS-02 | #154 |
 | FORM-01 | Deliver the existing Forms-to-Saga input binding slice | 4 | Partial | — | #118 |
@@ -519,9 +519,9 @@ Related Wrangnarok issues: #17, #77
 
 ## OBS-02: Persist and stream authorized author logs and progress with reconnect recovery
 
-Phase 4; **Missing**; existing issue: new
+Phase 4; **Partial**; existing issue: #153
 
-Local status: Request/usage console logs and Operation rows exist, but no author logging/progress SDK, durable log API, cross-execution log search or live subscription surface.
+Local status: Bounded structured author logs/progress ship end to end on Worker + D1: Saga-emitted rows via `appendAuthorLog` inside `step.do()` (the hello pilot emits one PROGRESS plus one INFO row), execution/org/caller attribution from the immutable Execution row, deterministic seq order, SEC-01 scrubbing before persistence and again before streaming, DEBUG rows persisted but hidden unless explicitly requested, 200-row-per-Execution retention, scoped tail (`GET /api/executions/:id/logs`) plus operator search (`GET /api/logs`, date/level/Saga filters, cursor pagination), SDK `tailLogs`/`searchLogs`, browser tail on the Execution detail view (same 2s tick, cursor resume, seq-dedupe merge), and CLI `logs`/`log-search` with `--follow`. Polling only: D1 is the source of truth and reconnects backfill from the cursor; no WebSocket/DO/Queue surface exists (an earned ADR is required before any live-push design). Remaining: live-push subscriptions, cross-organization operator views (AUTH-02), and richer progress schemas.
 
 Depends: SEC-01, AUTH-02, OBS-01
 
