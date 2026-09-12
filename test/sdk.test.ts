@@ -15,10 +15,13 @@ import {
   inspectSaga,
   localCatalog,
   parseAuditPage,
+  parseConfigEntry,
+  parseConfigList,
   parseExecutionDetail,
   parseHistoryPage,
   parseNotification,
   parseNotifications,
+  parsePreview,
   parseSagaCatalog,
   parseSdkError,
   scaffoldSaga,
@@ -687,6 +690,77 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     expect(() => parseNotifications({})).toThrow(/unexpected shape/);
     expect(() => parseNotifications({ notifications: [{ id: 1 }] })).toThrow(/unexpected shape/);
     expect(() => parseNotification({})).toThrow(/unexpected shape/);
+  });
+
+  it("guards preview and config wire shapes on every branch", () => {
+    // parsePreview: non-record top level, non-record preview.saga, and the
+    // persisted/dispatched literal branches.
+    expect(() => parsePreview(null)).toThrow(/unexpected shape/);
+    expect(() => parsePreview({ preview: { saga: "x" } })).toThrow(/unexpected shape/);
+    const previewBase = () => ({
+      preview: {
+        saga: { id: "s", name: "s", revision: "v1", description: "d", requiredIntegrations: [] },
+        input: {},
+        environmentChecked: false,
+        environment: [],
+        persisted: false,
+        dispatched: false,
+      },
+    });
+    expect(() => parsePreview({ preview: { ...previewBase().preview, persisted: true } })).toThrow(/unexpected shape/);
+    expect(() => parsePreview({ preview: { ...previewBase().preview, dispatched: true } })).toThrow(/unexpected shape/);
+    expect(() => parsePreview({ preview: { ...previewBase().preview, environment: [{ integrationId: 1 }] } })).toThrow(
+      /unexpected shape/,
+    );
+    expect(parsePreview(previewBase()).persisted).toBe(false);
+    // parseConfigList / parseConfigEntry: non-record tops and non-record rows.
+    const entry = {
+      id: "c",
+      key: "k",
+      type: "string",
+      value: "v",
+      description: null,
+      managedBy: null,
+      updatedAt: "t",
+      updatedBy: "u",
+    };
+    expect(() => parseConfigList(null)).toThrow(/unexpected shape/);
+    expect(() => parseConfigList({ configs: [{ id: 1 }] })).toThrow(/unexpected shape/);
+    expect(parseConfigList({ configs: [entry] })).toHaveLength(1);
+    expect(() => parseConfigEntry(null)).toThrow(/unexpected shape/);
+    expect(() => parseConfigEntry({ config: { id: 1 } })).toThrow(/unexpected shape/);
+    expect(parseConfigEntry({ config: entry }).key).toBe("k");
+    // parseNotifications / parseAuditPage happy paths: the loops and the
+    // present-string nextCursor branches.
+    const note = {
+      id: "n",
+      orgId: "o",
+      userId: "u",
+      scope: "personal",
+      category: "c",
+      title: "t",
+      body: null,
+      status: "completed",
+      progressPercent: null,
+      detail: null,
+      createdAt: "t",
+      updatedAt: "t",
+      dismissedAt: null,
+    };
+    expect(parseNotifications({ notifications: [note] })).toHaveLength(1);
+    expect(parseNotification({ notification: note }).id).toBe("n");
+    const event = {
+      id: "e",
+      orgId: "o",
+      actorUserId: "u",
+      action: "a",
+      targetType: null,
+      targetId: null,
+      outcome: "success",
+      detail: null,
+      createdAt: "t",
+    };
+    expect(parseAuditPage({ events: [event], hasMore: true, nextCursor: "c" }).nextCursor).toBe("c");
   });
 
   it("validates every schema branch offline", () => {
