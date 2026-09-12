@@ -6,7 +6,7 @@ import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import type { Bindings } from "../bindings";
 import { EXECUTION_ID } from "../domain";
-import type { ExecutionParams } from "../domain";
+import type { ExecutionParams, SagaRuntimePolicy } from "../domain";
 import { assertJsonSerializable, bindSagaStep } from "../saga";
 import type { SagaDefinition, SagaEventContext } from "../saga";
 import { bindSagaChildren } from "../children";
@@ -16,6 +16,7 @@ import { bindSagaConfig } from "../config";
 import { clearExecutionSecrets, registerExecutionSecrets, scrubExecutionText, scrubExecutionValue } from "../secrets";
 import { echo } from "../integrations/echo";
 import { listOrganizations } from "../integrations/ninjaone";
+import { parseStoredPolicy } from "../executions";
 
 /** Read the parent caller identity from its immutable D1 Execution row.
  * Lazy (first child invoke/await only): context construction itself never
@@ -110,6 +111,16 @@ export async function executeSaga<TOutput>(
         return bindSagaConfig({ db: env.DB, orgId, executionId: id, secrets: deploymentSecrets }).require(key);
       },
     };
+    // RUN-01 (ADR 018): the Workflow resolves step retry limits through the
+    // Execution's snapshotted policy, never the live operator row. In-flight
+    // runs keep the behavior they started with when an operator edits policy
+    // mid-flight; missing snapshots (old rows) collapse to the code table.
+    const snapshot = await env.DB.prepare("SELECT policy_json FROM executions WHERE id=?")
+      .bind(id)
+      .first<{ policy_json: string | null }>()
+      .catch(() => null);
+    const policy: SagaRuntimePolicy | undefined =
+      snapshot?.policy_json == null ? undefined : parseStoredPolicy(snapshot.policy_json);
     const ctx: SagaEventContext = {
       executionId: id,
       integrations: { echo: { echo }, ninjaone: { listOrganizations } },
@@ -118,7 +129,7 @@ export async function executeSaga<TOutput>(
       children: lazyChildren,
       config: lazyConfig,
     };
-    const output = await def.run(ctx, sagaStep);
+    const output = await def.run(ctx, bindSagaStep(step, policy));
     assertJsonSerializable(output, `${def.name} output`);
     // Workflow terminal value is an outward path: a secret-bearing transform
     // result would otherwise ride the native status API out unscrubbed.

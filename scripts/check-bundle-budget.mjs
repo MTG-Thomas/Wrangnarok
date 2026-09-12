@@ -74,6 +74,12 @@ import { join } from "node:path";
 // Workflow, SDK lineage shape) adds ~434 bytes of hand-written feature code
 // with no new dependencies. Same deliberate feature headroom as the earlier
 // raises: package.json is unchanged versus main.
+// 2026-09-11 (AUTH-01 follow-up): 390 KiB. Cascading-delete accounting over
+// every post-AUTH-01 org-owned table (forms, apps, tables, files, artifacts,
+// endpoints, configs, audit; R2 bytes first, managed rows block) stacks on
+// the OPS-01 surface: 385797 bytes baseline, 394934 bytes with the slice, so
+// 390 KiB keeps the same deliberate feature headroom. No new dependencies:
+// package.json is unchanged versus main.
 // 2026-09-11 (OBS-02 merge over current main, issue #153): 405 KiB. The
 // union of the OBS-02 author-log surface (src/logs.ts, two routes, SDK
 // tail/search, CLI logs/log-search) with the newer main surfaces measures
@@ -91,7 +97,23 @@ import { join } from "node:path";
 // measures 440753 bytes (~430.4 KiB) locally (CI number governs).
 // Hand-written feature code, no new dependencies (package.json unchanged
 // versus main); deliberate feature headroom only.
-const BUDGET_BYTES = 435 * 1024;
+// 2026-09-12 (RUN-01 stacked over OPS-02, issue #135): 435 KiB. Persisted
+// per-Saga runtime policy (2 routes, D1 table, per-Execution snapshot,
+// policy-gated submit plus snapshot-resolved retries/deadlines) stacks on
+// the OPS-02 surface above. Same deliberate feature headroom, not dependency
+// bloat: package.json is unchanged versus main.
+// 2026-09-12 (AUTH-01 second re-drive over RUN-01 main): 440 KiB. The union
+// of the AUTH-01 org-lifecycle surface (cascading-delete accounting over all
+// org-owned tables plus R2 bytes) with the RUN-01 policy surface measures
+// 446392 bytes: 952 bytes over the 435 KiB budget. Hand-written feature code,
+// no new dependencies (package.json unchanged versus main); deliberate
+// feature headroom only.
+// 2026-09-12 (RUN-02 re-merge over AUTH-01/RUN-01 main, issue #136): 440 KiB.
+// The union of the RUN-02 child-lineage surface with the newer main stays
+// within the AUTH-01 feature headroom; package.json is unchanged versus
+// main. Remeasure after merge; shrink the raise if the combined bundle
+// lands lower.
+const BUDGET_BYTES = 440 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

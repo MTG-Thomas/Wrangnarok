@@ -123,6 +123,16 @@ export interface ExecutionDetail extends ExecutionSummary {
   parentExecutionId: string | null;
   parentStep: string | null;
   children: ExecutionChild[];
+  /** Applied runtime-policy snapshot (RUN-01, ADR 018): what this Execution ran under. */
+  policy: {
+    sagaId: string;
+    version: number;
+    policy: {
+      timeout: { vendorTimeoutMs: number; stepTimeout: string };
+      retry: { checkpointRetries: number; vendorRetries: number };
+      admission: { enabled: boolean; maxConcurrent: number };
+    };
+  };
   input: unknown;
   result: unknown;
   error: unknown;

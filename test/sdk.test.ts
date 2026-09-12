@@ -19,6 +19,7 @@ import {
   parseHistoryPage,
   parseNotification,
   parseNotifications,
+  parseRuntimePolicy,
   parseOpsConnectionHealth,
   parseOpsHealth,
   parseOpsJobs,
@@ -113,6 +114,18 @@ describe("SDK contract version and descriptor (issue #140)", () => {
       expect.arrayContaining(["GET /api/config", "POST /api/config", "PUT /api/config/:id"]),
     );
     for (const code of ["CONFIG_REQUIREMENT_UNSATISFIED", "SECRET_NOT_CONFIGURED", "MANAGED_RESOURCE"]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
+    // RUN-01 (ADR 018): persisted runtime policy is a supported capability
+    // with its routes and error codes in the contract.
+    expect(descriptor.capabilities.find((entry) => entry.name === "runtime-policy")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining(["GET /api/sagas/:id/policy", "PUT /api/sagas/:id/policy"]),
+    );
+    for (const code of ["INVALID_POLICY", "SAGA_PAUSED", "ADMISSION_LIMITED"]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
+    for (const code of ["STABLE_IDENTITY_REMAP_REQUIRED", "SYNC_CONFLICT", "INVALID_GIT_TARGET", "DEPLOY_BLOCKED"]) {
       expect(SDK_ERROR_CODES).toContain(code);
     }
     for (const capability of descriptor.capabilities) {
@@ -393,6 +406,15 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
       startedAt: "2026-09-11T00:00:01.000Z",
       completedAt: "2026-09-11T00:00:02.000Z",
       runtimeStatus: null,
+      policy: {
+        sagaId: helloSaga.id,
+        version: 1,
+        policy: {
+          timeout: { vendorTimeoutMs: 0, stepTimeout: "10 seconds" },
+          retry: { checkpointRetries: 2, vendorRetries: 0 },
+          admission: { enabled: true, maxConcurrent: 0 },
+        },
+      },
       input: { name: "Ada" },
       result: { greeting: "Hello, Ada!", name: "Ada" },
       error: null,
@@ -539,6 +561,35 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     await expect(
       createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: down.fetchImpl }).listSagas(),
     ).rejects.toMatchObject({ code: "SDK_CLIENT_NETWORK" });
+  });
+
+  it("reads and writes saga runtime policy through the typed client", async () => {
+    const served = {
+      policy: {
+        sagaId: helloSaga.id,
+        sagaName: "hello",
+        version: 2,
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        timeout: { vendorTimeoutMs: 250, stepTimeout: "10 seconds" },
+        retry: { checkpointRetries: 2, vendorRetries: 1 },
+        admission: { enabled: true, maxConcurrent: 3 },
+      },
+    };
+    const got = stub([json(catalog), json(served)]);
+    const reader = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: got.fetchImpl });
+    expect(await reader.getSagaPolicy("hello")).toMatchObject({ sagaId: helloSaga.id, version: 2 });
+    expect(got.calls[1]?.url).toBe(`http://local.test/api/sagas/${helloSaga.id}/policy`);
+    const put = stub([json(served)]);
+    const writer = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: put.fetchImpl });
+    expect(await writer.updateSagaPolicy(helloSaga.id, { admission: { maxConcurrent: 3 } })).toMatchObject({
+      admission: { maxConcurrent: 3 },
+    });
+    expect(put.calls[0]?.init.method).toBe("PUT");
+    expect(String(put.calls[0]?.init.body)).toContain("maxConcurrent");
+    const fallback = stub([json(catalog), json(served)]);
+    const fallbackClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: fallback.fetchImpl });
+    expect(await fallbackClient.updateSagaPolicy("hello", undefined)).toMatchObject({ version: 2 });
+    expect(String(fallback.calls[1]?.init.body)).toBe("{}");
   });
 
   it("cancels with exact IDs and guards the cancel shape", async () => {
@@ -775,6 +826,8 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
       "NINJA_UNAUTHORIZED",
       "NINJA_NOT_CONFIGURED",
       "EXECUTION_CANCELLED",
+      "SAGA_PAUSED",
+      "ADMISSION_LIMITED",
       "DISPATCH_UNCONFIRMED",
       "CHILD_SAGA_NOT_FOUND",
       "CHILD_FAILED",
@@ -840,6 +893,21 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     const legacy = detail();
     delete (legacy as Record<string, unknown>).parentExecutionId;
     expect(parseExecutionDetail(legacy)).toMatchObject({ parentExecutionId: null, parentStep: null, children: [] });
+    expect(() => parseExecutionDetail({ ...detail(), policy: undefined })).toThrow(/unexpected shape/);
+    expect(() => parseRuntimePolicy({ policy: { nope: true } })).toThrow(/unexpected shape/);
+    expect(
+      parseRuntimePolicy({
+        policy: {
+          sagaId: helloSaga.id,
+          sagaName: "hello",
+          version: 1,
+          updatedAt: "2026-09-11T00:00:00.000Z",
+          timeout: { vendorTimeoutMs: 0, stepTimeout: "10 seconds" },
+          retry: { checkpointRetries: 2, vendorRetries: 0 },
+          admission: { enabled: true, maxConcurrent: 0 },
+        },
+      }).sagaId,
+    ).toBe(helloSaga.id);
     expect(() => parseHistoryPage({})).toThrow(/unexpected shape/);
     expect(() => parseHistoryPage({ executions: [{ sagaId: 1 }], hasMore: false })).toThrow(/unexpected shape/);
     expect(() => parseHistoryPage({ executions: [], hasMore: false, nextCursor: 7 })).toThrow(/unexpected shape/);
