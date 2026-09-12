@@ -10,6 +10,7 @@ import {
   parseCron,
   parseRunAt,
   parseScheduleBody,
+  parseScheduleInput,
   parseScheduleName,
   parseScheduleTimezone,
 } from "../src/schedules";
@@ -46,6 +47,7 @@ describe("TRG-01 branch coverage", () => {
     expect(() => parseScheduleBody([], SAGA_DEFINITIONS)).toThrow(/JSON object/);
     expect(() => parseScheduleBody({}, SAGA_DEFINITIONS)).toThrow(/lowercase/);
     expect(() => parseScheduleBody({ name: "x", sagaId: "not-a-uuid" }, SAGA_DEFINITIONS)).toThrow(/stable Saga UUID/);
+    expect(() => parseScheduleBody({ name: "x", sagaId: 42 }, SAGA_DEFINITIONS)).toThrow(/stable Saga UUID/);
     expect(() =>
       parseScheduleBody({ name: "x", sagaId: "395e15f0-3627-41f6-8922-008ce37e3b00" }, SAGA_DEFINITIONS),
     ).toThrow(/known Saga UUID/);
@@ -74,5 +76,19 @@ describe("TRG-01 branch coverage", () => {
   });
   it("formats the current window with its default cursor", () => {
     expect(currentWindow()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+  });
+  it("bounds schedule input and resolves saga fallbacks", () => {
+    // The 4096-byte bound applies after the Saga parse gate: a permissive
+    // parse still fails closed on oversized shaped input.
+    const permissive = {
+      id: helloSaga.id,
+      name: "hello",
+      revision: "hello-v1",
+      description: "stub",
+      parse: (value: unknown) => value,
+    };
+    expect(() => parseScheduleInput({ message: "x".repeat(5000) }, permissive)).toThrow(/4096-byte/);
+    expect(parseScheduleInput({ message: "hi" }, permissive)).toEqual({ message: "hi" });
+    expect(parseScheduleInput(undefined, permissive)).toEqual({});
   });
 });

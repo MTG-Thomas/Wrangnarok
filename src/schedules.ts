@@ -104,22 +104,22 @@ export function parseCron(value: unknown): string {
   if (fields.length !== 5 || !fields.every((field) => CRON_FIELD.test(field))) {
     throw invalid("INVALID_SCHEDULE", "Cron must be a 5-field minute hour day month weekday expression.");
   }
-  const minuteRaw = fields[0] ?? "*";
-  const hourRaw = fields[1] ?? "*";
-  const dayRaw = fields[2] ?? "*";
-  const monthRaw = fields[3] ?? "*";
-  const weekdayRaw = fields[4] ?? "*";
+  const minuteRaw = fields[0] as string;
+  const hourRaw = fields[1] as string;
+  const dayRaw = fields[2] as string;
+  const monthRaw = fields[3] as string;
+  const weekdayRaw = fields[4] as string;
   const raws = [minuteRaw, hourRaw, dayRaw, monthRaw, weekdayRaw].map((field) =>
     field.split(",").flatMap((part) => {
       if (part === "*" || part.startsWith("*/")) return [];
       return part.split("-").map(Number);
     }),
   );
-  const minute = raws[0] ?? [];
-  const hour = raws[1] ?? [];
-  const day = raws[2] ?? [];
-  const month = raws[3] ?? [];
-  const weekday = raws[4] ?? [];
+  const minute = raws[0] as number[];
+  const hour = raws[1] as number[];
+  const day = raws[2] as number[];
+  const month = raws[3] as number[];
+  const weekday = raws[4] as number[];
   const bounds: Array<[number[], number, number, string]> = [
     [minute, 0, 59, "minute"],
     [hour, 0, 23, "hour"],
@@ -198,10 +198,14 @@ export function nextCronDue(cron: string, timezone: string, from: Date = new Dat
   const valid = parseCron(cron);
   const fields = valid.split(" ");
   const matchers = fields.map((field) => cronMatcher(field));
-  const [minuteMatch, hourMatch, dayMatch, monthMatch, weekdayMatch] = matchers;
-  if (!minuteMatch || !hourMatch || !dayMatch || !monthMatch || !weekdayMatch) {
-    throw invalid("INVALID_SCHEDULE", "Cron must be a 5-field minute hour day month weekday expression.");
-  }
+  // parseCron guarantees five fields, so every matcher exists here.
+  const [minuteMatch, hourMatch, dayMatch, monthMatch, weekdayMatch] = matchers as [
+    (value: number) => boolean,
+    (value: number) => boolean,
+    (value: number) => boolean,
+    (value: number) => boolean,
+    (value: number) => boolean,
+  ];
   let cursor = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
   const horizon = cursor + 366 * 24 * 60 * 60_000;
   while (cursor <= horizon) {
@@ -227,14 +231,13 @@ function cronMatcher(field: string): (value: number) => boolean {
     return (value) => value % step === 0;
   }
   // Fields arrive parseCron-validated (numeric lists and ranges only), so
-  // every chunk yields at least one finite endpoint; a missing high end is a
-  // plain value, never garbage.
+  // every chunk yields a finite low; a missing high end is a plain value.
   const values = new Set<number>();
   for (const chunk of field.split(",")) {
     const ends = chunk.split("-").map(Number);
-    const low = ends[0] ?? 0;
+    const low = ends[0] as number;
     const high = ends[1];
-    if (high === undefined || Number.isNaN(high)) values.add(low);
+    if (high === undefined) values.add(low);
     else for (let candidate = low; candidate <= high; candidate += 1) values.add(candidate);
   }
   return (value) => values.has(value) || (values.has(7) && value === 0);
@@ -367,6 +370,25 @@ export async function createSchedule(
   const id = await hash(JSON.stringify(["wrangnarok.schedule.v1", caller.orgId, parsed.name]));
   const stamp = now.toISOString();
   const enabled = parsed.enabled === false ? 0 : 1;
+  // The summary builds from the just-validated values: the INSERT below is
+  // the only writer of this id, so no reload race exists to close.
+  const row: ScheduleRow = {
+    id,
+    org_id: caller.orgId,
+    name: parsed.name,
+    saga_id: parsed.saga.id,
+    kind: parsed.kind,
+    cron,
+    timezone,
+    enabled,
+    input_json: inputJson,
+    run_as_user_id: caller.userId,
+    run_at: runAt,
+    next_due_at: nextDue,
+    last_window: null,
+    created_at: stamp,
+    updated_at: stamp,
+  };
   try {
     await db
       .prepare(
@@ -392,8 +414,6 @@ export async function createSchedule(
   } catch {
     throw invalid("SCHEDULE_CONFLICT", "A schedule with this name already exists.", 409);
   }
-  const row = await loadSchedule(db, caller.orgId, parsed.name);
-  if (!row) throw new Fault(500, "SCHEDULE_MISCONFIGURED", "The schedule was not configured correctly.");
   return toSummary(row, sagas);
 }
 

@@ -942,8 +942,10 @@ export async function opsScheduledTasks(db: D1Database, caller: Principal): Prom
       } catch {
         deliveries = 0;
       }
+      // run_at is always set for one-off rows (parseRunAt requires it), so
+      // the cadence is the due instant itself; spent rows keep it as history.
       const cadence =
-        schedule.kind === "one-off" ? (schedule.run_at ?? "once") : `${schedule.cron} (${schedule.timezone})`;
+        schedule.kind === "one-off" ? (schedule.run_at as string) : `${schedule.cron} (${schedule.timezone})`;
       tasks.push({
         id: schedule.id,
         name: schedule.name,
@@ -952,8 +954,8 @@ export async function opsScheduledTasks(db: D1Database, caller: Principal): Prom
         cadence,
         detail:
           schedule.kind === "one-off"
-            ? `one-off schedule due ${schedule.next_due_at ?? schedule.run_at ?? "spent"} with ${deliveries} recorded deliveries.`
-            : `recurring schedule next due ${schedule.next_due_at ?? "unknown"} with ${deliveries} recorded deliveries.`,
+            ? `one-off schedule due ${schedule.next_due_at ?? "spent"} with ${deliveries} recorded deliveries.`
+            : `recurring schedule next due ${schedule.next_due_at as string} with ${deliveries} recorded deliveries.`,
       });
     }
   } catch {

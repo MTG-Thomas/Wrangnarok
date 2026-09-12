@@ -259,6 +259,34 @@ describe("TRG-01 schedule CRUD (workerd)", () => {
     // Reads stay open to same-org members.
     expect((await worker.fetch(authed("/api/schedules", "GET"), memberBindings)).status).toBe(200);
   });
+  it("falls back to the saga id when the catalog drops a scheduled saga", async () => {
+    const now = new Date().toISOString();
+    await bindings.DB.prepare(
+      "INSERT INTO schedules(id,org_id,name,saga_id,kind,cron,timezone,enabled,input_json,run_as_user_id,next_due_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+      .bind(
+        "55555555-5555-4555-8555-555555555555",
+        "00000000-0000-4000-8000-000000000001",
+        "orphan-row",
+        "00000000-0000-4000-8000-000000000099",
+        "recurring",
+        "* * * * *",
+        "UTC",
+        1,
+        "{}",
+        "00000000-0000-4000-8000-000000000002",
+        now,
+        now,
+        now,
+      )
+      .run();
+    const listed = (await (await worker.fetch(authed("/api/schedules", "GET"), bindings)).json()) as {
+      schedules: { name: string; sagaName: string }[];
+    };
+    expect(listed.schedules.find((entry) => entry.name === "orphan-row")?.sagaName).toBe(
+      "00000000-0000-4000-8000-000000000099",
+    );
+  });
   it("drives schedules through the typed SDK client", async () => {
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) =>
       worker.fetch(new Request(url, { ...(init ?? {}), headers: { ...auth, ...(init?.headers ?? {}) } }), {
@@ -276,7 +304,19 @@ describe("TRG-01 schedule CRUD (workerd)", () => {
     });
     expect(created.name).toBe("sdk-roundtrip");
     expect(created.kind).toBe("one-off");
-    expect(await client.listSchedules()).toHaveLength(1);
+    const recurring = await client.createSchedule({
+      name: "sdk-recur",
+      sagaId: helloSaga.id,
+      kind: "recurring",
+      cron: "0 9 * * 1-5",
+      timezone: "America/New_York",
+      input: { name: "sched" },
+      enabled: false,
+    });
+    expect(recurring.cron).toBe("0 9 * * 1-5");
+    expect(recurring.timezone).toBe("America/New_York");
+    expect(recurring.enabled).toBe(false);
+    expect(await client.listSchedules()).toHaveLength(2);
     expect((await client.getSchedule("sdk-roundtrip")).id).toBe(created.id);
     const disabled = await client.setScheduleEnabled("sdk-roundtrip", false);
     expect(disabled.enabled).toBe(false);
@@ -286,6 +326,7 @@ describe("TRG-01 schedule CRUD (workerd)", () => {
       code: "NOT_FOUND",
     });
     await client.deleteSchedule("sdk-roundtrip");
+    await client.deleteSchedule("sdk-recur");
     expect(await client.listSchedules()).toHaveLength(0);
   }, 25000);
 });

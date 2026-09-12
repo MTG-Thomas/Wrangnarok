@@ -732,6 +732,32 @@ it("lists durable schedules as scheduled tasks with cadence and delivery counts"
     cadence: "* * * * * (UTC)",
   });
   expect(tasks.tasks[0]?.detail).toContain("1 recorded deliveries");
+  // A spent one-off keeps its run-at cadence and reads as spent.
+  await bindings.DB.prepare(
+    "INSERT INTO schedules(id,org_id,name,saga_id,kind,timezone,enabled,input_json,run_as_user_id,run_at,next_due_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+  )
+    .bind(
+      "44444444-4444-4444-8444-444444444444",
+      ORG,
+      "ops-spent",
+      echoSaga.id,
+      "one-off",
+      "UTC",
+      0,
+      "{}",
+      "00000000-0000-4000-8000-000000000002",
+      now,
+      null,
+      now,
+      now,
+    )
+    .run();
+  const rescan = (await (await call("/api/ops/scheduled-tasks")).json()) as {
+    tasks: { name: string; cadence: string | null; detail: string }[];
+  };
+  const spent = rescan.tasks.find((entry) => entry.name === "ops-spent");
+  expect(spent?.cadence).toBe(now);
+  expect(spent?.detail).toContain("spent");
 });
 
 it("aggregates every deploy-job status in platform progress", async () => {
