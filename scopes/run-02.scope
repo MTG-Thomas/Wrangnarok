@@ -21,6 +21,7 @@ src/sagas/hello-parent.ts
 src/sagas/index.ts
 src/sagas/shared.ts
 src/sdk.ts
+src/solution-export.ts
 src/solutions.ts
 test/child-invocation.test.ts
 test/domain.test.ts

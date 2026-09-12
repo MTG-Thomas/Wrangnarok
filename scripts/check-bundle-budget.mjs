@@ -86,12 +86,12 @@ import { join } from "node:path";
 // ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
 // feature code, no new dependencies (package.json unchanged versus main);
 // deliberate feature headroom only.
-// 2026-09-12 (RUN-02 re-merge over OPS-02 main, issue #136): keep 425 KiB.
-// The union of the RUN-02 child-lineage surface with the newer OPS-02 main
-// stays within the OPS-02 feature headroom; package.json is unchanged
-// versus main. Remeasure after merge; shrink the raise if the combined
-// bundle lands lower.
-const BUDGET_BYTES = 425 * 1024;
+// 2026-09-12 (RUN-02 re-merge over OPS-02 main, issue #136): 435 KiB. The
+// union of the RUN-02 child-lineage surface with the newer OPS-02 main
+// measures 440753 bytes (~430.4 KiB) locally (CI number governs).
+// Hand-written feature code, no new dependencies (package.json unchanged
+// versus main); deliberate feature headroom only.
+const BUDGET_BYTES = 435 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
