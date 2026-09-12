@@ -208,6 +208,16 @@ Author surface (`api/bifrost/config.py`): `config.get(key, default, scope)` reso
 
 **Wrangnarök implication (CON-02, ADR 020):** Adopt the type vocabulary, key shape, `[SECRET]` list masking, partial-update preservation, and declared-versus-undeclared lookup outcomes. Adapt the scope model: org-only resolution with no global tier in v1 (ADR 003's no-implicit-fallback rule extended from credentials to config rows); org/global precedence arrives only with its own ADR. Secret values never reach D1 at all — secret rows store references to declared provider-global deployment secrets (ADR 005 v0), resolved transiently and registered with the execution-scoped scrub registry. Managed-row ownership follows the ADR 011 owned/loose contract.
 
+### 20. Operator console: History, ExecutionDetail, Dashboard summary (CONSOLE-01, issue #222, Sep 2026)
+
+All pins at the parity-audit baseline commit `3543c7e`.
+
+ExecutionHistory (`client/src/pages/ExecutionHistory.tsx`, ~40KB): server-side status (single or multi), scope/workflow, and ISO date filters with keyset cursor traversal; free-text search is client-side over each loaded slice only (the executions list exposes no search param; only the admin-only logs surface has `message_search`). First-page counts are never platform totals. ExecutionDetail (`client/src/pages/ExecutionDetails.tsx`, ~30KB): input/result/safe error, Operation outputs/errors/timestamps, live poll every 2 s on Pending/Running stopping at terminal/unmount.
+
+Dashboard (`client/src/pages/Dashboard.tsx`, ~4KB): headline stat cards plus an executions-over-time chart fed by dashboard-metrics and execution time-series backends, plus inventory counts (workflows, forms, agents, applications) and 24h ROI. Requires role-gated auth context (platform admin vs org user redirect) and lucide/react-query component stack.
+
+**Wrangnarök implication (CONSOLE-01):** History and ExecutionDetail adapt to our History cursor API, detail routes, and owner-only cancel semantics; polling stops at terminal/unmount with stale responses discarded. Dashboard adapts the product shape only — a summary over the real org-scoped list APIs this Worker serves (sagas, history page one, connections/integrations, artifacts page one, file locations) with honestly-scoped sample counts — because the metrics/timeseries/agents/ROI backends do not exist here. No new /api/* routes and no invented metrics endpoint to feed the console; the console owner records that boundary so feature lanes stop shipping one-off screens.
+
 ## Candidate product invariants
 
 These are stronger than implementation preferences and should guide design reviews:

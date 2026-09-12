@@ -10,6 +10,7 @@ export interface NinjaCredentials {
 export interface Bindings extends LabAuth, AccessEnv, AdminEnv, NinjaCredentials {
   DB: D1Database;
   FILES: R2Bucket;
+  ARTIFACTS?: R2Bucket;
   ECHO_WORKFLOW: Workflow<ExecutionParams>;
   NINJA_WORKFLOW: Workflow<ExecutionParams>;
   DIGEST_WORKFLOW: Workflow<ExecutionParams>;

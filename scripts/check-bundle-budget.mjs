@@ -50,12 +50,24 @@ import { join } from "node:path";
 // APP-02 surface and measures ~334 KiB combined. Same deliberate feature
 // headroom as the earlier raises, not dependency bloat: package.json is
 // unchanged versus main.
-// 2026-09-11 (RUN-01, issue #135): 352 KiB. Persisted per-Saga runtime policy
-// (2 routes, D1 table, per-Execution snapshot, policy-gated submit plus
-// snapshot-resolved retries/deadlines) stacks on the CON-02 surface above.
-// Same deliberate feature headroom, not dependency bloat: package.json is
-// unchanged versus main.
-const BUDGET_BYTES = 352 * 1024;
+// 2026-09-11 (FILE-02 stacked over APP-02/CON-02, issue #158): 365 KiB. The
+// generated-artifacts surface (19 routes plus the artifacts domain) stacks
+// with the same deliberate feature headroom, not dependency bloat:
+// package.json is unchanged versus main. Combined measures ~357 KiB locally
+// (CI number governs).
+// 2026-09-11 (OPS-01, issue #172): 380 KiB. The audit/notifications slice
+// (src/ops.ts: audit + notification domain, keyset pagination, reconcile;
+// 4 read routes plus audit emission on 5 app routes and the cancel route;
+// SDK audit/notification surface) stacks on the FILE-02 surface with the
+// same deliberate feature headroom, not dependency bloat: package.json is
+// unchanged. Remeasure after merge; shrink the raise if the combined bundle
+// lands lower.
+// 2026-09-11 (RUN-01 stacked over OPS-01, issue #135): 390 KiB. Persisted
+// per-Saga runtime policy (2 routes, D1 table, per-Execution snapshot,
+// policy-gated submit plus snapshot-resolved retries/deadlines) stacks on
+// the OPS-01 surface above. Same deliberate feature headroom, not dependency
+// bloat: package.json is unchanged versus main.
+const BUDGET_BYTES = 390 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

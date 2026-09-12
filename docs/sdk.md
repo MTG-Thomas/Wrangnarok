@@ -36,6 +36,10 @@ keys.
 | `POST` | `/api/executions/:id/cancel` | Owner-only cancel (exact 64-hex ID) |
 | `GET` | `/api/forms/:name` | Form declaration for this Organization (FORM-01) |
 | `POST` | `/api/forms/:name/submit` | Validate (422 `FORM_VALIDATION_FAILED`) then submit the bound Saga |
+| `GET` | `/api/config` | Typed config rows for this Organization (secrets answer `[SECRET]`) |
+| `POST` | `/api/config` | Set a non-secret value or provision a secret reference (upsert by key) |
+| `PUT` | `/api/config/:id` | Update one row; omitted secret values preserve the reference |
+| `DELETE` | `/api/config/:id` | Delete one row (managed rows refuse with `MANAGED_RESOURCE`) |
 
 Errors share one envelope: `{ error: { code, message } }`. Switch on
 `code`; the message is never the contract. The full list is
@@ -91,6 +95,14 @@ node scripts/wrangnarok.mjs detail --id <64-hex> --wait
 node scripts/wrangnarok.mjs diagnose --id <64-hex>
 node scripts/wrangnarok.mjs history --status Failed,TimedOut --limit 20 --all
 node scripts/wrangnarok.mjs cancel --id <64-hex>
+node scripts/wrangnarok.mjs audit --action app. --outcome success --all
+node scripts/wrangnarok.mjs notifications
+node scripts/wrangnarok.mjs notification --id <uuid>
+node scripts/wrangnarok.mjs dismiss-notification --id <uuid>
+node scripts/wrangnarok.mjs configs --json
+node scripts/wrangnarok.mjs config-set --key timeout --type int --value 30
+node scripts/wrangnarok.mjs config-update --id <uuid> --value 60
+node scripts/wrangnarok.mjs config-delete --id <uuid>
 node scripts/wrangnarok.mjs contract
 node scripts/wrangnarok.mjs selftest   # offline stub-fetch checks, no network
 ```
@@ -122,7 +134,7 @@ register endpoint by design):
 
 ## What this SDK does not cover
 
-Tables, forms (beyond the FORM-01 binding slice), files, config, agents,
+Tables, forms (beyond the FORM-01 binding slice), files, agents,
 events, roles, and deploy/sync commands belong to their owning parity
 issues (`docs/sdk-capability-map.md` section 1, `docs/upstream-parity.md`).
 The contract descriptor lists them as `tracked`, never as supported.

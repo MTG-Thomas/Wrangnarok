@@ -30,7 +30,8 @@ context, and typed errors. Wrangnarok maps them as follows:
 | `organizations`, `roles`, `users` | None | Tracked | Organization/user/role lifecycle belongs to AUTH-01/AUTH-02. |
 | `tables` | None | Tracked | Author Tables belong to TABLE-01 (#117) and TABLE-02. |
 | `forms` | None | Tracked | Forms belong to FORM-01 (#118) and FORM-02. |
-| `files`, `artifacts` | Managed file locations over `GET/POST/PUT/DELETE /api/files*` + `/api/file-locations*` + `/api/file-policies*` | Partial | FILE-01 ships locations, policies, proxy upload/download, finalize verification, versioned mutation (ADR 018); retention/artifacts stay Tracked under FILE-02. |
+| `files`, `artifacts` | `listArtifacts` / `fetchArtifactDetail` / `deleteArtifact` / CLI `artifacts artifact upload download rename bind unbind bindings retention cleanup` over `/api/artifacts/*` | Partial | Generated/uploaded Artifacts ship (FILE-02, ADR 019); managed file locations with signed URLs belong to FILE-01. |
+| `files`, `artifacts` | Managed file locations over `GET/POST/PUT/DELETE /api/files*` + `/api/file-locations*` + `/api/file-policies*` | Partial | FILE-01 ships locations, policies, proxy upload/download, finalize verification, versioned mutation (ADR 019); retention/artifacts stay Tracked under FILE-02. |
 | `knowledge` | None | Tracked | Knowledge/memory belongs to AI-05/AI-06. |
 | `agents`, `ai` (complete/stream) | None | Tracked | Agents/AI belong to AI-01/AI-02/AI-03. |
 | `events` (sources/subscriptions) | None | Tracked | Events belong to TRG-03. |
@@ -74,6 +75,8 @@ contract.
 | Upstream router | Wrangnarok mapping | Status |
 | --- | --- | --- |
 | `cli.py` (CLI-facing API surface) | `scripts/wrangnarok.mjs` over the same `/api/*` routes as the UI | Supported for Sagas/Executions; Tracked for entity modules |
+| `audit.py` (admin audit log) | `GET /api/audit` + `audit` CLI command (`src/ops.ts`, ADR 020) | Supported (adapted: org-scoped reads until AUTH-02 roles; no superuser gate yet) |
+| `notifications.py` (notification inbox) | `GET/DELETE /api/notifications[/:id]` + `notifications`/`notification`/`dismiss-notification` CLI commands | Supported (adapted: durable D1 rows instead of Redis TTLs; poll instead of WebSocket; no upload-lock endpoints) |
 | `docs.py` (`GET /api/llms.txt`: full platform docs as one document) | `GET /api/sdk` (versioned contract descriptor) + `docs/sdk.md` + `AGENTS.md` | Partial (adapted: a versioned contract plus author docs instead of one concatenated document) |
 | `decorator_properties.py` (workflow decorator metadata) | `CatalogEntry` + `IoSchema` + `validateSagaDefinition` | Supported (identity/discovery only; operational policy stays out of source per upstream finding 3) |
 

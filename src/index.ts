@@ -18,6 +18,32 @@ import {
   validateApp,
 } from "./apps";
 import {
+  artifactDetail,
+  ARTIFACT_FORMAT_STATUS,
+  ARTIFACT_FORMATS,
+  ARTIFACT_LIST_LIMIT_MAX,
+  bindAttachment,
+  bindingsForRef,
+  createOrVersionArtifact,
+  deleteArtifact,
+  downloadArtifact,
+  exportManifest,
+  getRetention,
+  isAdminCaller,
+  listArtifacts,
+  parseArtifactId,
+  parseArtifactVersion,
+  parseBindingRef,
+  parseBindingScope,
+  previewArtifact,
+  previewCleanup,
+  renameArtifact,
+  runCleanup,
+  setRetention,
+  unbindAttachment,
+  uploadArtifactVersion,
+} from "./artifacts";
+import {
   APP_SDK_VERSION,
   createAppGrant,
   declareAppFile,
@@ -90,6 +116,17 @@ import {
 import type { EndpointRow } from "./endpoints";
 import { bindFormInput, FORM_NAME, loadForm } from "./forms";
 import { deleteConfig, listConfigs, parseUpdateConfigInput, setConfig, updateConfig } from "./config";
+import {
+  createNotification,
+  dismissNotification,
+  listAudit,
+  listNotifications,
+  parseAuditQuery,
+  parseNotificationId,
+  parseNotificationLimit,
+  recordAudit,
+  visibleNotification,
+} from "./ops";
 import {
   consumeUploadToken,
   createLocation,
@@ -187,7 +224,7 @@ import {
   visibleExecution,
   workflowForSaga,
 } from "./executions";
-import { scrubValueWithDeploymentSecrets } from "./secrets";
+import { deploymentSecretsFromEnv, scrubValueWithDeploymentSecrets } from "./secrets";
 import { logRequest } from "./usage";
 export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
@@ -387,6 +424,14 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const historyList = url.pathname === "/api/executions" || isOrgHistory;
     const tableQueryList =
       request.method === "GET" && /^\/api\/tables\/[a-z0-9][a-z0-9-]{0,63}\/(rows|count)$/.test(url.pathname);
+    // OPS-01 (ADR 020): the audit list and notifications list take query
+    // strings too, each through its own allowlisted parser.
+    const opsQueryList =
+      (url.pathname === "/api/audit" || url.pathname === "/api/notifications") && request.method === "GET";
+    // FILE-02 artifact routes take their own allowlisted keys (upload
+    // ?name=/?mime=, list ?limit=, binding ?scope=/?refId=); each route
+    // validates its keys below.
+    const artifactQuery = url.pathname === "/api/artifacts" || url.pathname.startsWith("/api/artifacts/");
     // APP-02 runtime query keys (ADR 019): the Table page read and the
     // version-aware file delete take query strings through their own
     // allowlisted parsers, like the table query/count routes above.
@@ -400,6 +445,8 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       url.search &&
       !(historyList && request.method === "GET") &&
       !tableQueryList &&
+      !opsQueryList &&
+      !artifactQuery &&
       !appTableRowsRead &&
       !appRuntimeFileDelete &&
       !fileList &&
@@ -628,6 +675,17 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         (terminateOutcome === "not-found" && priorStatus === "Pending" && priorDispatched === 0)
       ) {
         await cancelExecution(env.DB, row.id);
+        // OPS-01 audit: owner cancellation confirmed (best-effort; a failed
+        // insert never fails the cancel itself).
+        await recordAudit(
+          env.DB,
+          caller,
+          "execution.cancel",
+          { type: "execution", id: row.id },
+          "success",
+          { sagaId: row.saga_id },
+          deploymentSecretsFromEnv(env),
+        );
         return json({ executionId: row.id, status: "Cancelled", cancelled: true });
       }
       // Ambiguous: a dispatched row whose native instance vanished, or any
@@ -638,6 +696,17 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       await env.DB.prepare("UPDATE executions SET status=? WHERE id=? AND status='Cancelling'")
         .bind(priorStatus, row.id)
         .run();
+      // OPS-01 audit: the cancel was requested but never confirmed (failure
+      // outcome, retry-safe — the same record as the 503 below).
+      await recordAudit(
+        env.DB,
+        caller,
+        "execution.cancel_unconfirmed",
+        { type: "execution", id: row.id },
+        "failure",
+        { outcome: terminateOutcome },
+        deploymentSecretsFromEnv(env),
+      );
       throw new Fault(
         503,
         "CANCELLATION_UNCONFIRMED",
@@ -857,14 +926,113 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (url.pathname === "/api/apps" && request.method === "POST") {
       requireJson(request);
       const { name, slug } = parseAppBody(await boundedJson(request.body));
-      return json({ app: await createApp(env.DB, caller, name, slug) }, 201);
+      try {
+        const app = await createApp(env.DB, caller, name, slug);
+        // OPS-01 audit: app lifecycle emission (best-effort; never fails the mutation).
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.create",
+          { type: "app", id: app.id },
+          "success",
+          { slug: app.slug },
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ app }, 201);
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            "app.create",
+            { type: "app" },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
     }
     const appBuilds = /^\/api\/apps\/([0-9a-f-]{36})\/builds$/.exec(url.pathname);
     if (appBuilds?.[1] && (request.method === "GET" || request.method === "POST")) {
       const id = parseAppId(appBuilds[1]);
       rejectQuery(url);
       if (request.method === "GET") return json({ jobs: await listJobs(env.DB, caller, id) });
-      return json({ job: await startBuild(env.DB, caller, id) }, 202);
+      // OPS-01: the validated build runs inside startBuild; on success the
+      // route records app.build.start/app.build.complete audit events and
+      // emits a terminal personal notification linked to the job (the one
+      // long-running operation this product has). A denied or
+      // unvalidatable build records the failure audit and emits nothing.
+      try {
+        const job = await startBuild(env.DB, caller, id);
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.build.start",
+          { type: "app", id },
+          "success",
+          { jobId: job.id, revision: job.revision },
+          deploymentSecretsFromEnv(env),
+        );
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.build.complete",
+          { type: "app", id },
+          job.status === "succeeded" ? "success" : "failure",
+          { jobId: job.id, revision: job.revision },
+          deploymentSecretsFromEnv(env),
+        );
+        const terminal = job.status === "succeeded" ? "completed" : "failed";
+        // Best-effort like audit: a notification-table failure must not fail
+        // a build that already succeeded. The response carries the row when
+        // stored, null when the table is unavailable.
+        let notification: unknown = null;
+        try {
+          notification = await createNotification(
+            env.DB,
+            caller,
+            {
+              scope: "personal",
+              category: "app_build",
+              title: job.status === "succeeded" ? "App build succeeded" : "App build failed",
+              status: terminal,
+              detail: { appId: id, jobId: job.id, revision: job.revision },
+              dedupKey: `app-build:${job.id}`,
+            },
+            deploymentSecretsFromEnv(env),
+          );
+        } catch {
+          console.warn(`WRANGNAROK_NOTIFICATION_SKIPPED app-build:${job.id}`);
+        }
+        return json({ job, notification }, 202);
+      } catch (error) {
+        if (error instanceof Fault) {
+          if (error.code === "MANAGED_RESOURCE") {
+            await recordAudit(
+              env.DB,
+              caller,
+              "app.managed_deny",
+              { type: "app", id },
+              "failure",
+              { code: error.code },
+              deploymentSecretsFromEnv(env),
+            );
+          } else {
+            await recordAudit(
+              env.DB,
+              caller,
+              "app.build.start",
+              { type: "app", id },
+              "failure",
+              { code: error.code },
+              deploymentSecretsFromEnv(env),
+            );
+          }
+        }
+        throw error;
+      }
     }
     const appJob = /^\/api\/apps\/([0-9a-f-]{36})\/builds\/([0-9a-f-]{36})$/.exec(url.pathname);
     if (appJob?.[1] && appJob[2] && request.method === "GET") {
@@ -877,16 +1045,65 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const appSource = /^\/api\/apps\/([0-9a-f-]{36})\/source$/.exec(url.pathname);
     if (appSource?.[1] && request.method === "PUT") {
       requireJson(request);
-      return json({
-        revision: await editAppSource(env.DB, caller, parseAppId(appSource[1]), await boundedJson(request.body)),
-      });
+      const id = parseAppId(appSource[1]);
+      try {
+        const revision = await editAppSource(env.DB, caller, id, await boundedJson(request.body));
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.source.edit",
+          { type: "app", id },
+          "success",
+          { revision: revision.revision },
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ revision });
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            error.code === "MANAGED_RESOURCE" ? "app.managed_deny" : "app.source.edit",
+            { type: "app", id },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
     }
     const appSwap = /^\/api\/apps\/([0-9a-f-]{36})\/swap$/.exec(url.pathname);
     if (appSwap?.[1] && request.method === "POST") {
       requireJson(request);
-      const otherAppId = parseSwapBody(await boundedJson(request.body));
-      const swapped = await swapSlugs(env.DB, caller, parseAppId(appSwap[1]), otherAppId);
-      return json({ app: swapped.app, other: swapped.other });
+      const id = parseAppId(appSwap[1]);
+      try {
+        const otherAppId = parseSwapBody(await boundedJson(request.body));
+        const swapped = await swapSlugs(env.DB, caller, id, otherAppId);
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.swap",
+          { type: "app", id },
+          "success",
+          { otherAppId },
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ app: swapped.app, other: swapped.other });
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            error.code === "MANAGED_RESOURCE" ? "app.managed_deny" : "app.swap",
+            { type: "app", id },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
     }
     const appAsset = /^\/api\/apps\/([0-9a-f-]{36})\/assets\/(.+)$/.exec(url.pathname);
     if (appAsset?.[1] && appAsset[2] && request.method === "GET") {
@@ -906,8 +1123,241 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       return json({ app: await appDetail(env.DB, caller, parseAppId(appOne[1])) });
     }
     if (appOne?.[1] && request.method === "DELETE") {
-      await deleteApp(env.DB, caller, parseAppId(appOne[1]));
-      return json({ deleted: true });
+      const id = parseAppId(appOne[1]);
+      try {
+        await deleteApp(env.DB, caller, id);
+        await recordAudit(
+          env.DB,
+          caller,
+          "app.delete",
+          { type: "app", id },
+          "success",
+          {},
+          deploymentSecretsFromEnv(env),
+        );
+        return json({ deleted: true });
+      } catch (error) {
+        if (error instanceof Fault) {
+          await recordAudit(
+            env.DB,
+            caller,
+            error.code === "MANAGED_RESOURCE" ? "app.managed_deny" : "app.delete",
+            { type: "app", id },
+            "failure",
+            { code: error.code },
+            deploymentSecretsFromEnv(env),
+          );
+        }
+        throw error;
+      }
+    }
+    // Administrative audit trail (OPS-01, ADR 020): Organization-scoped event
+    // list with action-prefix, outcome, search, date, and cursor filters.
+    // No per-row detail route (upstream has none either).
+    if (url.pathname === "/api/audit" && request.method === "GET") {
+      // Outward path: scrubbed again on read (defense in depth — a secret
+      // substring in a stored detail can never ride the list out).
+      return json(
+        scrubValueWithDeploymentSecrets(await listAudit(env.DB, caller, parseAuditQuery(url.searchParams)), env),
+      );
+    }
+    // Operational notifications (OPS-01, ADR 020): durable personal/org inbox
+    // with dismiss behavior. List is the caller's own personal rows plus
+    // same-org org-scoped rows; reconnects re-read D1, never a stream.
+    if (url.pathname === "/api/notifications" && request.method === "GET") {
+      // Outward path: scrubbed again on read, like the audit list above.
+      return json(
+        scrubValueWithDeploymentSecrets(
+          { notifications: await listNotifications(env.DB, caller, parseNotificationLimit(url.searchParams)) },
+          env,
+        ),
+      );
+    }
+    // Loose segment matcher: parseNotificationId fails closed with
+    // INVALID_NOTIFICATION_ID on bad shapes (never UNIMPLEMENTED), and
+    // unknown UUIDs answer 404 below, never a leak.
+    const notifOne = /^\/api\/notifications\/([^/]+)$/i.exec(url.pathname);
+    if (notifOne?.[1] && request.method === "GET") {
+      const notification = await visibleNotification(env.DB, caller, parseNotificationId(notifOne[1]));
+      if (!notification) return json({ error: { code: "NOTIFICATION_NOT_FOUND", message: "Not found." } }, 404);
+      return json(scrubValueWithDeploymentSecrets({ notification }, env));
+    }
+    if (notifOne?.[1] && request.method === "DELETE") {
+      // Dismissal: personal rows by owner only, org rows by any same-org
+      // caller. Gone-or-foreign answers 404, never a leak; a second dismiss
+      // is gone, not an error to retry.
+      const dismissed = await dismissNotification(env.DB, caller, parseNotificationId(notifOne[1]));
+      if (!dismissed) return json({ error: { code: "NOTIFICATION_NOT_FOUND", message: "Not found." } }, 404);
+      return json({ dismissed: true });
+    }
+    // Generated Artifacts (FILE-02, ADR 019): Organization-scoped records
+    // with R2 bytes, attachment bindings, and explicit retention cleanup.
+    // Canonical byte/metadata access is creator-or-admin; foreign rows 404.
+    // One explicit matcher per route, mirroring the apps style above.
+    const artifactStore = { db: env.DB, bucket: env.ARTIFACTS };
+    const artifactAdmin = isAdminCaller(ctx);
+    if (url.pathname === "/api/artifacts" && request.method === "GET") {
+      const limitRaw = url.searchParams.get("limit");
+      const limit = limitRaw === null ? undefined : Number(limitRaw);
+      if (limitRaw !== null && (!/^\d+$/.test(limitRaw) || limit === undefined)) {
+        throw new Fault(400, "INVALID_LIMIT", `Limit must be an integer from 1 to ${ARTIFACT_LIST_LIMIT_MAX}.`);
+      }
+      for (const key of url.searchParams.keys()) {
+        if (key !== "limit") {
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only limit is supported here.");
+        }
+      }
+      return json(await listArtifacts(env.DB, caller, limit === undefined ? {} : { limit }));
+    }
+    if (url.pathname === "/api/artifacts" && request.method === "PUT") {
+      // Upload: bytes arrive as the raw octet-stream body; name and mime ride
+      // the allowlisted query keys (the only query-bearing artifact route).
+      // Same-filename re-upload appends a version to the same Artifact row
+      // (201 on first upload, 200 on a new version), never a version-conflict
+      // 409: current version always advances.
+      const name = url.searchParams.get("name");
+      const mime = url.searchParams.get("mime") ?? "application/octet-stream";
+      for (const key of url.searchParams.keys()) {
+        if (key !== "name" && key !== "mime") {
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only name and mime are supported here.");
+        }
+      }
+      if (name === null)
+        throw new Fault(400, "INVALID_ARTIFACT", "Artifact upload needs ?name= and octet-stream bytes.");
+      const contentType = request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+      if (contentType !== "application/octet-stream" || request.headers.has("Content-Encoding")) {
+        throw new Fault(415, "BYTES_REQUIRED", "Artifact bytes require unencoded application/octet-stream.");
+      }
+      if (request.body === null) throw new Fault(400, "EMPTY_ARTIFACT", "Artifact bytes must not be empty.");
+      const buffer = await request.arrayBuffer();
+      const { artifact, created } = await createOrVersionArtifact(artifactStore, caller, {
+        name,
+        mime,
+        bytes: new Uint8Array(buffer),
+      });
+      return json({ artifact }, created ? 201 : 200);
+    }
+    if (url.pathname === "/api/artifacts/formats" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({
+        formats: ARTIFACT_FORMATS.map((format) => ({ format, status: ARTIFACT_FORMAT_STATUS[format] })),
+      });
+    }
+    if (url.pathname === "/api/artifacts/retention" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ retention: await getRetention(env.DB, caller.orgId) });
+    }
+    if (url.pathname === "/api/artifacts/retention" && request.method === "PUT") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { maxAgeDays?: unknown };
+      return json({ retention: await setRetention(env.DB, caller, artifactAdmin, body?.maxAgeDays) });
+    }
+    if (url.pathname === "/api/artifacts/cleanup/preview" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ cleanup: await previewCleanup(env.DB, caller, Date.now()) });
+    }
+    if (url.pathname === "/api/artifacts/cleanup/run" && request.method === "POST") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ cleanup: await runCleanup(artifactStore, caller, artifactAdmin, Date.now()) });
+    }
+    if (url.pathname === "/api/artifacts/bindings" && request.method === "GET") {
+      const scope = parseBindingScope(url.searchParams.get("scope"));
+      const refId = parseBindingRef(url.searchParams.get("refId"));
+      for (const key of url.searchParams.keys()) {
+        if (key !== "scope" && key !== "refId") {
+          throw new Fault(400, "UNSUPPORTED_QUERY", "Only scope and refId are supported here.");
+        }
+      }
+      // Binding listing answers the triple only, never bytes or metadata.
+      return json(await bindingsForRef(env.DB, caller, { scope, refId }));
+    }
+    const artifactVersion = /^\/api\/artifacts\/([0-9a-f-]{36})\/versions\/(\d+)$/.exec(url.pathname);
+    if (artifactVersion?.[1] && artifactVersion[2] && request.method === "GET") {
+      const served = await previewArtifact(
+        artifactStore,
+        caller,
+        parseArtifactId(artifactVersion[1]),
+        artifactAdmin,
+        parseArtifactVersion(Number(artifactVersion[2])),
+      );
+      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
+        status: 200,
+        headers: {
+          "Content-Type": served.mime,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const artifactBytes = /^\/api\/artifacts\/([0-9a-f-]{36})\/bytes$/.exec(url.pathname);
+    if (artifactBytes?.[1] && request.method === "PUT") {
+      const contentType = request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+      if (contentType !== "application/octet-stream" || request.headers.has("Content-Encoding")) {
+        throw new Fault(415, "BYTES_REQUIRED", "Artifact bytes require unencoded application/octet-stream.");
+      }
+      if (request.body === null) throw new Fault(400, "EMPTY_ARTIFACT", "Artifact bytes must not be empty.");
+      const buffer = await request.arrayBuffer();
+      const uploaded = await uploadArtifactVersion(
+        artifactStore,
+        caller,
+        parseArtifactId(artifactBytes[1]),
+        artifactAdmin,
+        {
+          mime: url.searchParams.get("mime") ?? "application/octet-stream",
+          bytes: new Uint8Array(buffer),
+        },
+      );
+      return json({ artifact: uploaded });
+    }
+    const artifactPreview = /^\/api\/artifacts\/([0-9a-f-]{36})\/preview$/.exec(url.pathname);
+    if (artifactPreview?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const served = await previewArtifact(artifactStore, caller, parseArtifactId(artifactPreview[1]), artifactAdmin);
+      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
+        status: 200,
+        headers: {
+          "Content-Type": served.mime,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const artifactDownload = /^\/api\/artifacts\/([0-9a-f-]{36})\/download$/.exec(url.pathname);
+    if (artifactDownload?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const served = await downloadArtifact(artifactStore, caller, parseArtifactId(artifactDownload[1]), artifactAdmin);
+      const filename = served.name.replace(/["\r\n]/g, "_");
+      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
+        status: 200,
+        headers: {
+          "Content-Type": served.mime,
+          "Content-Disposition": `attachment; filename="${filename}"`,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const artifactRename = /^\/api\/artifacts\/([0-9a-f-]{36})\/rename$/.exec(url.pathname);
+    if (artifactRename?.[1] && request.method === "POST") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { name?: unknown };
+      return json({
+        artifact: await renameArtifact(env.DB, caller, parseArtifactId(artifactRename[1]), artifactAdmin, body?.name),
+      });
+    }
+    const artifactBind = /^\/api\/artifacts\/([0-9a-f-]{36})\/bindings$/.exec(url.pathname);
+    if (artifactBind?.[1] && request.method === "POST") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { scope?: unknown; refId?: unknown };
+      return json(
+        {
+          binding: await bindAttachment(env.DB, caller, parseArtifactId(artifactBind[1]), artifactAdmin, {
+            scope: body?.scope,
+            refId: body?.refId,
+          }),
+        },
+        201,
+      );
     }
     // Browser App SDK runtime (APP-02, ADR 019): scoped Tables/files/invoke
     // over the installed app context. Author routes trust the Organization
@@ -1193,6 +1643,29 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         },
         201,
       );
+    }
+    if (artifactBind?.[1] && request.method === "DELETE") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { scope?: unknown; refId?: unknown };
+      await unbindAttachment(env.DB, caller, parseArtifactId(artifactBind[1]), artifactAdmin, {
+        scope: (body as { scope?: unknown })?.scope,
+        refId: (body as { refId?: unknown })?.refId,
+      });
+      return json({ deleted: true });
+    }
+    const artifactExport = /^\/api\/artifacts\/([0-9a-f-]{36})\/export$/.exec(url.pathname);
+    if (artifactExport?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      // Metadata-only by construction: the manifest never carries bytes.
+      return json(await exportManifest(env.DB, caller, parseArtifactId(artifactExport[1]), artifactAdmin));
+    }
+    const artifactOne = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (artifactOne?.[1] && request.method === "GET") {
+      return json({ artifact: await artifactDetail(env.DB, caller, parseArtifactId(artifactOne[1]), artifactAdmin) });
+    }
+    if (artifactOne?.[1] && request.method === "DELETE") {
+      await deleteArtifact(artifactStore, caller, parseArtifactId(artifactOne[1]), artifactAdmin);
+      return json({ deleted: true });
     }
     const endpointEvents = /^\/api\/endpoints\/([a-z0-9][a-z0-9-]{0,63})\/events$/.exec(url.pathname);
     // Unknown name shapes (uppercase, dots, slashes beyond one segment)
