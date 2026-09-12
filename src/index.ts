@@ -792,16 +792,12 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         });
       }
       if (request.method === "PUT") {
+        // Runtime policy changes affect every caller in this Organization.
+        // Authorize through the trusted membership context resolved above;
+        // request headers are attacker-controlled and are never an operator
+        // identity boundary. Instance admins retain the recovery path.
+        await requireManageOrg(env.DB, ctx, caller.orgId);
         requireJson(request);
-        // Operator gate (Phase 0, explicit): policy writes carry an
-        // `X-Operator: allow-policy-write` header minted by the local
-        // operator harness (scripts + tests). Ordinary callers never send
-        // it, so they read policy but cannot change it (403). Phase 3
-        // replaces this header with the membership/role table (AUTH-02);
-        // the routes and policy shapes do not change.
-        if (request.headers.get("X-Operator") !== "allow-policy-write") {
-          throw new Fault(403, "FORBIDDEN", "Only an operator identity may change Saga runtime policy.");
-        }
         const record = await storeSagaPolicy(env.DB, caller.orgId, entry.id, await boundedJson(request.body));
         return json({
           policy: {
