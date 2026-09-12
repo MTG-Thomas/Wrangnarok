@@ -542,12 +542,20 @@ Upstream evidence (paths relative to upstream repo root):
 
 Phase 4; **Partial**; existing issue: #117
 
-Local status: Subsumed by the TABLE-02 (#154) landing slice: org-scoped
-Table declarations, single-row create/read/replace/delete, deny-by-absence
-per-action grants, and the explicit-deletion retention note all ship in
-`src/tables.ts` (migration `0007_tables.sql`) and are proven in workerd by
-`test/tables.test.ts`. TABLE-02 owns the remaining query/policy/realtime
-acceptance; this issue tracks the minimal-slice exit only.
+Local status: The minimal slice ships in `src/tables.ts` (migration
+`0009_tables.sql`, renumbered from the `0007` collision per the ledger):
+org-scoped Table declarations, single-row create/read/replace/delete,
+deny-by-absence per-action grants, and explicit-deletion retention, proven in
+workerd by `test/tables.test.ts`. The #117 exit proof lands here too: a
+code-first Saga fixture (`table-ledger-fixture`, stable UUID identity, every
+durable effect inside `step.do`) writes then reads an author row against real
+local D1, replaces it on a second pass, and keeps deny-by-absence for
+grantless strangers. Retention/partitioning note: retention is org-owned
+explicit deletion only (`deleteTable` drops rows and grants; no TTL, no
+partitioning); the D1 10 GB per-database cap needs a retention/partitioning
+policy before large Tables are production-shaped. TABLE-02 owns the remaining
+query/policy/realtime acceptance; this issue tracks the minimal-slice exit
+only.
 
 Depends: AUTH-02
 
@@ -567,7 +575,7 @@ Upstream evidence (paths relative to upstream repo root):
 Phase 4; **Partial**; existing issue: #154
 
 Local status: The query/count/batch slice landed (`src/tables.ts`, migration
-`0007_tables.sql`, `test/tables.test.ts`): org-scoped declarations with
+`0009_tables.sql`, `test/tables.test.ts`): org-scoped declarations with
 deny-by-absence per-action grants, policy-safe keyset queries (nested-JSON
 filters, prefix, order, cursor pagination), scoped counts with skip_count
 (total=-1), and all-or-denied batch mutations with per-item operational
