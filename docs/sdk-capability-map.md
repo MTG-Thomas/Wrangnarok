@@ -29,15 +29,15 @@ context, and typed errors. Wrangnarok maps them as follows:
 | `integrations` (+ OAuth tokens) | `IntegrationDefinition` in `src/integrations/index.ts`; no management API | Tracked | Connection management belongs to CON-01; OAuth lifecycle to OAUTH-01. |
 | `organizations`, `roles`, `users` | None | Tracked | Organization/user/role lifecycle belongs to AUTH-01/AUTH-02. |
 | `tables` | None | Tracked | Author Tables belong to TABLE-01 (#117) and TABLE-02. |
-| `forms` | None | Tracked | Forms belong to FORM-01 (#118) and FORM-02. |
+| `forms` | `listForms` / `getForm` / `createForm` / `updateForm` / `deleteForm` / `startForm` / `getFormProviders` / `submitForm` in `src/sdk.ts` over `GET/POST /api/forms`, `GET/PUT/DELETE /api/forms/:name`, `POST /api/forms/:name/startup`, `GET /api/forms/:name/providers`, `POST /api/forms/:name/submit` | Supported | Dynamic forms (FORM-02, issue #155): designer CRUD, startup handles (peeked for validation, consumed only after validation passes), providers, submit/schedule. Embed/publication stays Tracked under EMBED-01. |
 | `files`, `artifacts` | `listArtifacts` / `fetchArtifactDetail` / `deleteArtifact` / CLI `artifacts artifact upload download rename bind unbind bindings retention cleanup` over `/api/artifacts/*` | Partial | Generated/uploaded Artifacts ship (FILE-02, ADR 019); managed file locations with signed URLs belong to FILE-01. |
 | `files`, `artifacts` | Managed file locations over `GET/POST/PUT/DELETE /api/files*` + `/api/file-locations*` + `/api/file-policies*` | Partial | FILE-01 ships locations, policies, proxy upload/download, finalize verification, versioned mutation (ADR 019); retention/artifacts stay Tracked under FILE-02. |
 | `knowledge` | None | Tracked | Knowledge/memory belongs to AI-05/AI-06. |
 | `agents`, `ai` (complete/stream) | None | Tracked | Agents/AI belong to AI-01/AI-02/AI-03. |
 | `events` (sources/subscriptions) | None | Tracked | Events belong to TRG-03. |
 | Typed errors (`UserError`, `WorkflowError`, `ValidationError`, ...) | `SdkError` + `SDK_ERROR_CODES` in `src/sdk.ts` | Supported | Same envelope `{ error: { code, message } }`; callers switch on `code`. |
-| Enums (`ExecutionStatus`, `ConfigType`, `FormFieldType`) | `SDK_TERMINAL_STATUSES`, `SDK_ERROR_CODES`, `ExecutionStatus` in `src/domain.ts` | Partial | Only statuses and error codes are modeled; config/form enums arrive with their modules. |
-| SDK models (single source of truth) | Wire guards (`parseSagaCatalog`, `parseExecutionDetail`, `parseHistoryPage`) | Supported | Guards fail loud with `SDK_CLIENT_MISMATCH` instead of trusting the wire. |
+| Enums (`ExecutionStatus`, `ConfigType`, `FormFieldType`) | `SDK_TERMINAL_STATUSES`, `SDK_ERROR_CODES`, `ExecutionStatus` in `src/domain.ts` plus `FORM_FIELD_TYPES` in `src/forms.ts` | Supported | Statuses, error codes, and the closed 17-type form field set are modeled; config types stay with CON-02. |
+| SDK models (single source of truth) | Wire guards (`parseSagaCatalog`, `parseExecutionDetail`, `parseHistoryPage`, `parseFormList`, `parseFormDetail`, `parseFormStartup`, `parseFormProviders`, `parseFormSubmit`) | Supported | Guards fail loud with `SDK_CLIENT_MISMATCH` instead of trusting the wire. |
 
 ## 2. CLI surface (`api/bifrost/cli.py` vs `scripts/wrangnarok.mjs`)
 

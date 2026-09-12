@@ -96,6 +96,7 @@ import {
   classifyTerminateError,
   digestSaga,
   echoSaga,
+  executionId,
   Fault,
   helloParentSaga,
   helloSaga,
@@ -137,7 +138,22 @@ import {
   vendorChallenge,
 } from "./endpoints";
 import type { EndpointRow } from "./endpoints";
-import { bindFormInput, FORM_NAME, loadForm } from "./forms";
+import {
+  consumeStartupHandle,
+  deleteForm,
+  FORM_NAME,
+  type FormDefinition,
+  listForms,
+  loadForm,
+  parseFileRef,
+  parseScheduleAt,
+  parseStartupHandle,
+  peekStartupHandle,
+  resolveProviderOptions,
+  saveForm,
+  startFormSession,
+  validateAndMerge,
+} from "./forms";
 import { deleteConfig, listConfigs, parseUpdateConfigInput, setConfig, updateConfig } from "./config";
 import {
   createNotification,
@@ -232,6 +248,7 @@ import {
   insertRow,
   listTables,
   loadTable,
+  lookupPath,
   parseBatchBody,
   parseBatchDeleteBody,
   parseTableName,
@@ -466,6 +483,164 @@ export default {
   },
 } satisfies ExportedHandler<Bindings>;
 
+/** Serialize a form definition for the designer/read surface (FORM-02):
+ * full declaration metadata; the server stays authoritative. */
+function serializeForm(def: FormDefinition): unknown {
+  return {
+    id: def.id,
+    name: def.name,
+    sagaId: def.sagaId,
+    ...(def.title === undefined ? {} : { title: def.title }),
+    ...(def.description === undefined ? {} : { description: def.description }),
+    allowPrefill: def.allowPrefill,
+    fields: def.fields.map((field) => ({
+      name: field.name,
+      type: field.type,
+      ...(field.label === undefined ? {} : { label: field.label }),
+      required: field.required,
+      maxLength: field.maxLength,
+      ...(field.default === undefined ? {} : { default: field.default }),
+      ...(field.options === undefined ? {} : { options: field.options }),
+      ...(field.provider === undefined ? {} : { provider: field.provider }),
+      ...(field.visibleWhen === undefined ? {} : { visibleWhen: field.visibleWhen }),
+      ...(field.file === undefined ? {} : { file: field.file }),
+      ...(field.min === undefined ? {} : { min: field.min }),
+      ...(field.max === undefined ? {} : { max: field.max }),
+      ...(field.pattern === undefined ? {} : { pattern: field.pattern }),
+      ...(field.content === undefined ? {} : { content: field.content }),
+    })),
+  };
+}
+
+/** Provider table reader for FORM-02 select/multiselect options: one Table,
+ * caller-scoped read policy, distinct non-empty string values from the
+ * valueField path, bounded scan (at most 50), sorted alphabetically so the
+ * option list is deterministic regardless of row insertion or doc_id order.
+ * Denied or missing tables throw (the resolver converts to per-field errors,
+ * never a leak). */
+async function readProviderTable(
+  db: D1Database,
+  caller: Principal,
+  table: string,
+  valueField: string,
+): Promise<readonly string[]> {
+  const def = await loadTable(db, caller.orgId, table);
+  if (!def) throw new Fault(404, "TABLE_NOT_FOUND", "Table not found.");
+  const page = await queryRows(db, caller, def, {
+    filters: [],
+    order: "asc",
+    skipCount: true,
+    limit: 50,
+  });
+  const values: string[] = [];
+  const seen = new Set<string>();
+  for (const row of page.rows) {
+    const at = lookupPath(row.data, valueField);
+    if (typeof at !== "string" || at.length === 0 || at.length > 128) continue;
+    if (seen.has(at)) continue;
+    seen.add(at);
+    values.push(at);
+    if (values.length >= 50) break;
+  }
+  values.sort();
+  return values;
+}
+
+/** Re-validate file-field references against the live FILE-01 rows: the
+ * reference must name the declared location, resolve to a ready file in
+ * this Organization, and satisfy the per-field size/type bounds. Stale,
+ * foreign, pending, or over-bounds pointers fail closed with 422. */
+async function checkFormFiles(
+  db: D1Database,
+  caller: Principal,
+  def: FormDefinition,
+  input: Record<string, unknown>,
+): Promise<void> {
+  for (const field of def.fields) {
+    if (field.type !== "file" || !field.file) continue;
+    const ref = input[field.name];
+    if (ref === undefined) continue;
+    const { location, path } = parseFileRef(field, ref);
+    const row = await db
+      .prepare("SELECT status,size,content_type FROM files WHERE org_id=? AND location=? AND path=?")
+      .bind(caller.orgId, location, path)
+      .first<{ status: string; size: number; content_type: string }>()
+      .catch(() => null);
+    if (!row || row.status !== "ready") {
+      throw new Fault(422, "FORM_VALIDATION_FAILED", "The form submission did not pass validation.", [
+        { field: field.name, code: "FILE_NOT_READY", message: "The referenced file is not ready." },
+      ]);
+    }
+    const maxBytes = (field.file.maxMb ?? 25) * 1024 * 1024;
+    if (row.size > maxBytes) {
+      throw new Fault(422, "FORM_VALIDATION_FAILED", "The form submission did not pass validation.", [
+        { field: field.name, code: "FILE_TOO_LARGE", message: "The referenced file exceeds the field bound." },
+      ]);
+    }
+    if (field.file.contentTypes && !field.file.contentTypes.includes(row.content_type)) {
+      throw new Fault(422, "FORM_VALIDATION_FAILED", "The form submission did not pass validation.", [
+        { field: field.name, code: "FILE_TYPE_REJECTED", message: "The referenced file type is not accepted." },
+      ]);
+    }
+  }
+}
+
+/** Deferred form submission: persist an undispatched Pending Execution row
+ * with the due instant recorded in the input (`__scheduleAt`) and no
+ * Workflow dispatch (TRG-01 owns promotion; this lane only records the
+ * inspectable linkage through the standard Execution detail + history).
+ * Same-key same-input replays answer 200. No new DDL: Pending +
+ * undispatched is the canonical not-yet-dispatched shape. */
+async function scheduleFormExecution(
+  db: D1Database,
+  caller: Principal,
+  key: string,
+  formName: string,
+  saga: { id: string; name: string; revision: string; parse: (value: unknown) => unknown },
+  input: unknown,
+  scheduleAt: string,
+): Promise<{ executionId: string; replayed: boolean; statusUrl: string; scheduled: true; scheduleAt: string }> {
+  const id = await executionId(caller, key);
+  const inputJson = JSON.stringify({
+    ...(input as Record<string, unknown>),
+    __form: formName,
+    __scheduleAt: scheduleAt,
+  });
+  const now = new Date().toISOString();
+  const inserted = await db
+    .prepare(
+      "INSERT INTO executions(id,saga_id,saga_name,saga_revision,org_id,user_id,input_json,dispatched,created_at) VALUES (?,?,?,?,?,?,?,0,?) ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(id, saga.id, saga.name, saga.revision, caller.orgId, caller.userId, inputJson, now)
+    .run();
+  if (inserted.meta.changes === 0) {
+    // Same-key replay: the existing row must carry the same Saga input,
+    // mirroring the immediate submit path's IDEMPOTENCY_CONFLICT fence —
+    // a recycled key over different input answers 409, never a replay.
+    const existing = await db
+      .prepare("SELECT saga_id,input_json FROM executions WHERE id=?")
+      .bind(id)
+      .first<{ saga_id: string; input_json: string }>();
+    if (!existing || existing.saga_id !== saga.id || existing.input_json !== inputJson) {
+      throw new Fault(409, "IDEMPOTENCY_CONFLICT", "This key already identifies different input.");
+    }
+    return {
+      executionId: id,
+      replayed: true,
+      statusUrl: `/api/executions/${id}`,
+      scheduled: true,
+      scheduleAt,
+    };
+  }
+  return {
+    executionId: id,
+    replayed: false,
+    statusUrl: `/api/executions/${id}`,
+    scheduled: true,
+    scheduleAt,
+  };
+}
+
 async function handleFetch(request: Request, env: Bindings): Promise<Response> {
   const url = new URL(request.url);
   // Single-Worker full-stack app (ADR 008): the browser UI ships as Static
@@ -666,47 +841,181 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
       return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
     }
+    const formList = url.pathname === "/api/forms";
+    if (formList && request.method === "GET") {
+      // FORM-02 designer list: org-scoped summaries (id, name, sagaId).
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json({ forms: await listForms(env.DB, caller) });
+    }
+    if (formList && request.method === "POST") {
+      // FORM-02 designer create: persisted declaration (server
+      // authoritative). Validation failures are 400 INVALID_FORM; unknown
+      // Saga IDs fail closed (forms bind to catalog Sagas by name).
+      requireJson(request);
+      const created: unknown = await boundedJson(request.body);
+      if (created === null || typeof created !== "object" || Array.isArray(created)) {
+        throw new Fault(400, "INVALID_FORM", "Form declarations must be a JSON object.");
+      }
+      const createdRecord = created as Record<string, unknown>;
+      if (
+        typeof createdRecord.sagaId !== "string" ||
+        !SAGA_CATALOG.some((entry) => entry.id === (createdRecord.sagaId as string).toLowerCase())
+      ) {
+        throw new Fault(400, "INVALID_FORM", "Form sagaId must be a known Saga UUID.");
+      }
+      const saved = await saveForm(env.DB, caller, created);
+      return json({ form: serializeForm(saved) }, 201);
+    }
     const formDetail = /^\/api\/forms\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
     if (formDetail?.[1] && request.method === "GET") {
-      // Form declaration read (FORM-01): persisted fields for this
-      // Organization only. Unknown or foreign names answer 404, never a leak.
+      // Form declaration read (server-authoritative binding plus FORM-02
+      // metadata): persisted fields for this Organization only. Unknown or
+      // foreign names answer 404 FORM_NOT_FOUND, never a leak.
       const name = formDetail[1];
-      if (!FORM_NAME.test(name)) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      if (!FORM_NAME.test(name)) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       const def = await loadForm(env.DB, caller.orgId, name);
-      if (!def) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
-      return json({
-        form: {
-          id: def.id,
-          name: def.name,
-          sagaId: def.sagaId,
-          fields: def.fields.map((field) => ({
-            name: field.name,
-            type: field.type,
-            required: field.required,
-            maxLength: field.maxLength,
-          })),
+      if (!def) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      return json({ form: serializeForm(def) });
+    }
+    if (formDetail?.[1] && request.method === "PUT") {
+      // FORM-02 designer edit: replace the declaration wholesale (server
+      // re-validates; unknown or foreign names answer 404 FORM_NOT_FOUND).
+      const name = formDetail[1];
+      if (!FORM_NAME.test(name)) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      requireJson(request);
+      const body: unknown = await boundedJson(request.body);
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(400, "INVALID_FORM", "Form declarations must be a JSON object.");
+      }
+      const existing = await loadForm(env.DB, caller.orgId, name);
+      if (!existing) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      const patch = body as Record<string, unknown>;
+      if (
+        typeof patch.sagaId !== "string" ||
+        !SAGA_CATALOG.some((entry) => entry.id === (patch.sagaId as string).toLowerCase())
+      ) {
+        throw new Fault(400, "INVALID_FORM", "Form sagaId must be a known Saga UUID.");
+      }
+      const saved = await saveForm(env.DB, caller, { ...patch, name });
+      return json({ form: serializeForm(saved) });
+    }
+    if (formDetail?.[1] && request.method === "DELETE") {
+      // FORM-02 designer delete: unknown or foreign names answer 404 FORM_NOT_FOUND.
+      const name = formDetail[1];
+      if (!FORM_NAME.test(name)) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      await deleteForm(env.DB, caller, name);
+      return json({ deleted: name });
+    }
+    const formStartup = /^\/api\/forms\/([a-z0-9][a-z0-9-]{0,63})\/startup$/.exec(url.pathname);
+    if (formStartup?.[1] && request.method === "POST") {
+      // FORM-02 startup: mint a session-bound 30-minute handle plus the
+      // resolved snapshot (defaults, opt-in prefill merge, provider
+      // options through the caller-scoped Table gate). Query strings and
+      // display-only/unknown prefill fail closed.
+      const name = formStartup[1];
+      if (!FORM_NAME.test(name)) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      requireJson(request);
+      const def = await loadForm(env.DB, caller.orgId, name);
+      if (!def) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      const started = await startFormSession(env.DB, caller, def, await boundedJson(request.body), readProviderTable);
+      return json(
+        {
+          form: name,
+          handle: started.handle,
+          expiresAt: started.expiresAt,
+          snapshot: started.snapshot,
+          options: started.options,
         },
-      });
+        201,
+      );
+    }
+    const formProviders = /^\/api\/forms\/([a-z0-9][a-z0-9-]{0,63})\/providers$/.exec(url.pathname);
+    if (formProviders?.[1] && request.method === "GET") {
+      // FORM-02 provider fetch: resolved select/multiselect options for
+      // this Organization through the caller-scoped Table gate. Denied or
+      // foreign tables yield empty lists with per-field errors, never a
+      // leak. Query strings are unsupported (options ride the declaration).
+      const name = formProviders[1];
+      if (!FORM_NAME.test(name)) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const def = await loadForm(env.DB, caller.orgId, name);
+      if (!def) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      const resolved = await resolveProviderOptions(env.DB, caller, def.fields, readProviderTable);
+      return json({ form: name, options: resolved.options, errors: resolved.errors });
     }
     const formSubmit = /^\/api\/forms\/([a-z0-9][a-z0-9-]{0,63})\/submit$/.exec(url.pathname);
     if (formSubmit?.[1] && request.method === "POST") {
-      // Form-to-Saga binding (FORM-01): server validates the submission
-      // against the persisted declaration (422 + per-field details on
-      // failure), then submits the bound Saga input down the standard
-      // Execution path. The submit gate is authoritative; no renderer,
-      // provider, or publication behavior lives here.
+      // Form-to-Saga submission (FORM-01 binding, FORM-02 lifecycle):
+      // the caller presents a live startup handle bound to (org, user,
+      // form); the server peeks it, re-resolves provider options,
+      // validates against the persisted declaration (422 + per-field
+      // details), re-validates file references against the live FILE-01
+      // rows, merges validated values over declared defaults, and submits
+      // down the standard Execution path, consuming the handle only after
+      // validation passes so failed validation leaves it live for retry. `{
+      // scheduleAt }` defers dispatch (deferred receipt, undispatched
+      // Pending row with `__scheduleAt` linkage for TRG-01 promotion).
+      // Unknown, expired, foreign, or replayed handles answer 422
+      // STALE_FORM_HANDLE and dispatch nothing. The consumed handle is
+      // the form-to-Saga grant: no separate direct-Saga grant required.
       const name = formSubmit[1];
-      if (!FORM_NAME.test(name)) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+      if (!FORM_NAME.test(name)) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       const key = parseCallerKey(request.headers.get("Idempotency-Key"));
-      if (
-        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
-        request.headers.has("Content-Encoding")
-      )
-        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      requireJson(request);
       const def = await loadForm(env.DB, caller.orgId, name);
-      if (!def) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
-      const { saga, input } = bindFormInput(def, await boundedJson(request.body));
-      const accepted = await submit(env, caller, key, saga, input);
+      if (!def) return json({ error: { code: "FORM_NOT_FOUND", message: "Form not found." } }, 404);
+      const body: unknown = await boundedJson(request.body);
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        throw new Fault(422, "FORM_VALIDATION_FAILED", "The form submission must be a JSON object.", [
+          { field: "", code: "NOT_OBJECT", message: "The form submission must be a JSON object." },
+        ]);
+      }
+      const record = body as Record<string, unknown>;
+      if (Object.keys(record).some((entry) => !["handle", "values", "scheduleAt"].includes(entry))) {
+        throw new Fault(422, "FORM_VALIDATION_FAILED", "Submissions carry handle, values, and scheduleAt only.", [
+          { field: "", code: "UNKNOWN_FIELD", message: "Submissions carry handle, values, and scheduleAt only." },
+        ]);
+      }
+      const handle = parseStartupHandle(record.handle);
+      const scheduleAt = parseScheduleAt(record.scheduleAt);
+      // Peek the session without consuming: validation, provider refresh,
+      // and the file check all run first so a submission that fails them
+      // leaves the handle live for a corrected retry. Only validated
+      // submissions reach the consume-then-dispatch fence below.
+      const session = await peekStartupHandle(env.DB, caller, name, handle);
+      const fresh = await resolveProviderOptions(env.DB, caller, def.fields, readProviderTable);
+      const values = record.values === undefined ? {} : record.values;
+      // Order matters: form-gate validation + defaults merge first, then
+      // the live FILE-01 file check, then the Saga parse gate last — so a
+      // stale file pointer answers 422 even when the declaration drifts
+      // from its Saga schema (which answers the Saga 400 instead).
+      const merged = validateAndMerge(def, values, { allowedOptions: fresh.options, values: session.snapshot });
+      await checkFormFiles(env.DB, caller, def, merged);
+      const { saga, input } = parseSubmission({ sagaId: def.sagaId, input: merged });
+      // Consume only after every validation gate passes (form gate, file
+      // check, Saga parse), immediately before dispatch: failed validation
+      // leaves the handle live for retry, while the single-use fence wins
+      // the row for exactly one submit so a concurrent duplicate racing
+      // past validation answers stale instead of dispatching twice.
+      await consumeStartupHandle(env.DB, caller, name, handle);
+      if (scheduleAt !== null) {
+        const scheduled = await scheduleFormExecution(env.DB, caller, key, name, saga, input, scheduleAt);
+        return json({ form: name, ...scheduled }, scheduled.replayed ? 200 : 202, {
+          Location: scheduled.statusUrl,
+        });
+      }
+      // Defensive strip before the immediate Saga parse gate: a form
+      // field can never declare __-prefixed names (FIELD_NAME), so any
+      // such key would be internal linkage, never caller input.
+      const { __form: _internalForm, __scheduleAt: _internalAt, ...sagaInput } = input as Record<string, unknown>;
+      void _internalForm;
+      void _internalAt;
+      const accepted = await submit(env, caller, key, saga, sagaInput);
       // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
       return json({ form: name, ...accepted }, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
     }
