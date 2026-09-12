@@ -8,7 +8,7 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 3 Implemented, 1 Complete (pending review), 25 Partial, 16 Missing, 2 Gated.
+Total: 47 capability rows — 3 Implemented, 1 Complete (pending review), 26 Partial, 16 Missing, 1 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
@@ -58,7 +58,7 @@ Total: 47 capability rows — 3 Implemented, 1 Complete (pending review), 25 Par
 | OPS-03 | Export and restore operational data with explicit encrypted-backup boundaries | 5 | Missing | SOL-03, TABLE-02, FILE-02, CON-02, SEC-01 | new |
 | OPS-04 | Report scoped usage, model costs and automation ROI | 4+6 | Missing | AUTH-02, AI-01, OPS-01 | new |
 | UX-01 | Provide configurable branding, user profiles and discoverable platform administration | 4 | Partial | AUTH-01, FILE-01 | new |
-| LIMITS-01 | Prove the Cloudflare feasibility envelope and keep parity exceptions explicit | Continuous | Gated | — | new |
+| LIMITS-01 | Prove the Cloudflare feasibility envelope and keep parity exceptions explicit | Continuous | Partial | — | #177 |
 
 ## RUN-01: Persist and enforce per-Saga runtime policy without changing source identity
 
@@ -1279,9 +1279,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## LIMITS-01: Prove the Cloudflare feasibility envelope and keep parity exceptions explicit
 
-Phase Continuous; **Gated**; existing issue: new
+Phase Continuous; **Partial**; existing issue: #177
 
-Local status: The first useful MVP is Free-tier-constrained. No evidence proves all upstream features, arbitrary Python workloads or full tenant scale can fit Cloudflare Free.
+Local status: The dated capability-versus-limit matrix ships as `docs/feasibility-envelope.md` (2026-09-12): Worker CPU/memory/bundle/egress, Workflows instances/steps/history, D1 reads/writes/storage/transaction limits, R2 size/signing, Access users, and model/vector/build costs each carry a free / paid-adaptation / redesign / unresolved classification with the binding limit named. Measured local usage (smoke budgets, usage blocks, bundle size) stays explicitly separated from provider meters; what still requires an authorized dev measurement is listed, not assumed. Remaining: deployed D1-meta/Workers-analytics metering and multi-org load fixtures before any production accuracy claim.
 
 Depends: none
 
