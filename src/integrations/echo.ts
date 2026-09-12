@@ -15,8 +15,9 @@ export async function echo(
   connection: EchoConnection,
   input: EchoInput,
   operationId: string,
-  timeoutMs = VENDOR_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<EchoInput> {
+  const deadline = timeoutMs ?? VENDOR_TIMEOUT_MS;
   // The first slice supports only this local vendor fixture, not arbitrary user URLs.
   // The safe-URL guard parses the persisted value before the exact pin, so
   // rows that predate persist-time validation fail closed here too.
@@ -25,12 +26,12 @@ export async function echo(
     throw new Fault(500, "INVALID_CONNECTION", "The echo Integration requires its local fixture endpoint.");
   }
   const started = Date.now();
-  const timedOut = () => Date.now() - started >= timeoutMs;
+  const timedOut = () => Date.now() - started >= deadline;
   try {
     const response = await fetch(connection.endpoint, {
       method: "POST",
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(deadline),
       headers: { "Content-Type": "application/json", "Idempotency-Key": operationId },
       body: JSON.stringify(input),
     });
