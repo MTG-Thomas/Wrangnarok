@@ -8,13 +8,13 @@ Status vocabulary: **Implemented** (shipped locally), **Partial** (materially na
 
 Upstream tests are evidence of intended assertions, not passing-test claims. Upstream sources were inspected, not executed; no upstream production instance was used.
 
-Total: 47 capability rows — 1 Implemented, 1 Complete (pending review), 22 Partial, 21 Missing, 2 Gated.
+Total: 47 capability rows — 3 Implemented, 1 Complete (pending review), 25 Partial, 16 Missing, 2 Gated.
 
 | ID | Title | Phase | Status | Depends | Existing issue |
 | --- | --- | --- | --- | --- | --- |
 | RUN-01 | Persist and enforce per-Saga runtime policy without changing source identity | 2 | Partial | AUTH-02 | new |
 | RUN-02 | Invoke child Sagas with explicit context, completion and failure semantics | 2 | Missing | AUTH-02, RUN-01 | new |
-| TRG-01 | Run one-off and recurring schedules with durable due-time and cancellation semantics | 2 | Missing | AUTH-02, RUN-01 | new |
+| TRG-01 | Run one-off and recurring schedules with durable due-time and cancellation semantics | 2 | Implemented | AUTH-02, RUN-01 | #137 |
 | TRG-02 | Expose authenticated webhook and custom HTTP execution endpoints | 2 | Partial | AUTH-01 | #138 |
 | TRG-03 | Deliver topic and built-in events through scoped subscriptions with replay visibility | 4 | Missing | TRG-01, TRG-02, AUTH-02 | new |
 | DEV-01 | Provide a complete typed TypeScript author and automation SDK | 1+4 | Partial | — | new |
@@ -109,9 +109,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## TRG-01: Run one-off and recurring schedules with durable due-time and cancellation semantics
 
-Phase 2; **Missing**; existing issue: new
+Phase 2; **Implemented**; existing issue: #137
 
-Local status: ADR 012 is an investigation only. Worker has no scheduled handler or durable Scheduled execution state.
+Local status: Schedules ship as persisted environment state (migration 0016, `src/schedules.ts`, ADR 012 accepted): one org-scoped row binds a name to a stable Saga UUID plus cadence, timezone, enablement, input, and run-as policy. A minute Cloudflare Cron Trigger (the only Cron trigger; `test/timeout-sweeper.test.ts` tripwire pins it) promotes due rows through the standard submit protocol with deterministic `sch-` schedule-window keys. Operator create/preview/disable/delete ride the AUTH-01 membership gate (writes admin-only); run-as always resolves to the creating caller, never caller-supplied identity. Delivery visibility maps windows to Executions. `Scheduled` stays a non-status by design: promotion writes Pending rows, never a new Execution state.
 
 Depends: AUTH-02, RUN-01
 
