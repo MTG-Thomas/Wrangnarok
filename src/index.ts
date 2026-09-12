@@ -70,6 +70,26 @@ import {
 } from "./app-runtime";
 import { previewEnvironment, previewLocal } from "./dev";
 import {
+  HALO_INTEGRATION_ID,
+  executeHaloOperation,
+  haloLabSpec,
+  inspectHaloOperation,
+  searchHaloOperations,
+  HALO_CLASSIFICATIONS,
+  HALO_DEFAULT_POLICY,
+} from "./integrations/halo";
+import {
+  mcpResult,
+  parseMcpCallParams,
+  parseMcpDescribeParams,
+  parseMcpRequest,
+  parseMcpSearchParams,
+  searchTools,
+} from "./mcp";
+import { indexOperations, inspectOperation, searchOperations } from "./openapi";
+import type { CodeModeProvenance } from "./openapi";
+import { toolRegistry } from "./tools";
+import {
   boundedJson,
   canTransition,
   classifyTerminateError,
@@ -313,6 +333,39 @@ function bearerToken(request: Request): string | null {
   const match = /^Bearer (.+)$/.exec(header);
   return match?.[1] ?? null;
 }
+/** TOOL-01 shared Code Mode execution (issue #170): one host-mediated call
+ * used by POST /api/openapi/execute and the MCP halo_api_execute path.
+ * Takes operation selection + params only (never credentials, never a URL);
+ * resolves the caller-org Connection, validates against the pinned
+ * contract, applies policy, enforces egress, injects auth outside
+ * model-visible state, and audits success with sanitized provenance. */
+async function runCodeModeExecute(
+  env: Bindings,
+  caller: Principal,
+  call: { operationId: string; path?: Record<string, string>; query?: Record<string, string>; body?: unknown },
+): Promise<{ result: unknown; provenance: CodeModeProvenance }> {
+  const executed = await executeHaloOperation(
+    env.DB,
+    caller,
+    { clientId: env.HALO_CLIENT_ID, clientSecret: env.HALO_CLIENT_SECRET },
+    {
+      operationId: call.operationId,
+      ...(call.path === undefined ? {} : { path: call.path }),
+      ...(call.query === undefined ? {} : { query: call.query }),
+      ...(call.body === undefined ? {} : { body: call.body }),
+    },
+  );
+  await recordAudit(
+    env.DB,
+    caller,
+    "codemode.execute",
+    { type: "integration", id: HALO_INTEGRATION_ID },
+    "success",
+    executed.provenance,
+    deploymentSecretsFromEnv(env),
+  );
+  return executed;
+}
 /** Public TRG-02 deliveries (issue #138, ADR 019): vendor-facing webhook and
  * endpoint receivers. Authenticated by credential (per-endpoint key or HMAC
  * secret), never by the operator session — so they run BEFORE the
@@ -505,6 +558,9 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       request.method === "DELETE" && /^\/api\/apps\/[0-9a-f-]{36}\/runtime\/files\/.+$/.test(url.pathname);
     const fileList = url.pathname === "/api/files" && request.method === "GET";
     const fileBytes = url.pathname === "/api/files/content" && (request.method === "GET" || request.method === "PUT");
+    // TOOL-01 Code Mode search (issue #170): ?integration= + ?q= through the
+    // route's own allowlisted parser below.
+    const openapiSearch = request.method === "GET" && url.pathname === "/api/openapi/search";
     if (
       url.search &&
       !(historyList && request.method === "GET") &&
@@ -516,7 +572,8 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       !appTableRowsRead &&
       !appRuntimeFileDelete &&
       !fileList &&
-      !fileBytes
+      !fileBytes &&
+      !openapiSearch
     )
       throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
     if (isOrgPath) {
@@ -1825,6 +1882,282 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (connOne?.[1] && request.method === "DELETE") {
       await deleteConnection(env.DB, caller, connOne[1]);
       return json({ deleted: true });
+    }
+    // TOOL-01 opt-in Saga tools (issue #170, ADR 022): explicit enrollment
+    // with stable identity, collision-safe names, and distinctive
+    // descriptions. Discovery (GET) and execution (resolve below + the MCP
+    // tools/call path) share the registry gate: disabled and stale rows
+    // vanish from both identically. Query strings stay deny-by-default.
+    if (url.pathname === "/api/tools" && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(scrubConnectionPayload({ tools: await toolRegistry.list(env.DB, caller, SAGA_CATALOG) }, env));
+    }
+    if (url.pathname === "/api/tools" && request.method === "POST") {
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as { sagaId?: unknown } & Record<string, unknown>;
+      if (typeof body.sagaId !== "string") {
+        throw new Fault(400, "UNKNOWN_SAGA", "A tool enrollment needs a sagaId.");
+      }
+      const saga = SAGA_CATALOG.find((entry) => entry.id === body.sagaId);
+      if (!saga) throw new Fault(404, "UNKNOWN_SAGA", "Unknown Saga id.");
+      const enrolled = await toolRegistry.enroll(env.DB, caller, saga, {
+        ...(body.name === undefined ? {} : { name: body.name }),
+        ...(body.description === undefined ? {} : { description: body.description }),
+      });
+      await recordAudit(
+        env.DB,
+        caller,
+        "tool.enroll",
+        { type: "tool", id: enrolled.name },
+        "success",
+        { sagaId: enrolled.sagaId },
+        deploymentSecretsFromEnv(env),
+      );
+      return json(scrubConnectionPayload({ tool: enrolled }, env), 201);
+    }
+    const toolDisable = /^\/api\/tools\/([a-z][a-z0-9_]{2,63})\/disable$/.exec(url.pathname);
+    if (toolDisable?.[1] && request.method === "POST") {
+      const disabled = await toolRegistry.disable(env.DB, caller, toolDisable[1]);
+      await recordAudit(
+        env.DB,
+        caller,
+        "tool.disable",
+        { type: "tool", id: disabled.name },
+        "success",
+        { sagaId: disabled.sagaId },
+        deploymentSecretsFromEnv(env),
+      );
+      return json(scrubConnectionPayload({ tool: disabled }, env));
+    }
+    const toolExecute = /^\/api\/tools\/([a-z][a-z0-9_]{2,63})\/execute$/.exec(url.pathname);
+    if (toolExecute?.[1] && request.method === "POST") {
+      // Tool execution rides the standard Execution path: resolve the tool
+      // through the registry gate, then submit its Saga with the standard
+      // Idempotency-Key contract. The submit gate stays authoritative.
+      requireJson(request);
+      const tool = await toolRegistry.resolve(env.DB, caller, toolExecute[1], SAGA_CATALOG);
+      const key = parseCallerKey(request.headers.get("Idempotency-Key"));
+      const { saga, input } = parseSubmission({
+        ...((await boundedJson(request.body)) as Record<string, unknown>),
+        sagaId: tool.sagaId,
+      });
+      const accepted = await submit(env, caller, key, saga, input);
+      await recordAudit(
+        env.DB,
+        caller,
+        "tool.execute",
+        { type: "tool", id: tool.name },
+        "success",
+        { sagaId: tool.sagaId, executionId: accepted.executionId },
+        deploymentSecretsFromEnv(env),
+      );
+      return json(scrubConnectionPayload({ tool: tool.name, ...accepted }, env), accepted.replayed ? 200 : 202, {
+        Location: accepted.statusUrl,
+      });
+    }
+    // TOOL-01 Code Mode discovery (issue #170, ADR 022): progressive
+    // search/inspect over the pinned Halo contract. Query strings are
+    // allowlisted per route (?integration= + ?q= here); unknown integrations
+    // 404, never a leak. Execution lives on POST /api/openapi/execute below.
+    if (url.pathname === "/api/openapi/search" && request.method === "GET") {
+      const keys = [...url.searchParams.keys()];
+      if (keys.some((key) => key !== "integration" && key !== "q")) {
+        throw new Fault(400, "UNSUPPORTED_QUERY", "Only ?integration= and ?q= are supported here.");
+      }
+      const integration = url.searchParams.get("integration");
+      if (integration !== "halo") throw new Fault(404, "UNKNOWN_INTEGRATION", "Unknown Integration id.");
+      const operations = searchHaloOperations(url.searchParams.get("q") ?? "");
+      return json(scrubConnectionPayload({ integration: "halo", operations }, env));
+    }
+    const openapiInspect = /^\/api\/openapi\/operations\/([A-Za-z][A-Za-z0-9_.-]{0,127})$/.exec(url.pathname);
+    if (openapiInspect?.[1] && request.method === "GET") {
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      return json(scrubConnectionPayload({ operation: inspectHaloOperation(openapiInspect[1]) }, env));
+    }
+    if (url.pathname === "/api/openapi/execute" && request.method === "POST") {
+      // Host-mediated Code Mode execution (ADR 022): the route resolves the
+      // caller + Organization Connection, validates against the pinned
+      // contract, applies policy, enforces egress, and injects credentials
+      // outside model-visible state. The body carries operation selection +
+      // params only — never credentials, never a URL.
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as Record<string, unknown>;
+      if (body.integration !== "halo") throw new Fault(404, "UNKNOWN_INTEGRATION", "Unknown Integration id.");
+      if (typeof body.operationId !== "string") {
+        throw new Fault(400, "OPENAPI_UNKNOWN_OPERATION", "Provide an operationId from the pinned contract.");
+      }
+      const params = (body.params ?? {}) as Record<string, unknown>;
+      const { result, provenance } = await runCodeModeExecute(env, caller, {
+        operationId: body.operationId,
+        ...(params.path === undefined ? {} : { path: params.path as Record<string, string> }),
+        ...(params.query === undefined ? {} : { query: params.query as Record<string, string> }),
+        ...(body.input === undefined ? {} : { body: body.input }),
+      });
+      return json(scrubConnectionPayload({ result, provenance }, env));
+    }
+    // TOOL-01 inbound MCP gateway (issue #170, ADR 022): JSON-RPC 2.0 over
+    // POST behind the same membership gate as every /api/* route. tools/list
+    // serves enrolled live tools plus the Code Mode search/execute pair;
+    // tools/call executes enrolled tools through the standard submit path;
+    // tools/search narrows live tools by text; tools/describe inspects one
+    // tool or one pinned Halo operation. Envelope faults (auth/parse/
+    // unknown-method) throw; call-level denials serialize as error results.
+    if (url.pathname === "/api/mcp" && request.method === "POST") {
+      requireJson(request);
+      const envelope = parseMcpRequest(await boundedJson(request.body));
+      if (envelope.method === "tools/list") {
+        const tools = await toolRegistry.list(env.DB, caller, SAGA_CATALOG);
+        return json(
+          scrubConnectionPayload(
+            mcpResult(envelope.id, {
+              tools: [
+                ...tools.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description,
+                  inputSchema: tool.inputSchema,
+                })),
+                {
+                  name: "halo_api_search",
+                  description: "[halo_api_search] Search the pinned HaloPSA contract by free text.",
+                  inputSchema: { type: "object" },
+                },
+                {
+                  name: "halo_api_execute",
+                  description: "[halo_api_execute] Execute one pinned HaloPSA operation through the org Connection.",
+                  inputSchema: { type: "object" },
+                },
+              ],
+            }),
+            env,
+          ),
+        );
+      }
+      if (envelope.method === "tools/search") {
+        const { query } = parseMcpSearchParams(envelope.params);
+        const tools = await toolRegistry.list(env.DB, caller, SAGA_CATALOG);
+        const views = tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }));
+        return json(scrubConnectionPayload(mcpResult(envelope.id, { tools: searchTools(views, query) }), env));
+      }
+      if (envelope.method === "tools/describe") {
+        const { name } = parseMcpDescribeParams(envelope.params);
+        const tools = await toolRegistry.list(env.DB, caller, SAGA_CATALOG);
+        const tool = tools.find((entry) => entry.name === name);
+        if (tool) {
+          return json(
+            scrubConnectionPayload(
+              mcpResult(envelope.id, {
+                tool: { name: tool.name, description: tool.description, inputSchema: tool.inputSchema },
+              }),
+              env,
+            ),
+          );
+        }
+        const operations = indexOperations(haloLabSpec(), HALO_CLASSIFICATIONS);
+        const operation = operations.find((entry) => entry.operationId === name);
+        if (operation) {
+          return json(
+            scrubConnectionPayload(
+              mcpResult(envelope.id, {
+                operation: inspectOperation(operations, operation.operationId),
+                policy: HALO_DEFAULT_POLICY,
+              }),
+              env,
+            ),
+          );
+        }
+        return json(
+          scrubConnectionPayload(
+            mcpResult(envelope.id, {
+              error: { code: "MCP_TOOL_DENIED", message: `Unknown tool ${JSON.stringify(name)}.` },
+            }),
+            env,
+          ),
+        );
+      }
+      // tools/call: enrolled Saga tools execute through the standard submit
+      // path; halo_api_search describes Code Mode discovery; halo_api_execute
+      // runs the host-mediated execution. Unknown names deny as error
+      // results (call-level), never envelope faults.
+      const { tool, input } = parseMcpCallParams(envelope.params);
+      if (tool === "halo_api_search") {
+        const query = (input as Record<string, unknown>).query;
+        const found = searchOperations(
+          indexOperations(haloLabSpec(), HALO_CLASSIFICATIONS),
+          typeof query === "string" ? query : "",
+        );
+        return json(scrubConnectionPayload(mcpResult(envelope.id, { tools: found }), env));
+      }
+      if (tool === "halo_api_execute") {
+        const args = input as Record<string, unknown>;
+        if (typeof args.operationId !== "string") {
+          return json(
+            scrubConnectionPayload(
+              mcpResult(envelope.id, { error: { code: "MCP_INVALID_PARAMS", message: "Provide an operationId." } }),
+              env,
+            ),
+          );
+        }
+        try {
+          const params = (args.params ?? {}) as Record<string, unknown>;
+          const { result, provenance } = await runCodeModeExecute(env, caller, {
+            operationId: args.operationId,
+            ...(params.path === undefined ? {} : { path: params.path as Record<string, string> }),
+            ...(params.query === undefined ? {} : { query: params.query as Record<string, string> }),
+            ...(args.input === undefined ? {} : { body: args.input }),
+          });
+          return json(scrubConnectionPayload(mcpResult(envelope.id, { result, provenance }), env));
+        } catch (error) {
+          const code = error instanceof Fault ? error.code : "MCP_EXECUTION_FAILED";
+          const message = error instanceof Fault ? error.message : "The Code Mode execution failed.";
+          await recordAudit(
+            env.DB,
+            caller,
+            "codemode.execute_denied",
+            { type: "integration", id: HALO_INTEGRATION_ID },
+            "failure",
+            { operationId: args.operationId, code },
+            deploymentSecretsFromEnv(env),
+          );
+          return json(scrubConnectionPayload(mcpResult(envelope.id, { error: { code, message } }), env));
+        }
+      }
+      let resolved: { name: string; sagaId: string } | null = null;
+      let resolveFault: Fault | null = null;
+      try {
+        resolved = await toolRegistry.resolve(env.DB, caller, tool, SAGA_CATALOG);
+      } catch (error) {
+        resolveFault =
+          error instanceof Fault ? error : new Fault(500, "MCP_EXECUTION_FAILED", "The tool lookup failed.");
+      }
+      if (!resolved) {
+        const code = resolveFault?.code ?? "MCP_TOOL_DENIED";
+        const message = resolveFault?.message ?? `Unknown tool ${JSON.stringify(tool)}.`;
+        return json(scrubConnectionPayload(mcpResult(envelope.id, { error: { code, message } }), env));
+      }
+      try {
+        const args = input as Record<string, unknown>;
+        const key = parseCallerKey(typeof args.idempotencyKey === "string" ? (args.idempotencyKey as string) : null);
+        const { saga, input: parsed } = parseSubmission({ input: args.input ?? {}, sagaId: resolved.sagaId });
+        const accepted = await submit(env, caller, key, saga, parsed);
+        await recordAudit(
+          env.DB,
+          caller,
+          "tool.execute",
+          { type: "tool", id: resolved.name },
+          "success",
+          { sagaId: resolved.sagaId, executionId: accepted.executionId },
+          deploymentSecretsFromEnv(env),
+        );
+        return json(scrubConnectionPayload(mcpResult(envelope.id, { tool: resolved.name, ...accepted }), env));
+      } catch (error) {
+        const code = error instanceof Fault ? error.code : "MCP_EXECUTION_FAILED";
+        const message = error instanceof Fault ? error.message : "The tool execution failed.";
+        return json(scrubConnectionPayload(mcpResult(envelope.id, { error: { code, message } }), env));
+      }
     }
     // TRG-02 endpoint management (issue #138, ADR 018): operator-owned
     // inventory over this Organization's scoped endpoints. Create returns

@@ -8,7 +8,7 @@
 // for one Organization. The D1 row carries the stable IDs plus the
 // non-secret endpoint; decrypted material only ever exists transiently
 // inside server-side execution (see ADR 005, Proposed).
-import { ECHO_INTEGRATION_ID, Fault, NINJA_INTEGRATION_ID, object, UUID } from "../domain";
+import { ECHO_INTEGRATION_ID, Fault, HALO_INTEGRATION_ID, NINJA_INTEGRATION_ID, object, UUID } from "../domain";
 import type { FieldFailure } from "../domain";
 /** Local echo fixture URL (issue #239): the portable loopback default. Main's
  * #236 policy owns transport/host safety; the #239 gate below owns which
@@ -391,9 +391,41 @@ export const ninjaIntegrationDef = defineIntegration({
 });
 
 /** All Integration definitions, in canonical order. Add new Integrations here. */
+export const haloIntegrationDef = defineIntegration({
+  id: HALO_INTEGRATION_ID,
+  name: "halo",
+  description:
+    "HaloPSA service-desk API over OpenAPI Code Mode: progressive search/inspect plus host-mediated execute.",
+  secretFields: ["clientSecret"],
+  configSchema: [
+    {
+      name: "endpoint",
+      type: "string",
+      required: true,
+      maxLength: CONNECTION_CONFIG_MAX_LENGTH,
+      description: "Halo API origin (for example https://halo-lab.example.com).",
+    },
+    {
+      name: "clientIdLabel",
+      type: "string",
+      required: false,
+      maxLength: 128,
+      description: "Optional non-secret label naming which deployment credential this mapping uses.",
+    },
+  ],
+  requiredSecrets: ["clientSecret"],
+  secretEnvVars: { clientSecret: "HALO_CLIENT_SECRET" },
+  health: {
+    testHint: "Search the pinned Halo contract, inspect one operation, then execute a read.",
+    remediation: "Confirm the Halo origin, the pinned spec digest, and the deployment credential, then retry.",
+  },
+});
+
+/** All Integration definitions, in canonical order. Add new Integrations here. */
 export const INTEGRATION_DEFINITIONS: readonly IntegrationDefinition[] = Object.freeze([
   echoIntegrationDef,
   ninjaIntegrationDef,
+  haloIntegrationDef,
 ]);
 
 export function integrationById(id: string): IntegrationDefinition | undefined {
