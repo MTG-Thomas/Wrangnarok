@@ -500,7 +500,7 @@ describe("solution source export and import (SOL-03)", () => {
 
   it("rejects every malformed logo branch", async () => {
     const pkg = await capturedPackage();
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    const svg = '<svg viewBox="0 0 1 1"></svg>';
     const good = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
     // A valid logo passes: the true branch of every logo guard.
     const withLogo = await exportSourcePackage({
@@ -746,5 +746,198 @@ describe("solution source export and import (SOL-03)", () => {
       }),
     ).rejects.toMatchObject({ code: "SOURCE_TOO_LARGE" });
     expect(cleaned).toBe(1);
+  });
+
+  // Final sweep: every remaining branch the coverage gate measures.
+  it("covers git-without-commit, non-string asset type, and capture logo/git opts", async () => {
+    const pkg = await capturedPackage();
+    const good = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    // Git pointer with repo only (no commit): the commit-absent branch.
+    const repoOnly = await exportSourcePackage({
+      ...good,
+      source: { ...pkg.source, git: { repo: "https://example.com/org/repo" } },
+    });
+    expect(repoOnly.files).toHaveLength(2);
+    // Asset with a non-string contentType renders "?" in the error detail.
+    await expect(
+      exportSourcePackage({
+        ...good,
+        assets: [{ path: "notes/blob.md", contentType: 7, text: "x" }],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    // Capture with logo and git opts exercises the option-taken branches in
+    // previewCaptureSource; capture succeeds after a clean install.
+    const withOpts = await captureSource(bindings.DB, manifest(), {
+      readme: "# echo-starter",
+      logo: { contentType: "image/svg+xml", svg: '<svg viewBox="0 0 1 1"></svg>' },
+      git: { commit: "abc1234" },
+    });
+    expect(withOpts.package.source.logo?.contentType).toBe("image/svg+xml");
+    expect(withOpts.package.source.git?.commit).toBe("abc1234");
+  });
+
+  it("covers the closure mismatch matrix directly", () => {
+    const catalogs = staticSourceCatalogs();
+    const echo = catalogs.sagas.find((entry) => entry.id === echoSaga.id);
+    const baseManifest = manifest() as unknown as BundleManifest;
+    // REVISION_MISMATCH gap: module revision differs from deployed code.
+    const drifted = checkClosure(
+      baseManifest,
+      [
+        {
+          sagaId: echoSaga.id,
+          name: echo?.name ?? "echo",
+          revision: "echo-v999",
+          description: echo?.description ?? "echo",
+          requiredIntegrations: [...(echo?.requiredIntegrations ?? [])],
+        },
+      ],
+      catalogs,
+    );
+    expect(drifted.map((gap) => gap.reason)).toContain("REVISION_MISMATCH");
+    // INTEGRATION_NOT_DECLARED with an unknown required id renders the raw
+    // id fallback in the detail.
+    const ghostReq = checkClosure(
+      baseManifest,
+      [
+        {
+          sagaId: echoSaga.id,
+          name: echo?.name ?? "echo",
+          revision: echo?.revision ?? "echo-v1",
+          description: echo?.description ?? "echo",
+          requiredIntegrations: ["00000000-0000-4000-8000-000000000000"],
+        },
+      ],
+      catalogs,
+    );
+    expect(ghostReq.map((gap) => gap.reason)).toContain("INTEGRATION_NOT_DECLARED");
+    expect(ghostReq[0]?.detail).toContain("00000000-0000-4000-8000-000000000000");
+    // SECRET_SCHEMA_MISMATCH gap through checkClosure directly.
+    const badSchema = checkClosure(
+      {
+        ...baseManifest,
+        integrations: [
+          {
+            id: ECHO_INTEGRATION_ID,
+            connections: [{ org: "default", config: { endpoint: ENDPOINT }, secretsRequired: ["nope"] }],
+          },
+        ],
+      } as unknown as BundleManifest,
+      [
+        {
+          sagaId: echoSaga.id,
+          name: echo?.name ?? "echo",
+          revision: echo?.revision ?? "echo-v1",
+          description: echo?.description ?? "echo",
+          requiredIntegrations: [],
+        },
+      ],
+      catalogs,
+    );
+    expect(badSchema.map((gap) => gap.reason)).toContain("SECRET_SCHEMA_MISMATCH");
+    // Non-blocking closure gaps are returned, never thrown: a loose-only
+    // manifest state reports without failing the import status arm.
+    const idle = checkClosure(baseManifest, [], catalogs);
+    expect(idle).toEqual([]);
+  });
+
+  it("covers missing-module build, same-org second lookup, and import mismatch paths", async () => {
+    // buildModules MISSING_MODULE: custom catalogs lacking the manifest saga
+    // (the installer catalog still knows it, so parsing succeeds).
+    const thin = staticSourceCatalogs();
+    const stripped = { sagas: [], integrations: thin.integrations };
+    const missing = await previewCaptureSource(bindings.DB, manifest(), { catalogs: stripped });
+    expect(missing.gaps.map((gap) => gap.reason)).toContain("MISSING_MODULE");
+    // Same-org second connection: the orgIds memo hit. Install echo + ninja
+    // under one bundle id FIRST (fresh DB), then preview both: the second
+    // same-org connection takes the memo path. The echo-bundle captures
+    // below run after, in their own installs.
+    const memoManifest = {
+      manifestVersion: 1,
+      bundle: { id: "c20b8d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", name: "echo-ninja", version: "1.0.0" },
+      sagas: [{ id: digestSaga.id, revision: digestSaga.revision }],
+      integrations: [
+        {
+          id: ECHO_INTEGRATION_ID,
+          connections: [{ org: "default", config: { endpoint: ENDPOINT }, secretsRequired: [] }],
+        },
+        {
+          id: NINJA_INTEGRATION_ID,
+          connections: [
+            { org: "default", config: { endpoint: "https://api.ninjaone.test" }, secretsRequired: ["clientSecret"] },
+          ],
+        },
+      ],
+      config: [],
+    };
+    await installBundle(bindings.DB, memoManifest, { secrets: { clientSecret: "sentinel" } });
+    const both = await previewCaptureSource(bindings.DB, memoManifest);
+    expect(both.gaps).toEqual([]);
+    // validatePackage MISSING_MODULE / SOURCE_MANIFEST_MISMATCH: craft the
+    // package docs by hand around the memo manifest (digest pin), so no
+    // echo-bundle install collides with the memo rows above.
+    const memoCapture = await captureSource(bindings.DB, memoManifest);
+    const memoPkg = memoCapture.package;
+    const ghostModule = JSON.parse(JSON.stringify(memoPkg)) as Record<string, unknown>;
+    (ghostModule.modules as Record<string, unknown>[])[0] = {
+      sagaId: "00000000-0000-4000-8000-000000000000",
+      name: "ghost",
+      revision: "ghost-v1",
+      description: "missing",
+      requiredIntegrations: [],
+    };
+    await expect(importSourcePackage(ghostModule)).rejects.toMatchObject({ code: "MISSING_MODULE" });
+    // validatePackage SOURCE_MANIFEST_MISMATCH: a module for a catalog saga
+    // the manifest never pins. The memo manifest parses (digest pin matches
+    // code), the hello module passes every identity check, then the pin
+    // lookup misses.
+    const mixedPin = JSON.parse(JSON.stringify(memoPkg)) as Record<string, unknown>;
+    const helloCatalog = staticSourceCatalogs().sagas.find((entry) => entry.id === helloSaga.id);
+    (mixedPin.modules as Record<string, unknown>[])[0] = {
+      sagaId: helloSaga.id,
+      name: helloCatalog?.name ?? "hello",
+      revision: helloCatalog?.revision ?? "hello-v1",
+      description: helloCatalog?.description ?? "hello",
+      requiredIntegrations: [...(helloCatalog?.requiredIntegrations ?? [])],
+    };
+    await expect(importSourcePackage(mixedPin)).rejects.toMatchObject({ code: "SOURCE_MANIFEST_MISMATCH" });
+  });
+
+  it("covers the validatePackage revision gate and import status arms", async () => {
+    const pkg = await capturedPackage();
+    // Module revision drifts from deployed code while the manifest pin stays
+    // valid: validatePackage (not the installer) throws REVISION_MISMATCH.
+    const driftedModule = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    (driftedModule.modules as Record<string, unknown>[])[0] = {
+      ...(pkg.modules[0] as unknown as Record<string, unknown>),
+      revision: "echo-v999",
+    };
+    await expect(importSourcePackage(driftedModule)).rejects.toMatchObject({ code: "REVISION_MISMATCH", status: 409 });
+    // Non-string module revision renders "?" in the detail.
+    const untypedModule = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    (untypedModule.modules as Record<string, unknown>[])[0] = {
+      ...(pkg.modules[0] as unknown as Record<string, unknown>),
+      revision: 42,
+    };
+    await expect(importSourcePackage(untypedModule)).rejects.toMatchObject({ code: "REVISION_MISMATCH" });
+    // Bumping both pins together fails earlier in the installer with the same
+    // code, proving the surfaces agree.
+    const drifted = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    (drifted.modules as Record<string, unknown>[])[0] = {
+      ...(pkg.modules[0] as unknown as Record<string, unknown>),
+      revision: "echo-v999",
+    };
+    (drifted.manifest as Record<string, unknown[]>).sagas = [{ id: echoSaga.id, revision: "echo-v999" }];
+    await expect(importSourcePackage(drifted)).rejects.toMatchObject({ code: "REVISION_MISMATCH", status: 409 });
+    // Non-Error staging failure renders String(error) in EXPORT_JOB_FAILED.
+    await expect(
+      runExportJob(pkg, {
+        writeTemp: () => {
+          throw "disk gone";
+        },
+        commit: () => {},
+        cleanup: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "EXPORT_JOB_FAILED" });
   });
 });
