@@ -96,7 +96,14 @@ import { join } from "node:path";
 // 446392 bytes: 952 bytes over the 435 KiB budget. Hand-written feature code,
 // no new dependencies (package.json unchanged versus main); deliberate
 // feature headroom only.
-const BUDGET_BYTES = 440 * 1024;
+// 2026-09-12 (sec-endpoint, issue #236): 445 KiB. The endpoint safe-URL policy
+// (src/integrations/index.ts: URL parse plus per-Integration transport/host
+// policy at persist time, assertSafeEndpoint guards in the echo/ninjaone
+// Actions and the management probe) measures 451460 bytes after a shrink pass
+// (short messages, no dead helpers): 900 bytes over the 440 KiB budget.
+// Hand-written security-boundary code, no new dependencies (package.json
+// unchanged versus main); deliberate feature headroom only.
+const BUDGET_BYTES = 445 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
