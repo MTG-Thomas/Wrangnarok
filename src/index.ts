@@ -17,7 +17,7 @@ import {
   swapSlugs,
   validateApp,
 } from "./apps";
-import { cancelDirectChildren } from "./children";
+import { cancelDirectChildren, isMissingLineageColumn } from "./children";
 import {
   artifactDetail,
   ARTIFACT_FORMAT_STATUS,
@@ -689,11 +689,21 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // RUN-02 lineage (ADR 018): direct children of this Execution, newest
       // first. The child's own detail carries its parentExecutionId; this
       // list makes the parent side inspectable without a history scan.
-      const children = await env.DB.prepare(
-        "SELECT id,saga_id,saga_name,status,created_at FROM executions WHERE parent_execution_id=? AND org_id=? AND user_id=? ORDER BY created_at DESC,id DESC",
-      )
-        .bind(row.id, caller.orgId, caller.userId)
-        .all<{ id: string; saga_id: string; saga_name: string; status: string; created_at: string }>();
+      // Pre-lineage stores (before migration 0015) degrade to an empty list:
+      // the route 500s otherwise for fixtures that only applied 0001+0002.
+      let children: { id: string; saga_id: string; saga_name: string; status: string; created_at: string }[];
+      try {
+        children = (
+          await env.DB.prepare(
+            "SELECT id,saga_id,saga_name,status,created_at FROM executions WHERE parent_execution_id=? AND org_id=? AND user_id=? ORDER BY created_at DESC,id DESC",
+          )
+            .bind(row.id, caller.orgId, caller.userId)
+            .all<{ id: string; saga_id: string; saga_name: string; status: string; created_at: string }>()
+        ).results;
+      } catch (error) {
+        if (!isMissingLineageColumn(error)) throw error;
+        children = [];
+      }
       let runtimeStatus: string | null = null;
       try {
         const binding = workflowForSaga(env, row.saga_id);
@@ -708,7 +718,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
             runtimeStatus,
             parentExecutionId: row.parent_execution_id,
             parentStep: row.parent_step,
-            children: children.results.map((kid) => ({
+            children: children.map((kid) => ({
               executionId: kid.id,
               sagaId: kid.saga_id,
               sagaName: kid.saga_name,

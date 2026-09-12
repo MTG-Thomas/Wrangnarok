@@ -314,6 +314,14 @@ function safeCode(row: ExecutionRow): string {
   return row.status;
 }
 
+/** True when D1 reports a missing lineage column: a store that predates
+ * migration 0015 has no parent_execution_id/parent_step to read. Read paths
+ * (detail, cancel fan-out) degrade; the child-dispatch write path stays
+ * fail-loud so lineage is never silently dropped. */
+export function isMissingLineageColumn(error: unknown): boolean {
+  return error instanceof Error && /no such column/i.test(error.message);
+}
+
 /** Best-effort child fan-out for parent cancellation: mark still-active
  * direct children Cancelling, attempt each native terminate, classify, and
  * confirm only observed stops. Ambiguous children stay active and
@@ -324,13 +332,23 @@ export async function cancelDirectChildren(
   caller: Principal,
   parentExecutionId: string,
 ): Promise<readonly string[]> {
-  const kids = await env.DB.prepare(
-    "SELECT id,saga_id,status,dispatched FROM executions WHERE parent_execution_id=? AND org_id=? AND user_id=?",
-  )
-    .bind(parentExecutionId, caller.orgId, caller.userId)
-    .all<{ id: string; saga_id: string; status: string; dispatched: number }>();
+  let kids: { id: string; saga_id: string; status: string; dispatched: number }[];
+  try {
+    kids = (
+      await env.DB.prepare(
+        "SELECT id,saga_id,status,dispatched FROM executions WHERE parent_execution_id=? AND org_id=? AND user_id=?",
+      )
+        .bind(parentExecutionId, caller.orgId, caller.userId)
+        .all<{ id: string; saga_id: string; status: string; dispatched: number }>()
+    ).results;
+  } catch (error) {
+    // Pre-lineage stores (before migration 0015) have no children to fan out
+    // to: the parent cancel proceeds without them. Genuine failures still throw.
+    if (isMissingLineageColumn(error)) return [];
+    throw error;
+  }
   const confirmed: string[] = [];
-  for (const kid of kids.results) {
+  for (const kid of kids) {
     if (kid.status !== "Pending" && kid.status !== "Running") continue;
     const marked = await env.DB.prepare(
       "UPDATE executions SET status='Cancelling' WHERE id=? AND status IN ('Pending','Running')",

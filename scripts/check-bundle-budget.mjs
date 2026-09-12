@@ -62,7 +62,14 @@ import { join } from "node:path";
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged. Remeasure after merge; shrink the raise if the combined bundle
 // lands lower.
-const BUDGET_BYTES = 380 * 1024;
+// 2026-09-11 (RUN-02 stacked over merged main, issue #136): 410 KiB. Merged
+// main itself measures ~401 KiB (over the 380 KiB OPS-01 budget before any
+// lane code lands); the RUN-02 surface (src/children.ts: dispatch/await/
+// fan-out, lineage reads on detail plus cancel, hello-parent Saga plus
+// Workflow, SDK lineage shape) adds ~434 bytes of hand-written feature code
+// with no new dependencies. Same deliberate feature headroom as the earlier
+// raises: package.json is unchanged versus main.
+const BUDGET_BYTES = 410 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");

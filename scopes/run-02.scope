@@ -31,6 +31,7 @@ client/src/lib/client-types.ts
 client/src/pages/ExecutionDetail.tsx
 docs/architecture/018-child-invocation.md
 scripts/wrangnarok.mjs
+scripts/check-bundle-budget.mjs
 wrangler.jsonc
 scopes/run-02.scope
 package.json

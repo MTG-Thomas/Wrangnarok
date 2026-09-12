@@ -75,7 +75,6 @@ describe("Saga authoring contract (issue #57)", () => {
       const timeout = await ctx.config.get("timeout");
       return step.do("probe-v1", async () => ({ timeout }));
     }
-    }
     async function noDurableSteps(): Promise<unknown> {
       return { ok: true };
     }
