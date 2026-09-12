@@ -272,6 +272,11 @@ describe("defensive validation branches", () => {
     expect(codeOf(() => resolveRequestUrl({ ...pinned, allowedOrigins: [] }, get, { path: { id: "1" } }))).toBe(
       "OPENAPI_ORIGIN_FORBIDDEN",
     );
+    // A base that is not a URL at all throws inside the URL constructor:
+    // the catch answers INVALID_PARAMS (fail closed, never a crash).
+    expect(
+      codeOf(() => resolveRequestUrl({ ...pinned, allowedOrigins: ["not a url"] }, get, { path: { id: "1" } })),
+    ).toBe("OPENAPI_INVALID_PARAMS");
     // A protocol-relative path from a hostile spec resolves off-origin: the
     // allowlist check skips the malformed entry (catch arm) and fails
     // closed rather than throwing.

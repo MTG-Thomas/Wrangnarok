@@ -26,7 +26,7 @@ export interface ToolEnrollmentRow {
   readonly saga_id: string;
   readonly saga_revision: string;
   readonly description: string | null;
-  readonly enabled: number | null;
+  readonly enabled: number;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -126,21 +126,8 @@ function describe(
     sagaRevision: row.saga_revision,
     description: `[${row.tool_name}] ${custom}`,
     inputSchema: Object.freeze({ type: "object" as const }),
-    enabled: (row.enabled ?? 1) === 1,
+    enabled: row.enabled === 1,
   });
-}
-
-/** Live means enrolled, enabled, and matching the current Saga revision.
- * Stale rows (Saga renamed, removed, or revised since enrollment) are inert:
- * omitted from discovery and rejected at execution with TOOL_STALE. */
-function liveRow(
-  row: ToolEnrollmentRow,
-  catalog: readonly ToolCatalogSaga[],
-): { row: ToolEnrollmentRow; stale: boolean } | null {
-  if ((row.enabled ?? 1) === 0) return null;
-  const saga = catalog.find((entry) => entry.id === row.saga_id);
-  if (!saga || saga.revision !== row.saga_revision) return { row, stale: true };
-  return { row, stale: false };
 }
 
 async function ownedRow(db: D1Database, orgId: string, toolName: string): Promise<ToolEnrollmentRow | null> {
@@ -191,7 +178,7 @@ export const toolRegistry: ToolRegistry = {
     const name = parsed.name ?? toolNameFor(saga.name);
     const existing = await ownedRow(db, caller.orgId, name);
     if (existing) {
-      if (existing.saga_id === saga.id && existing.saga_revision === saga.revision && (existing.enabled ?? 1) === 1)
+      if (existing.saga_id === saga.id && existing.saga_revision === saga.revision && existing.enabled === 1)
         throw invalid("TOOL_EXISTS", `Tool "${name}" is already enrolled for this Organization.`, 409);
       throw invalid("TOOL_EXISTS", `Tool name "${name}" is already taken for this Organization.`, 409);
     }
@@ -224,13 +211,11 @@ export const toolRegistry: ToolRegistry = {
     const rows = await listRows(db, caller.orgId);
     const tools: ToolDescriptor[] = [];
     for (const row of rows) {
-      const live = liveRow(row, catalog);
-      if (!live || live.stale) continue;
+      // One lookup gates everything: disabled rows, unknown Sagas, and
+      // stale revisions vanish from discovery and execution identically.
+      if (row.enabled === 0) continue;
       const saga = catalog.find((entry) => entry.id === row.saga_id);
-      // Defense in depth: liveRow already gates on catalog membership, so a
-      // live row always resolves here. The check stays so a catalog mutated
-      // between the two lookups degrades to omission, never a crash.
-      if (!saga) continue;
+      if (!saga || saga.revision !== row.saga_revision) continue;
       tools.push(describe(row, saga));
     }
     return Object.freeze(tools);
@@ -241,7 +226,7 @@ export const toolRegistry: ToolRegistry = {
     const row = await ownedRow(db, caller.orgId, toolName);
     // Foreign-Organization and unknown names answer identically: 404, never a leak.
     if (!row) throw invalid("TOOL_NOT_FOUND", "Unknown tool.", 404);
-    if ((row.enabled ?? 1) === 0) throw invalid("TOOL_DISABLED", `Tool "${toolName}" is disabled.`, 404);
+    if (row.enabled === 0) throw invalid("TOOL_DISABLED", `Tool "${toolName}" is disabled.`, 404);
     const saga = catalog.find((entry) => entry.id === row.saga_id);
     if (!saga || saga.revision !== row.saga_revision) {
       throw invalid(
@@ -257,7 +242,7 @@ export const toolRegistry: ToolRegistry = {
     if (!TOOL_NAME.test(toolName)) throw invalid("TOOL_NOT_FOUND", "Unknown tool.", 404);
     const row = await ownedRow(db, caller.orgId, toolName);
     if (!row) throw invalid("TOOL_NOT_FOUND", "Unknown tool.", 404);
-    if ((row.enabled ?? 1) === 0) throw invalid("TOOL_DISABLED", `Tool "${toolName}" is already disabled.`, 409);
+    if (row.enabled === 0) throw invalid("TOOL_DISABLED", `Tool "${toolName}" is already disabled.`, 409);
     const now = new Date().toISOString();
     await db
       .prepare("UPDATE tool_enrollments SET enabled=0,updated_at=? WHERE org_id=? AND tool_name=?")

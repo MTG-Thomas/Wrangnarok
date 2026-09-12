@@ -104,7 +104,7 @@ export function validateContractDocument(value: unknown): { operationCount: numb
   }
   const version =
     doc.info && typeof doc.info === "object" && typeof (doc.info as { version?: unknown }).version === "string"
-      ? ((doc.info as { version: string }).version.slice(0, 64) ?? "")
+      ? (doc.info as { version: string }).version.slice(0, 64)
       : "";
   if (!version) throw invalid("OPENAPI_CONTRACT_INVALID", "The OpenAPI contract needs info.version.");
   if (!doc.paths || typeof doc.paths !== "object" || Array.isArray(doc.paths)) {

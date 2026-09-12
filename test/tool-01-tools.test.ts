@@ -229,10 +229,20 @@ describe("tool enrollment (TOOL-01 opt-in)", () => {
     // Unknown-row disable 404s.
     const ghost = await worker.fetch(call("/api/tools/ghost_tool/disable", "POST", {}), bindings);
     expect(ghost.status).toBe(404);
-    // Direct registry: non-UUID saga enrollment fails; unmigrated stores fail.
+    // Direct registry: non-UUID saga enrollment fails; non-object bodies
+    // and regex-failing names fail before any D1 read.
     await expect(
       toolRegistry.enroll(bindings.DB, principal, { id: "nope", name: "x", revision: "r", description: "d" }, {}),
     ).rejects.toMatchObject({ code: "UNKNOWN_SAGA" });
+    await expect(toolRegistry.enroll(bindings.DB, principal, helloSaga, "nope")).rejects.toMatchObject({
+      code: "INVALID_TOOL",
+    });
+    await expect(toolRegistry.resolve(bindings.DB, principal, "BAD NAME!", SAGA_CATALOG)).rejects.toMatchObject({
+      code: "TOOL_NOT_FOUND",
+    });
+    await expect(toolRegistry.disable(bindings.DB, principal, "BAD NAME!")).rejects.toMatchObject({
+      code: "TOOL_NOT_FOUND",
+    });
     // liveRow null row: resolve on an empty org answers TOOL_NOT_FOUND.
     await expect(
       toolRegistry.resolve(
