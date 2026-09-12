@@ -212,6 +212,7 @@ import {
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "./sagas";
 import { describeContract, SDK_DOC_PATH } from "./sdk";
 import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
+import { listExecutionLogs, parseLogSearchQuery, parseLogTailQuery, searchExecutionLogs } from "./logs";
 import { deploymentSecretsFromEnv, scrubValueWithDeploymentSecrets } from "./secrets";
 import { logRequest } from "./usage";
 export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
@@ -405,11 +406,16 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const isOrgPath =
       url.pathname === "/api/orgs" || url.pathname.startsWith("/api/orgs/") || url.pathname.startsWith("/api/users/");
     const isOrgHistory = /^\/api\/orgs\/[0-9a-fA-F-]{36}\/executions$/.test(url.pathname) && request.method === "GET";
-    // Query strings are deny-by-default: only the history list routes,
-    // the table query/count routes, and the file structural list and byte
+    // Query strings are deny-by-default: only the history list routes, the
+    // table query/count routes, the file structural list and byte routes,
+    // the OBS-02 log tail and log search, plus the OPS-01/FILE-02/APP-02
     // routes take them, each through its own allowlisted parser (anything
     // else is UNSUPPORTED_QUERY).
     const historyList = url.pathname === "/api/executions" || isOrgHistory;
+    // OBS-02 (issue #153): scoped log tail plus operator search.
+    const logQueryList =
+      (url.pathname === "/api/logs" && request.method === "GET") ||
+      (/^\/api\/executions\/[a-f0-9]{64}\/logs$/.test(url.pathname) && request.method === "GET");
     const tableQueryList =
       request.method === "GET" && /^\/api\/tables\/[a-z0-9][a-z0-9-]{0,63}\/(rows|count)$/.test(url.pathname);
     // OPS-01 (ADR 020): the audit list and notifications list take query
@@ -432,6 +438,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (
       url.search &&
       !(historyList && request.method === "GET") &&
+      !logQueryList &&
       !tableQueryList &&
       !opsQueryList &&
       !artifactQuery &&
@@ -653,6 +660,29 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         503,
         "CANCELLATION_UNCONFIRMED",
         "Cancellation could not be confirmed. Retry the same cancel request.",
+      );
+    }
+    if (url.pathname === "/api/logs" && request.method === "GET") {
+      // Operator log search (OBS-02): the caller's own rows only, filterable
+      // by date/level/Saga, cursor-paginated in seq order. D1 is the source
+      // of truth; this is a polling view, never a live stream.
+      return json(
+        scrubValueWithDeploymentSecrets(
+          await searchExecutionLogs(env.DB, caller, parseLogSearchQuery(url.searchParams)),
+          env,
+        ),
+      );
+    }
+    const logTail = /^\/api\/executions\/([a-f0-9]{64})\/logs$/.exec(url.pathname);
+    if (logTail?.[1] && request.method === "GET") {
+      // Scoped read/tail for one Execution (OBS-02): owner-only, DEBUG hidden
+      // unless explicitly requested, cursor-paginated in seq order. Reconnect
+      // backfills by refetching from the last seen cursor (see mergeLogPages).
+      return json(
+        scrubValueWithDeploymentSecrets(
+          await listExecutionLogs(env.DB, caller, logTail[1], parseLogTailQuery(url.searchParams)),
+          env,
+        ),
       );
     }
     const match = /^\/api\/executions\/([a-f0-9]{64})$/.exec(url.pathname);

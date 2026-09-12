@@ -29,6 +29,8 @@ import type {
   ExecutionDetail,
   ExecutionHistoryResponse,
   ExecutionStatus,
+  LogEntry,
+  LogPage,
   NotificationsResponse,
   FileLocation,
   FileLocationsResponse,
@@ -156,6 +158,63 @@ export async function fetchExecutionDetail(id: string): Promise<ExecutionDetail>
 
 /** Terminal Execution statuses: polling stops here (mirrors upstream's terminal set). */
 export const TERMINAL_STATUSES: readonly ExecutionStatus[] = ["Succeeded", "Failed", "TimedOut", "Cancelled"];
+
+function isLogEntry(value: unknown): value is LogEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["seq"] === "number" &&
+    typeof v["executionId"] === "string" &&
+    typeof v["level"] === "string" &&
+    typeof v["message"] === "string" &&
+    typeof v["createdAt"] === "string"
+  );
+}
+
+function isLogPage(value: unknown): value is LogPage {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v["logs"]) || typeof v["hasMore"] !== "boolean") return false;
+  if (!(v["logs"] as unknown[]).every(isLogEntry)) return false;
+  return !("nextCursor" in v) || typeof v["nextCursor"] === "string" || v["nextCursor"] === null;
+}
+
+export interface LogTailQuery {
+  level?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+/** GET /api/executions/:id/logs — scoped author-log tail for one Execution.
+ * DEBUG rows are hidden unless the caller asks (level=DEBUG). Polling view
+ * over durable rows: reconnect by refetching from nextCursor. */
+export async function fetchExecutionLogs(id: string, query: LogTailQuery = {}): Promise<LogPage> {
+  if (!/^[a-f0-9]{64}$/.test(id)) throw new Error("Unexpected Execution ID shape.");
+  const params = new URLSearchParams();
+  if (query.level) params.set("level", query.level);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.cursor) params.set("cursor", query.cursor);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await get(`/api/executions/${id}/logs${suffix}`);
+  if (!isLogPage(data)) throw new Error("Unexpected log page shape.");
+  return data;
+}
+
+/** Merge a freshly polled page into the client's durable view: dedupe by seq
+ * (reconnect replays are idempotent) and keep deterministic seq order. Pure;
+ * shared with the CLI follow mode. */
+export function mergeLogPages(existing: readonly LogEntry[], page: readonly LogEntry[]): LogEntry[] {
+  const seen = new Set(existing.map((entry) => entry.seq));
+  const merged = [...existing];
+  for (const entry of page) {
+    if (!seen.has(entry.seq)) {
+      seen.add(entry.seq);
+      merged.push(entry);
+    }
+  }
+  merged.sort((a, b) => a.seq - b.seq);
+  return merged;
+}
 
 export function isTerminalStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
