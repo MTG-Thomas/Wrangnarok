@@ -108,6 +108,7 @@ import {
   parseSmokeInput,
   parseSubmission,
   smokeSaga,
+  UUID,
 } from "./domain";
 import type { Principal, TerminateOutcome } from "./domain";
 import {
@@ -239,7 +240,18 @@ import {
 } from "./tables";
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "./sagas";
 import { describeContract, SDK_DOC_PATH, SDK_VERSION } from "./sdk";
-import { cancelExecution, listHistory, submit, summary, visibleExecution, workflowForSaga } from "./executions";
+import {
+  cancelExecution,
+  listHistory,
+  loadSagaPolicy,
+  parseStoredPolicy,
+  policySnapshot,
+  storeSagaPolicy,
+  submit,
+  summary,
+  visibleExecution,
+  workflowForSaga,
+} from "./executions";
 import { listExecutionLogs, parseLogSearchQuery, parseLogTailQuery, searchExecutionLogs } from "./logs";
 import { deploymentSecretsFromEnv, scrubValueWithDeploymentSecrets } from "./secrets";
 import { logRequest } from "./usage";
@@ -508,6 +520,52 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       // Static Git-owned Catalog (ADR 002): discovery metadata only.
       // D1 Execution rows mirror saga_id/name/revision but never drive behavior.
       return json({ sagas: SAGA_CATALOG });
+    const policyRoute = /^\/api\/sagas\/([0-9a-f-]{36})\/policy$/.exec(url.pathname);
+    if (policyRoute?.[1]) {
+      // RUN-01 persisted runtime policy (ADR 018): operator-managed,
+      // Organization-scoped environment state, never Saga source. GET inspects
+      // the effective policy (persisted row or code default); PUT merges a
+      // partial body over the current row. Caller scoping is the same
+      // org/requester boundary as reads: unknown Sagas 404, never a leak.
+      const sagaId = policyRoute[1].toLowerCase();
+      if (!UUID.test(sagaId)) throw new Fault(400, "INVALID_SAGA_ID", "sagaId must be a stable Saga UUID.");
+      const entry = SAGA_CATALOG.find((saga) => saga.id.toLowerCase() === sagaId);
+      if (!entry) throw new Fault(404, "NOT_FOUND", "Not found.");
+      if (request.method === "GET") {
+        const record = await loadSagaPolicy(env.DB, caller.orgId, entry.id);
+        return json({
+          policy: {
+            sagaId: entry.id,
+            sagaName: entry.name,
+            version: record.version,
+            updatedAt: record.updatedAt,
+            ...record.policy,
+          },
+        });
+      }
+      if (request.method === "PUT") {
+        requireJson(request);
+        // Operator gate (Phase 0, explicit): policy writes carry an
+        // `X-Operator: allow-policy-write` header minted by the local
+        // operator harness (scripts + tests). Ordinary callers never send
+        // it, so they read policy but cannot change it (403). Phase 3
+        // replaces this header with the membership/role table (AUTH-02);
+        // the routes and policy shapes do not change.
+        if (request.headers.get("X-Operator") !== "allow-policy-write") {
+          throw new Fault(403, "FORBIDDEN", "Only an operator identity may change Saga runtime policy.");
+        }
+        const record = await storeSagaPolicy(env.DB, caller.orgId, entry.id, await boundedJson(request.body));
+        return json({
+          policy: {
+            sagaId: entry.id,
+            sagaName: entry.name,
+            version: record.version,
+            updatedAt: record.updatedAt,
+            ...record.policy,
+          },
+        });
+      }
+    }
     if (url.pathname === SDK_DOC_PATH && request.method === "GET")
       // DEV-01 versioned SDK contract (issue #140): machine-readable
       // descriptor of the public author/automation surface. Authenticated
@@ -764,6 +822,10 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
           {
             ...summary(row),
             runtimeStatus,
+            // RUN-01 (ADR 018): the applied policy snapshot rides detail so
+            // operators can inspect what this Execution ran under, even after
+            // later policy edits. Old rows (NULL) report the code default.
+            policy: { sagaId: row.saga_id, ...JSON.parse(policySnapshot(parseStoredPolicy(row.policy_json ?? null))) },
             input: JSON.parse(row.input_json),
             result: row.result_json ? JSON.parse(row.result_json) : null,
             error: row.error_json ? JSON.parse(row.error_json) : null,
@@ -2445,7 +2507,7 @@ async function routeOrgs(request: Request, env: Bindings, ctx: CallerCtx, url: U
   const del = /^\/api\/orgs\/([0-9a-fA-F-]{36})$/.exec(pathname);
   if (del?.[1] && request.method === "DELETE") {
     requireInstanceAdmin(ctx);
-    return json(await deleteOrg(env.DB, parseOrgId(del[1])));
+    return json(await deleteOrg(env.DB, parseOrgId(del[1]), { files: env.FILES, artifacts: env.ARTIFACTS }));
   }
   const preview = /^\/api\/orgs\/([0-9a-fA-F-]{36})\/delete-preview$/.exec(pathname);
   if (preview?.[1] && request.method === "GET") {
