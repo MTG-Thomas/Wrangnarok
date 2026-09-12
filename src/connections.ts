@@ -17,7 +17,7 @@
 //   per-tenant secret storage.
 import { Fault, UUID } from "./domain";
 import type { Principal } from "./domain";
-import { integrationById, validateConnectionConfig } from "./integrations";
+import { assertSafeEndpoint, integrationById, validateConnectionConfig } from "./integrations";
 import type { ConnectionView } from "./integrations";
 import { scrubValueWithDeploymentSecrets } from "./secrets";
 import type { HaloCredentials, NinjaCredentials } from "./bindings";
@@ -152,6 +152,12 @@ function parseEnabled(value: unknown): boolean | undefined {
   return value;
 }
 
+/** Deployment environment carried into Connection validation (issue #239).
+ * Routes pass the Worker's ENVIRONMENT var; unset means local/fixture.
+ * Echo endpoints gate on it: the loopback default serves local only. */
+export interface ConnectionWriteEnv {
+  readonly environment?: string;
+}
 /** Create a loose Connection mapping for the caller's Organization (CON-01).
  * One mapping per (org, Integration): re-creating answers 409. Managed rows
  * are installer-owned; this path creates loose rows only, and only when no
@@ -162,6 +168,7 @@ export async function createConnection(
   caller: Principal,
   integrationId: string,
   body: ConnectionWrite,
+  writeEnv: ConnectionWriteEnv = {},
 ): Promise<ConnectionView> {
   if (!UUID.test(integrationId)) throw invalid("UNKNOWN_INTEGRATION", "Unknown Integration id.", 404);
   const def = integrationById(integrationId);
@@ -169,7 +176,7 @@ export async function createConnection(
   if (body.config === undefined) {
     throw invalid("CONNECTION_SCHEMA_INVALID", "A Connection create needs a config object.");
   }
-  const config = validateConnectionConfig(def, body.config);
+  const config = validateConnectionConfig(def, body.config, { environment: writeEnv.environment });
   const displayName = parseDisplayName(body.displayName);
   const enabled = parseEnabled(body.enabled) ?? true;
   const existing = await ownedRow(db, caller, integrationId);
@@ -197,6 +204,7 @@ export async function updateConnection(
   caller: Principal,
   integrationId: string,
   body: ConnectionWrite,
+  writeEnv: ConnectionWriteEnv = {},
 ): Promise<ConnectionView> {
   if (!UUID.test(integrationId)) throw invalid("UNKNOWN_INTEGRATION", "Unknown Integration id.", 404);
   const def = integrationById(integrationId);
@@ -217,7 +225,7 @@ export async function updateConnection(
     body.config === undefined
       ? { endpoint: row.endpoint }
       : { endpoint: row.endpoint, ...(body.config as Record<string, unknown>) };
-  const config = validateConnectionConfig(def, merged);
+  const config = validateConnectionConfig(def, merged, { environment: writeEnv.environment });
   const displayName = body.displayName === undefined ? row.display_name : parseDisplayName(body.displayName);
   const enabled = parseEnabled(body.enabled) ?? (row.enabled ?? 1) === 1;
   const now = new Date().toISOString();
@@ -326,6 +334,19 @@ export async function testConnection(
         detail: `Deployment credential ${envVar} is not configured: refusing a half-credentialed test.`,
       };
     }
+  }
+  // Re-parse the persisted endpoint before any probe fetch: rows written
+  // before #236 or outside the validated paths fail closed here as invalid
+  // configuration, never as a vendor fetch to an unsafe target.
+  try {
+    assertSafeEndpoint(def.name, row.endpoint);
+  } catch {
+    return {
+      ok: false,
+      checkedAt,
+      code: "INVALID_CONNECTION",
+      detail: "This Connection endpoint is not a safe URL: update it before testing.",
+    };
   }
   const fetchImpl = vendor.fetchImpl ?? globalThis.fetch;
   try {

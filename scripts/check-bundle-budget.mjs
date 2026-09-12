@@ -96,14 +96,30 @@ import { join } from "node:path";
 // 446392 bytes: 952 bytes over the 435 KiB budget. Hand-written feature code,
 // no new dependencies (package.json unchanged versus main); deliberate
 // feature headroom only.
-// 2026-09-12 (TOOL-01 stacked over AUTH-01/RUN-01 main, issue #170): 490 KiB.
+// 2026-09-12 (sec-endpoint, issue #236): 445 KiB. The endpoint safe-URL policy
+// (src/integrations/index.ts: URL parse plus per-Integration transport/host
+// policy at persist time, assertSafeEndpoint guards in the echo/ninjaone
+// Actions and the management probe) measures 451460 bytes after a shrink pass
+// (short messages, no dead helpers): 900 bytes over the 440 KiB budget.
+// Hand-written security-boundary code, no new dependencies (package.json
+// unchanged versus main); deliberate feature headroom only.
+// 2026-09-12 (sec/response-hardening, issues #237 #238 #239): 450 KiB. The
+// response baseline (src/index.ts: inline security headers on the JSON
+// helper, Static Assets pass-through, and all raw file/artifact byte
+// responses; no re-wrap, no new dependencies) plus the echo
+// deployment-environment gate (src/integrations/index.ts, src/connections.ts:
+// opts.environment threading, two failure arms) measures 455735 bytes after
+// a shrink pass (direct header construction instead of Response re-wrapping):
+// 55 bytes over the 445 KiB budget. Hand-written security-boundary code,
+// package.json unchanged versus main; deliberate feature headroom only.
+// 2026-09-12 (TOOL-01 stacked over sec/response main, issue #170): 490 KiB.
 // The opt-in tool registry (4 routes + D1 tool_enrollments + SDK entries),
 // the inbound MCP gateway (JSON-RPC tools/list, tools/call, tools/search,
 // tools/describe over the membership gate), and the HaloPSA Code Mode host
 // (contract search/inspect plus host-mediated execute with policy, egress,
-// and provenance) measure ~475 KiB combined over the 440 KiB baseline.
-// Hand-written feature code, no new dependencies (package.json unchanged
-// versus main); deliberate feature headroom only.
+// and provenance) stack on the 450 KiB surface above. Hand-written feature
+// code, no new dependencies (package.json unchanged versus main);
+// deliberate feature headroom only.
 const BUDGET_BYTES = 490 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
