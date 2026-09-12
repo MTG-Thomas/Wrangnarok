@@ -44,6 +44,14 @@ accept a query string, and only each route's allowlisted keys.
 | `POST` | `/api/forms/:name/startup` | Mint a session-bound 30-minute handle with snapshot + provider options |
 | `GET` | `/api/forms/:name/providers` | Resolved select/multiselect options through the caller Table gate |
 | `POST` | `/api/forms/:name/submit` | Consume a startup handle (422 `STALE_FORM_HANDLE`), validate, merge defaults, submit or schedule |
+| `GET` | `/api/schedules` | Schedule summaries for this Organization (TRG-01) |
+| `POST` | `/api/schedules` | Create a schedule: one-off dueAt or recurring cron, Saga parse-gated (admin only) |
+| `POST` | `/api/schedules/preview` | Read-only next-tick preview: no D1 writes; non-UTC timezones record UTC-shift ticks |
+| `POST` | `/api/schedules/tick` | Operator-driven promotion of due windows (admin only) |
+| `GET` | `/api/schedules/:name` | Schedule detail with the delivery ledger |
+| `PUT` | `/api/schedules/:name` | Partial schedule update: enabled/cron/timezone/dueAt/input (admin only) |
+| `DELETE` | `/api/schedules/:name` | Delete a schedule and its delivery ledger; promoted Executions survive (admin only) |
+| `POST` | `/api/schedules/:name/cancel` | Disable a schedule plus optionally cancel one future Execution (admin only) |
 | `GET` | `/api/config` | Typed config rows for this Organization (secrets answer `[SECRET]`) |
 | `POST` | `/api/config` | Set a non-secret value or provision a secret reference (upsert by key) |
 | `PUT` | `/api/config/:id` | Update one row; omitted secret values preserve the reference |
@@ -106,7 +114,8 @@ Offline helpers (no network): `scaffoldSaga` (emit a `defineSaga` module),
 `localCatalog`, `describeContract`. Wire guards (`parseSagaCatalog`,
 `parseExecutionDetail`, `parseHistoryPage`, `parseFormList`,
 `parseFormDetail`, `parseFormStartup`, `parseFormProviders`,
-`parseFormSubmit`) fail loud with
+`parseFormSubmit`, `parseScheduleList`, `parseScheduleDetailValue`,
+`parseSchedulePreview`, `parseSchedulePromotions`) fail loud with
 `SDK_CLIENT_MISMATCH` instead of trusting the wire.
 
 ## CLI (`scripts/wrangnarok.mjs`: thin fetch calls, no Saga logic)
@@ -155,6 +164,19 @@ register endpoint by design):
 4. Rules: all I/O and nondeterminism inside `step.do()`; touch
    `ctx.integrations` / `ctx.db` / `ctx.secrets` / `ctx.config` only there; keep
    input/output JSON-serializable; declare `requiredIntegrations`
+   explicitly (even when empty); never put timeouts, retries, schedules,
+   endpoints, or access rules in source.
+5. `npm run check:sagas && npm test`.
+
+## What this SDK does not cover
+
+Tables beyond the shipped query/count/batch slice, agents,
+events, roles, and deploy/sync commands belong to their owning parity
+issues (`docs/sdk-capability-map.md` section 1, `docs/upstream-parity.md`).
+Dynamic forms ship as the supported `dynamic-forms` capability (FORM-02,
+issue #155); embed/publication stays tracked under EMBED-01. The contract
+descriptor lists deferred items as `tracked`, never as supported.
+rations`
    explicitly (even when empty); never put timeouts, retries, schedules,
    endpoints, or access rules in source.
 5. `npm run check:sagas && npm test`.

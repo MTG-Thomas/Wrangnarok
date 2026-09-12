@@ -73,8 +73,11 @@ it("marks unported nav entries disabled and links each tracking issue", () => {
     expect(html).toContain(entry.issue as string);
   }
   expect(html).toContain("/issues/15");
-  expect(html).toContain("/issues/16");
   expect(html).toContain("/issues/18");
+  // TRG-01 (issue #137): the Schedules entry shipped enabled; the /issues/16
+  // umbrella still tracks the remaining Trigger work (topics/TRG-03), so it
+  // is not pinned here anymore — NAV_ENTRIES no longer carries it.
+  expect(html).toContain("/schedules");
 });
 
 it("enables the Dashboard nav entry at /dashboard", () => {

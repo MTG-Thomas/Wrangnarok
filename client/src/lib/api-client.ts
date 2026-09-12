@@ -46,6 +46,10 @@ import type {
   IntegrationSummary,
   SagasResponse,
   SagaSummary,
+  ScheduleDetailResponse,
+  SchedulePreview,
+  ScheduleSummary,
+  SchedulesResponse,
 } from "./client-types";
 
 const TOKEN_KEY = "wrangnarok.token";
@@ -1012,4 +1016,60 @@ export async function submitForm(
     ...(data.scheduled === true ? { scheduled: true as const } : {}),
     ...(typeof data.scheduleAt === "string" ? { scheduleAt: data.scheduleAt } : {}),
   };
+}
+
+const SCHEDULE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+function checkScheduleName(name: string): void {
+  if (!SCHEDULE_NAME.test(name)) throw new Error("Unexpected schedule name shape.");
+}
+
+function isScheduleSummary(value: unknown): value is ScheduleSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v["id"] === "string" &&
+    STABLE_UUID.test(v["id"]) &&
+    typeof v["name"] === "string" &&
+    SCHEDULE_NAME.test(v["name"]) &&
+    typeof v["sagaId"] === "string" &&
+    STABLE_UUID.test(v["sagaId"]) &&
+    typeof v["enabled"] === "boolean" &&
+    (v["kind"] === "one-off" || v["kind"] === "recurring")
+  );
+}
+
+/** GET /api/schedules — org-scoped schedule summaries (TRG-01 list). */
+export async function listSchedules(): Promise<SchedulesResponse> {
+  const data = await get("/api/schedules");
+  if (typeof data !== "object" || data === null || !Array.isArray((data as { schedules?: unknown }).schedules)) {
+    throw new Error("Unexpected schedules response shape.");
+  }
+  const schedules = (data as { schedules: unknown[] }).schedules;
+  if (!schedules.every(isScheduleSummary)) throw new Error("Unexpected schedules response shape.");
+  return { schedules };
+}
+
+/** GET /api/schedules/:name — schedule detail with the delivery ledger. */
+export async function fetchScheduleDetail(name: string): Promise<ScheduleDetailResponse> {
+  checkScheduleName(name);
+  const data = await get(`/api/schedules/${name}`);
+  const schedule = (data as { schedule?: unknown }).schedule;
+  const deliveries = (data as { deliveries?: unknown }).deliveries;
+  if (!isScheduleSummary(schedule) || !Array.isArray(deliveries)) {
+    throw new Error("Unexpected schedule response shape.");
+  }
+  return { schedule, deliveries: deliveries as ScheduleDetailResponse["deliveries"] };
+}
+
+/** POST /api/schedules/preview — read-only next-tick preview (no D1 writes). */
+export async function previewSchedule(body: {
+  kind?: string;
+  cron?: string;
+  timezone?: string;
+  dueAt?: string;
+}): Promise<SchedulePreview> {
+  const data = (await postJson("/api/schedules/preview", body)) as { kind?: unknown };
+  if (data.kind !== "one-off" && data.kind !== "recurring") throw new Error("Unexpected preview response shape.");
+  return data as SchedulePreview;
 }

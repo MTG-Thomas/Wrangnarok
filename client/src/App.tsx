@@ -14,11 +14,18 @@ import { FilesList } from "./pages/Files";
 import { FormDetailView, FormsList } from "./pages/Forms";
 import { NotificationsList } from "./pages/Notifications";
 import { SagasList } from "./pages/Sagas";
+import { ScheduleDetailView, SchedulesList } from "./pages/Schedules";
 
 function FormRoute(): React.JSX.Element {
   const { name } = useParams();
   if (!name) return <p>Not found. Try Forms.</p>;
   return <FormDetailView name={name} />;
+}
+
+function ScheduleRoute(): React.JSX.Element {
+  const { name } = useParams();
+  if (!name) return <p>Not found. Try Schedules.</p>;
+  return <ScheduleDetailView name={name} />;
 }
 
 export function App(): React.JSX.Element {
@@ -43,6 +50,8 @@ export function App(): React.JSX.Element {
           <Route path="/files" element={<FilesList />} />
           <Route path="/forms" element={<FormsList />} />
           <Route path="/forms/:name" element={<FormRoute />} />
+          <Route path="/schedules" element={<SchedulesList />} />
+          <Route path="/schedules/:name" element={<ScheduleRoute />} />
           <Route path="/connections" element={<ConnectionsList />} />
           <Route path="*" element={<p>Not found. Try History.</p>} />
         </Routes>

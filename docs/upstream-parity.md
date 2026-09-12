@@ -109,9 +109,9 @@ Upstream evidence (paths relative to upstream repo root):
 
 ## TRG-01: Run one-off and recurring schedules with durable due-time and cancellation semantics
 
-Phase 2; **Missing**; existing issue: new
+Phase 2; **Implemented**; existing issue: #137
 
-Local status: ADR 012 is an investigation only. Worker has no scheduled handler or durable Scheduled execution state.
+Local status: Schedules persist as org-scoped environment rows (migration 0016) binding a name to a Saga UUID with kind (one-off dueAt or recurring cron plus timezone label), enablement, parse-gated input, and creator run-as identity. Eight routes (list/create/preview/manual-tick/read/update/delete/cancel) ride the AUTH-01 membership gate with admin-only mutation; a per-minute Cron tick plus the operator manual tick promote due windows through the standard submit protocol with deterministic sch- derived keys, PRIMARY KEY claim (exactly-once under racing ticks), and conditional advance. ADR 012 accepted design recorded in docs/architecture/012-phase2-triggers.md.
 
 Depends: AUTH-02, RUN-01
 

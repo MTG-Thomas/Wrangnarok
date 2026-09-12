@@ -497,3 +497,49 @@ export interface FormSubmitResponse {
   scheduled?: boolean;
   scheduleAt?: string;
 }
+
+/** Schedule kind served by the Wrangnarök Worker (TRG-01, issue #137). */
+export type ScheduleKind = "one-off" | "recurring";
+
+/** Row shape for GET /api/schedules (summaries in name order). */
+export interface ScheduleSummary {
+  id: string;
+  name: string;
+  sagaId: string;
+  enabled: boolean;
+  kind: ScheduleKind;
+  cron: string | null;
+  timezone: string;
+  nextDueAt: string | null;
+  lastWindow: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SchedulesResponse {
+  schedules: ScheduleSummary[];
+}
+
+/** One claimed promotion window (schedule, window, Execution receipt). */
+export interface ScheduleDelivery {
+  window: string;
+  executionId: string;
+  createdAt: string;
+}
+
+/** Detail shape for GET /api/schedules/:name (summary plus ledger). */
+export interface ScheduleDetailResponse {
+  schedule: ScheduleSummary;
+  deliveries: ScheduleDelivery[];
+}
+
+/** Read-only next-tick preview (POST /api/schedules/preview, no D1 writes). */
+export interface SchedulePreview {
+  kind: ScheduleKind;
+  cron?: string;
+  timezone?: string;
+  dueAt?: string;
+  nextDueAt?: string;
+  window?: string;
+  utcShifted?: boolean;
+}

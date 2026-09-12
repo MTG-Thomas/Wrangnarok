@@ -35,9 +35,10 @@ context, and typed errors. Wrangnarok maps them as follows:
 | `knowledge` | None | Tracked | Knowledge/memory belongs to AI-05/AI-06. |
 | `agents`, `ai` (complete/stream) | None | Tracked | Agents/AI belong to AI-01/AI-02/AI-03. |
 | `events` (sources/subscriptions) | None | Tracked | Events belong to TRG-03. |
+| `workflows` schedules (one-off + recurring) | `listSchedules` / `getSchedule` / `createSchedule` / `updateSchedule` / `deleteSchedule` / `previewSchedule` / `tickSchedules` / `cancelSchedule` in `src/sdk.ts` over `GET/POST /api/schedules`, `POST /api/schedules/preview`, `POST /api/schedules/tick`, `GET/PUT/DELETE /api/schedules/:name`, `POST /api/schedules/:name/cancel` | Supported | Schedules (TRG-01, issue #137): one-off dueAt plus recurring cron with timezone labels, Saga parse-gated input, derived sch- key promotion with exactly-once claim, per-minute Cron plus manual tick, disable/delete/cancel lifecycle. UTC-shifted ticks documented; DST/missed-tick defers to the next tick. |
 | Typed errors (`UserError`, `WorkflowError`, `ValidationError`, ...) | `SdkError` + `SDK_ERROR_CODES` in `src/sdk.ts` | Supported | Same envelope `{ error: { code, message } }`; callers switch on `code`. |
 | Enums (`ExecutionStatus`, `ConfigType`, `FormFieldType`) | `SDK_TERMINAL_STATUSES`, `SDK_ERROR_CODES`, `ExecutionStatus` in `src/domain.ts` plus `FORM_FIELD_TYPES` in `src/forms.ts` | Supported | Statuses, error codes, and the closed 17-type form field set are modeled; config types stay with CON-02. |
-| SDK models (single source of truth) | Wire guards (`parseSagaCatalog`, `parseExecutionDetail`, `parseHistoryPage`, `parseFormList`, `parseFormDetail`, `parseFormStartup`, `parseFormProviders`, `parseFormSubmit`) | Supported | Guards fail loud with `SDK_CLIENT_MISMATCH` instead of trusting the wire. |
+| SDK models (single source of truth) | Wire guards (`parseSagaCatalog`, `parseExecutionDetail`, `parseHistoryPage`, `parseFormList`, `parseFormDetail`, `parseFormStartup`, `parseFormProviders`, `parseFormSubmit`, `parseScheduleList`, `parseScheduleDetailValue`, `parseSchedulePreview`, `parseSchedulePromotions`) | Supported | Guards fail loud with `SDK_CLIENT_MISMATCH` instead of trusting the wire. |
 
 ## 2. CLI surface (`api/bifrost/cli.py` vs `scripts/wrangnarok.mjs`)
 

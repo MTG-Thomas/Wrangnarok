@@ -143,10 +143,27 @@ describe("SDK contract version and descriptor (issue #140)", () => {
       "INVALID_PREFILL",
       "PREFILL_NOT_ALLOWED",
       "INVALID_SCHEDULE",
+      "SCHEDULE_CONFLICT",
+      "SCHEDULE_UNCONFIRMED",
       "IDEMPOTENCY_CONFLICT",
     ]) {
       expect(SDK_ERROR_CODES).toContain(code);
     }
+    // TRG-01 (issue #137): schedules are a supported capability with its
+    // routes in the descriptor.
+    expect(descriptor.capabilities.find((entry) => entry.name === "recurring-schedules")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining([
+        "GET /api/schedules",
+        "POST /api/schedules",
+        "POST /api/schedules/preview",
+        "POST /api/schedules/tick",
+        "GET /api/schedules/:name",
+        "PUT /api/schedules/:name",
+        "DELETE /api/schedules/:name",
+        "POST /api/schedules/:name/cancel",
+      ]),
+    );
     // RUN-01 (ADR 018): persisted runtime policy is a supported capability
     // with its routes and error codes in the contract.
     expect(descriptor.capabilities.find((entry) => entry.name === "runtime-policy")?.status).toBe("supported");

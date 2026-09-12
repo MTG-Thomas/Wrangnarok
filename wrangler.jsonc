@@ -21,6 +21,15 @@
   "workers_dev": false,
   "preview_urls": false,
   "routes": [],
+  // TRG-01 (issue #137): the Cron Trigger is the clock that promotes due
+  // schedule windows. The tick only scans the bounded due index and promotes
+  // through the standard submit protocol (admission policy, Saga identity,
+  // dispatch fencing unchanged) — it never writes TimedOut, never sweeps,
+  // never infers a terminal state (the timeout-sweeper tripwire pins this).
+  // Cadence is every minute; per-schedule cadence lives in D1 rows, not here.
+  "triggers": {
+    "crons": ["* * * * *"],
+  },
   "assets": {
     "directory": "./client/dist/",
     "binding": "ASSETS",

@@ -1,0 +1,3 @@
+CREATE TABLE schedules(id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES organizations(id), name TEXT NOT NULL, saga_id TEXT NOT NULL, created_by TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), kind TEXT NOT NULL CHECK(kind IN ('one-off','recurring')), cron TEXT, timezone TEXT NOT NULL DEFAULT 'UTC', input_json TEXT NOT NULL CHECK(length(input_json) <= 4096), next_due_at TEXT, last_window TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(org_id, name));
+CREATE INDEX schedules_due ON schedules(enabled, next_due_at);
+CREATE TABLE schedule_deliveries(schedule_id TEXT NOT NULL REFERENCES schedules(id), window TEXT NOT NULL, execution_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(schedule_id, window));

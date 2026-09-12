@@ -98,6 +98,7 @@ import {
   executionId,
   Fault,
   helloSaga,
+  lookupSaga,
   ninjaSaga,
   object,
   parseCallerKey,
@@ -135,6 +136,27 @@ import {
   vendorChallenge,
 } from "./endpoints";
 import type { EndpointRow } from "./endpoints";
+import {
+  advanceSchedule,
+  cancelScheduledExecution,
+  claimWindow,
+  createSchedule,
+  deleteSchedule,
+  disableSchedule,
+  dueSchedules,
+  listScheduleDeliveries,
+  listSchedules,
+  loadSchedule,
+  nextScheduleInstant,
+  parseScheduleCron,
+  parseScheduleDueAt,
+  parseScheduleName,
+  parseScheduleTimezone,
+  scheduleSummary,
+  scheduleWindowKey,
+  updateSchedule,
+  windowForInstant,
+} from "./schedules";
 import {
   consumeStartupHandle,
   deleteForm,
@@ -471,7 +493,67 @@ export default {
     });
     return response;
   },
+  // TRG-01 Cron tick (issue #137): the clock that promotes due schedule
+  // windows through the standard submit protocol. Bounded scan plus
+  // per-window claim: racing ticks converge on a single winner and a
+  // failed promotion never advances the row (the next tick retries).
+  async scheduled(_controller: ScheduledController, env: Bindings): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const due = await dueSchedules(env.DB, nowIso);
+    for (const { row, window } of due) {
+      const saga = SAGA_DEFINITIONS.find((entry) => entry.id === row.saga_id);
+      if (!saga) continue;
+      const principal: Principal = { orgId: row.org_id, userId: row.created_by };
+      const key = scheduleWindowKey(row.id, window);
+      let executionIdValue: string;
+      try {
+        executionIdValue = (await submit(env, principal, key, { ...saga }, JSON.parse(row.input_json))).executionId;
+      } catch {
+        continue;
+      }
+      const claimed = await claimWindow(env.DB, row.id, window, executionIdValue).catch(() => false);
+      if (!claimed) continue;
+      await advanceSchedule(env.DB, row, Date.now()).catch(() => undefined);
+    }
+  },
 } satisfies ExportedHandler<Bindings>;
+
+/** TRG-01 manual-tick promotion shared by POST /api/schedules/tick.
+ * Promotes due rows for one Organization: deterministic derived keys enter
+ * the standard submit protocol (admission policy, Saga identity, dispatch
+ * fencing all apply unchanged), the PRIMARY KEY claim keeps racing ticks
+ * to a single winner, and a failed promotion never advances the row. */
+async function promoteDueSchedules(
+  env: Bindings,
+  caller: Principal,
+): Promise<{ schedule: string; window: string; executionId: string; replayed: boolean }[]> {
+  const nowIso = new Date().toISOString();
+  const due = await dueSchedules(env.DB, nowIso);
+  const promoted: { schedule: string; window: string; executionId: string; replayed: boolean }[] = [];
+  for (const { row, window } of due) {
+    if (row.org_id !== caller.orgId) continue;
+    const saga = SAGA_DEFINITIONS.find((entry) => entry.id === row.saga_id);
+    if (!saga) continue;
+    const key = scheduleWindowKey(row.id, window);
+    let receipt: { executionId: string; replayed: boolean };
+    try {
+      receipt = await submit(
+        env,
+        { orgId: row.org_id, userId: row.created_by },
+        key,
+        { ...saga },
+        JSON.parse(row.input_json),
+      );
+    } catch {
+      continue;
+    }
+    const claimed = await claimWindow(env.DB, row.id, window, receipt.executionId).catch(() => false);
+    if (!claimed) continue;
+    await advanceSchedule(env.DB, row, Date.now()).catch(() => undefined);
+    promoted.push({ schedule: row.name, window, executionId: receipt.executionId, replayed: receipt.replayed });
+  }
+  return promoted;
+}
 
 /** Serialize a form definition for the designer/read surface (FORM-02):
  * full declaration metadata; the server stays authoritative. */
@@ -826,6 +908,130 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       const accepted = await submit(env, caller, key, saga, input);
       // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
       return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
+    }
+    if (url.pathname === "/api/schedules" && request.method === "GET") {
+      // TRG-01 schedule list: org-scoped summaries in name order. Operator
+      // read surface; ordinary members inspect, admins mutate below.
+      rejectQuery(url);
+      const rows = await listSchedules(env.DB, caller.orgId);
+      return json({ schedules: rows.map(scheduleSummary) });
+    }
+    if (url.pathname === "/api/schedules" && request.method === "POST") {
+      // TRG-01 schedule create: persisted environment state, never Saga
+      // source. Admin-only (schedule cadence is operator policy); input
+      // passes the Saga parse gate now so miswired rows fail at creation.
+      await requireManageOrg(env.DB, ctx, caller.orgId);
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as Record<string, unknown>;
+      const saga = typeof body.sagaId === "string" ? lookupSaga(body.sagaId.toLowerCase()) : null;
+      if (!saga) throw new Fault(400, "INVALID_SCHEDULE", "sagaId must be a known Saga UUID.");
+      const created = await createSchedule(
+        env.DB,
+        caller,
+        {
+          name: body.name as string,
+          sagaId: saga.id,
+          kind: body.kind as "one-off" | "recurring",
+          ...(body.cron === undefined ? {} : { cron: body.cron }),
+          ...(body.timezone === undefined ? {} : { timezone: body.timezone }),
+          ...(body.dueAt === undefined ? {} : { dueAt: body.dueAt }),
+          ...(body.input === undefined ? {} : { input: body.input }),
+          ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+        },
+        [{ ...saga }],
+      );
+      return json({ schedule: scheduleSummary(created.row) }, created.created ? 201 : 200);
+    }
+    if (url.pathname === "/api/schedules/preview" && request.method === "POST") {
+      // TRG-01 schedule preview: read-only next-tick computation, no D1
+      // writes. Ordinary members may preview; admins own mutation.
+      rejectQuery(url);
+      requireJson(request);
+      const body = (await boundedJson(request.body)) as Record<string, unknown>;
+      if (body.kind === "one-off" || (body.kind === undefined && body.dueAt !== undefined)) {
+        const dueAt = parseScheduleDueAt(body.dueAt);
+        return json({ kind: "one-off", dueAt, window: windowForInstant(dueAt) });
+      }
+      const cron = parseScheduleCron(body.cron);
+      const timezone = parseScheduleTimezone(body.timezone);
+      const nextDueAt = nextScheduleInstant(cron, Date.now());
+      return json({
+        kind: "recurring",
+        cron,
+        timezone,
+        nextDueAt,
+        window: windowForInstant(nextDueAt),
+        // Non-UTC labels record UTC-shift ticks: DST/missed-tick policy is
+        // documented on the SDK contract, not computed per-zone here.
+        utcShifted: timezone !== "UTC",
+      });
+    }
+    if (url.pathname === "/api/schedules/tick" && request.method === "POST") {
+      // TRG-01 manual tick: operator-driven promotion for tests and
+      // recovery. Admin-only; the Cron handler below shares promoteDue.
+      await requireManageOrg(env.DB, ctx, caller.orgId);
+      rejectQuery(url);
+      const promoted = await promoteDueSchedules(env, caller);
+      return json({ promoted });
+    }
+    const scheduleDetail = /^\/api\/schedules\/([a-z0-9][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (scheduleDetail?.[1]) {
+      const name = parseScheduleName(scheduleDetail[1]);
+      if (request.method === "GET") {
+        // TRG-01 schedule read: exact-org visibility; foreign rows 404.
+        rejectQuery(url);
+        const row = await loadSchedule(env.DB, caller.orgId, name);
+        if (!row) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
+        const deliveries = await listScheduleDeliveries(env.DB, row.id, 50);
+        return json({ schedule: scheduleSummary(row), deliveries });
+      }
+      if (request.method === "PUT") {
+        // TRG-01 schedule update: admin-only partial merge; kind/sagaId
+        // never change (delete plus recreate instead).
+        await requireManageOrg(env.DB, ctx, caller.orgId);
+        requireJson(request);
+        const body = (await boundedJson(request.body)) as Record<string, unknown>;
+        const saga = lookupSaga((await loadSchedule(env.DB, caller.orgId, name))?.saga_id ?? "");
+        const updated = await updateSchedule(
+          env.DB,
+          caller,
+          name,
+          {
+            ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+            ...(body.cron === undefined ? {} : { cron: body.cron }),
+            ...(body.timezone === undefined ? {} : { timezone: body.timezone }),
+            ...(body.dueAt === undefined ? {} : { dueAt: body.dueAt }),
+            ...(body.input === undefined ? {} : { input: body.input }),
+          },
+          saga ? [{ ...saga }] : [],
+        );
+        return json({ schedule: scheduleSummary(updated) });
+      }
+      if (request.method === "DELETE") {
+        // TRG-01 schedule delete: admin-only; promoted Executions survive.
+        await requireManageOrg(env.DB, ctx, caller.orgId);
+        rejectQuery(url);
+        await deleteSchedule(env.DB, caller, name);
+        return json({ deleted: name });
+      }
+    }
+    const scheduleCancel = /^\/api\/schedules\/([a-z0-9][a-z0-9-]{0,63})\/cancel$/.exec(url.pathname);
+    if (scheduleCancel?.[1] && request.method === "POST") {
+      // TRG-01 schedule cancel: disable the schedule plus cancel one named
+      // future Execution. Admin-only; dispatched work cancels through the
+      // standard Execution cancel route instead.
+      await requireManageOrg(env.DB, ctx, caller.orgId);
+      requireJson(request);
+      const name = parseScheduleName(scheduleCancel[1]);
+      const body = (await boundedJson(request.body)) as Record<string, unknown>;
+      const saga = lookupSaga((await loadSchedule(env.DB, caller.orgId, name))?.saga_id ?? "");
+      const disabled = await disableSchedule(env.DB, caller, name, saga ? [{ ...saga }] : []);
+      let cancelled: string | null = null;
+      if (typeof body.executionId === "string" && /^[a-f0-9]{64}$/.test(body.executionId)) {
+        await cancelScheduledExecution(env.DB, caller, body.executionId);
+        cancelled = body.executionId;
+      }
+      return json({ schedule: scheduleSummary(disabled), cancelled });
     }
     const formList = url.pathname === "/api/forms";
     if (formList && request.method === "GET") {

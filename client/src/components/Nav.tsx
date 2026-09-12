@@ -79,10 +79,10 @@ export const NAV_ENTRIES: NavEntry[] = [
     phase: "Phase 3 (#146)",
   },
   {
-    label: "Triggers",
-    enabled: false,
-    issue: `${REPO}/issues/16`,
-    phase: "Phase 2 / Phase 4",
+    label: "Schedules",
+    to: "/schedules",
+    enabled: true,
+    phase: "Phase 2 (#137)",
   },
   {
     label: "Artifacts",

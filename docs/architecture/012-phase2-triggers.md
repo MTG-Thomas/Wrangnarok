@@ -1,8 +1,10 @@
 # ADR 012: Phase 2 Trigger investigation — schedules and webhooks
 
-**Status:** Investigation for issue #76. NOT accepted. Implements no code;
-constrains later implementation lanes. Defers to ADR 001 (Execution identity,
-idempotency) and ADR 010 (OrgCtx, declared requirements) where silent.
+**Status:** Accepted for schedules (TRG-01, issue #137, implemented
+2026-09-12); webhooks shipped separately under TRG-02 (ADR 018); topic
+events stay deferred. Implements the schedule slice; constrains later
+lanes. Defers to ADR 001 (Execution identity, idempotency) and ADR 010
+(OrgCtx, declared requirements) where silent.
 
 ## Context
 
@@ -17,7 +19,12 @@ context. Upstream finding 3 adds the counterweight: runtime policy
 source trivia — so Trigger configuration must never become Saga decorator
 metadata.
 
-## Decision direction (not yet decided)
+## Decision direction (accepted for schedules, TRG-01)
+
+The identity/due-time design below shipped as `src/schedules.ts` plus
+migration 0016, eight routes, the per-minute Cron tick, and the typed SDK
+surface (`test/schedules.test.ts` proves it). Webhooks shipped under TRG-02
+(ADR 018). What follows stays normative for later lanes.
 
 ### Webhook Triggers: a thin authenticated route over submit
 
@@ -125,12 +132,26 @@ the digest echo-503 test is the template).
 
 ## Consequences of this investigation
 
-- No new primitive, migration, binding, or route in this slice.
-- The next webhook lane implements one vendor webhook on the submit protocol
-  with its own tests (auth, redelivery convergence, 424 posture) and no ADR
-  unless it changes shared contracts.
-- The next schedule lane writes the `Scheduled` design (identity first) and
-  only then touches Cron.
+- TRG-01 shipped the earned primitive: one per-minute Cron Trigger (the
+  clock) plus D1 schedule rows (the durable intent). No Queue, no Durable
+  Object, no additional broker. Migration 0016 carries the two tables; the
+  `timeout-sweeper.test.ts` tripwire now pins exactly this Cron and still
+  forbids any sweeper-shaped use.
+- Ticks match cron fields in UTC (UTC-shifted ticks for non-UTC labels):
+  DST transitions and missed ticks defer to the next tick — there is no
+  catch-up storm, no backfill of skipped windows. The SDK `previewSchedule`
+  call reports `utcShifted: true` for non-UTC labels so operators see the
+  policy before creating the row.
+- Overlap policy is explicit: same-window ticks converge through the
+  standard submit protocol (deterministic `sch-` derived keys, same-key
+  replay, single winner via the PRIMARY KEY claim); different windows
+  dispatch independently. A Pending schedule backlog is admission state
+  (inspectable through Execution detail), never a failure.
+- Cron validation stays boring: 5-field expressions with per-field
+  range/step checks, next-tick computation bounded to one year, dueAt
+  bounded to 30 days future. Cadence beyond per-minute rows (sub-minute,
+  seconds) is not claimed and needs its own demonstrated requirement.
+- The webhook direction shipped under TRG-02 (ADR 018).
 - Saga source stays free of trigger-shaped metadata; the
   `OPERATIONAL_POLICY_KEYS` rejection list already covers schedule/cron
   keys and needs no change.

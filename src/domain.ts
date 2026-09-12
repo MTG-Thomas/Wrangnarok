@@ -414,6 +414,10 @@ const catalog: SagaDef[] = [
   { ...smokeSaga, parse: parseSmokeInput },
   { ...helloSaga, parse: parseHelloInput },
 ];
+/** Look up a Saga definition by stable UUID (TRG-01 schedule binding). */
+export function lookupSaga(sagaId: string): SagaDef | null {
+  return catalog.find((entry) => entry.id === sagaId) ?? null;
+}
 export function parseSubmission(value: unknown): { saga: SagaDef; input: unknown } {
   if (
     !object(value) ||
@@ -440,13 +444,18 @@ export function parseKey(key: string | null): string {
 }
 /** Caller-supplied keys (the Idempotency-Key header on submit routes).
  * TRG-02 (issue #138, ADR 018): keys starting with `wep-` are reserved for
- * endpoint-derived delivery keys (endpointIdempotencyKey). A caller that
- * squats the namespace could replay against or collide with an endpoint
- * Execution, so caller keys fail closed here. */
+ * endpoint-derived delivery keys (endpointIdempotencyKey). TRG-01 (issue
+ * #137): keys starting with `sch-` are reserved for schedule-derived
+ * promotion keys (scheduleWindowKey). A caller that squats either namespace
+ * could replay against or collide with a Trigger-owned Execution, so caller
+ * keys fail closed here. */
 export function parseCallerKey(key: string | null): string {
   const parsed = parseKeyShape(key);
   if (parsed.startsWith("wep-")) {
     throw new Fault(400, "INVALID_IDEMPOTENCY_KEY", "Keys starting with wep- are reserved for endpoint deliveries.");
+  }
+  if (parsed.startsWith("sch-")) {
+    throw new Fault(400, "INVALID_IDEMPOTENCY_KEY", "Keys starting with sch- are reserved for schedule deliveries.");
   }
   return parsed;
 }

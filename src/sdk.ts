@@ -244,6 +244,8 @@ export const SDK_ERROR_CODES = [
   "DEPLOY_BLOCKED",
   "INVALID_ENDPOINT",
   "ENDPOINT_EXISTS",
+  "SCHEDULE_CONFLICT",
+  "SCHEDULE_UNCONFIRMED",
   "ENDPOINT_UNAUTHORIZED",
   "ENDPOINT_KEY_EXPIRED",
   "ENDPOINT_DISABLED",
@@ -996,6 +998,156 @@ export function parseFormSubmit(value: unknown): SdkFormSubmitReceipt {
   return value as unknown as SdkFormSubmitReceipt;
 }
 
+// --- Schedules (TRG-01, issue #137) ------------------------------------------
+// Operator-managed schedule lifecycle: one-off due instants plus recurring
+// cron cadences with timezone labels, durable D1 rows, deterministic
+// derived-key promotion through the standard submit protocol.
+
+export type SdkScheduleKind = "one-off" | "recurring";
+
+export interface SdkSchedule {
+  readonly id: string;
+  readonly name: string;
+  readonly sagaId: string;
+  readonly enabled: boolean;
+  readonly kind: SdkScheduleKind;
+  readonly cron: string | null;
+  readonly timezone: string;
+  readonly nextDueAt: string | null;
+  readonly lastWindow: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface SdkCreateScheduleOptions {
+  readonly name: string;
+  readonly saga: string;
+  readonly kind: SdkScheduleKind;
+  readonly cron?: string;
+  readonly timezone?: string;
+  readonly dueAt?: string;
+  readonly input?: Record<string, unknown>;
+  readonly enabled?: boolean;
+}
+
+export interface SdkUpdateScheduleOptions {
+  readonly enabled?: boolean;
+  readonly cron?: string;
+  readonly timezone?: string;
+  readonly dueAt?: string;
+  readonly input?: Record<string, unknown>;
+}
+
+export interface SdkSchedulePreview {
+  readonly kind: SdkScheduleKind;
+  readonly cron?: string;
+  readonly timezone?: string;
+  readonly dueAt?: string;
+  readonly nextDueAt?: string;
+  readonly window?: string;
+  readonly utcShifted?: boolean;
+}
+
+export interface SdkSchedulePromotion {
+  readonly schedule: string;
+  readonly window: string;
+  readonly executionId: string;
+  readonly replayed: boolean;
+}
+
+export interface SdkScheduleDelivery {
+  readonly window: string;
+  readonly executionId: string;
+  readonly createdAt: string;
+}
+
+export interface SdkScheduleDetail {
+  readonly schedule: SdkSchedule;
+  readonly deliveries: readonly SdkScheduleDelivery[];
+}
+
+const SCHEDULE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+function checkScheduleName(name: string): void {
+  if (!SCHEDULE_NAME_RE.test(name)) {
+    throw new SdkError("SDK_INVALID_REF", "Schedule lookups need the exact lowercase schedule name.");
+  }
+}
+
+/** Guard a GET /api/schedules payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseScheduleList(value: unknown): readonly SdkSchedule[] {
+  if (!isRecord(value) || !Array.isArray(value.schedules)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule list has an unexpected shape.");
+  }
+  for (const entry of value.schedules) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      !STABLE_UUID.test(entry.id) ||
+      typeof entry.name !== "string" ||
+      !SCHEDULE_NAME_RE.test(entry.name) ||
+      typeof entry.sagaId !== "string" ||
+      !STABLE_UUID.test(entry.sagaId) ||
+      typeof entry.enabled !== "boolean" ||
+      (entry.kind !== "one-off" && entry.kind !== "recurring") ||
+      (entry.cron !== null && typeof entry.cron !== "string") ||
+      typeof entry.timezone !== "string" ||
+      (entry.nextDueAt !== null && typeof entry.nextDueAt !== "string") ||
+      (entry.lastWindow !== null && typeof entry.lastWindow !== "string")
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule list has an unexpected shape.");
+    }
+  }
+  return value.schedules as unknown as readonly SdkSchedule[];
+}
+
+/** Guard a schedule detail payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseScheduleDetailValue(value: unknown): SdkScheduleDetail {
+  if (!isRecord(value) || !isRecord(value.schedule) || !Array.isArray(value.deliveries)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule has an unexpected shape.");
+  }
+  const [schedule] = parseScheduleList({ schedules: [value.schedule] });
+  if (!schedule) throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule has an unexpected shape.");
+  for (const delivery of value.deliveries) {
+    if (
+      !isRecord(delivery) ||
+      typeof delivery.window !== "string" ||
+      typeof delivery.executionId !== "string" ||
+      typeof delivery.createdAt !== "string"
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule has an unexpected shape.");
+    }
+  }
+  return { schedule, deliveries: value.deliveries as unknown as readonly SdkScheduleDelivery[] };
+}
+
+/** Guard a schedule preview payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseSchedulePreview(value: unknown): SdkSchedulePreview {
+  if (!isRecord(value) || (value.kind !== "one-off" && value.kind !== "recurring")) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule preview has an unexpected shape.");
+  }
+  return value as unknown as SdkSchedulePreview;
+}
+
+/** Guard a tick promotion payload. Throws SDK_CLIENT_MISMATCH on drift. */
+export function parseSchedulePromotions(value: unknown): readonly SdkSchedulePromotion[] {
+  if (!isRecord(value) || !Array.isArray(value.promoted)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule tick has an unexpected shape.");
+  }
+  for (const entry of value.promoted) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.schedule !== "string" ||
+      typeof entry.window !== "string" ||
+      typeof entry.executionId !== "string" ||
+      typeof entry.replayed !== "boolean"
+    ) {
+      throw new SdkError("SDK_CLIENT_MISMATCH", "The schedule tick has an unexpected shape.");
+    }
+  }
+  return value.promoted as unknown as readonly SdkSchedulePromotion[];
+}
+
 // --- Caller identity (AUTH-03, issue #144) ------------------------------------
 // Read-only proof of which credential class verified the caller. Discovery,
 // CLI, and MCP clients preserve the same identity by calling the same
@@ -1732,6 +1884,27 @@ export interface SdkClient {
   getFormProviders(name: string): Promise<SdkFormProviders>;
   /** FORM-02 submit (POST /api/forms/:name/submit): consume handle, submit or schedule. */
   submitForm(options: SdkSubmitFormOptions): Promise<SdkFormSubmitReceipt>;
+  /** TRG-01 schedule list (GET /api/schedules): org-scoped summaries. */
+  listSchedules(): Promise<readonly SdkSchedule[]>;
+  /** TRG-01 schedule read (GET /api/schedules/:name): summary plus delivery ledger. */
+  getSchedule(name: string): Promise<SdkScheduleDetail>;
+  /** TRG-01 schedule create (POST /api/schedules): admin-only, Saga parse-gated. */
+  createSchedule(options: SdkCreateScheduleOptions): Promise<SdkSchedule>;
+  /** TRG-01 schedule update (PUT /api/schedules/:name): admin-only partial merge. */
+  updateSchedule(name: string, options: SdkUpdateScheduleOptions): Promise<SdkSchedule>;
+  /** TRG-01 schedule delete (DELETE /api/schedules/:name): admin-only. */
+  deleteSchedule(name: string): Promise<void>;
+  /** TRG-01 schedule preview (POST /api/schedules/preview): read-only next tick. */
+  previewSchedule(options: {
+    kind?: SdkScheduleKind;
+    cron?: string;
+    timezone?: string;
+    dueAt?: string;
+  }): Promise<SdkSchedulePreview>;
+  /** TRG-01 manual tick (POST /api/schedules/tick): admin-only promotion. */
+  tickSchedules(): Promise<readonly SdkSchedulePromotion[]>;
+  /** TRG-01 schedule cancel (POST /api/schedules/:name/cancel): disable plus optional future cancel. */
+  cancelSchedule(name: string, executionId?: string): Promise<{ schedule: SdkSchedule; cancelled: string | null }>;
   /** AUTH-03 caller identity (GET /api/auth/me): which credential class
    * verified this caller, plus the membership role/kind. Same route as the
    * browser UI, so discovery/CLI/MCP clients preserve the same identity. */
@@ -2207,6 +2380,121 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       const response = await guard(() => fetchImpl(`${base}/api/auth/me`, { headers }), "caller identity");
       return parseCallerIdentity(await readJson(response, "caller identity"));
     },
+    async listSchedules(): Promise<readonly SdkSchedule[]> {
+      const response = await guard(() => fetchImpl(`${base}/api/schedules`, { headers }), "schedule list");
+      return parseScheduleList(await readJson(response, "schedule list"));
+    },
+    async getSchedule(name: string): Promise<SdkScheduleDetail> {
+      checkScheduleName(name);
+      const response = await guard(() => fetchImpl(`${base}/api/schedules/${name}`, { headers }), "schedule detail");
+      return parseScheduleDetailValue(await readJson(response, "schedule detail"));
+    },
+    async createSchedule(options: SdkCreateScheduleOptions): Promise<SdkSchedule> {
+      checkScheduleName(options.name);
+      const sagaId = await resolveSagaId(options.saga);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/schedules`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              name: options.name,
+              sagaId,
+              kind: options.kind,
+              ...(options.cron === undefined ? {} : { cron: options.cron }),
+              ...(options.timezone === undefined ? {} : { timezone: options.timezone }),
+              ...(options.dueAt === undefined ? {} : { dueAt: options.dueAt }),
+              ...(options.input === undefined ? {} : { input: options.input }),
+              ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
+            }),
+          }),
+        "schedule create",
+      );
+      const [schedule] = parseScheduleList({
+        schedules: [((await readJson(response, "schedule create")) as { schedule: unknown }).schedule],
+      });
+      if (!schedule) throw new SdkError("SDK_CLIENT_MISMATCH", "Schedule create returned an unexpected shape.");
+      return schedule;
+    },
+    async updateSchedule(name: string, options: SdkUpdateScheduleOptions): Promise<SdkSchedule> {
+      checkScheduleName(name);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/schedules/${name}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({
+              ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
+              ...(options.cron === undefined ? {} : { cron: options.cron }),
+              ...(options.timezone === undefined ? {} : { timezone: options.timezone }),
+              ...(options.dueAt === undefined ? {} : { dueAt: options.dueAt }),
+              ...(options.input === undefined ? {} : { input: options.input }),
+            }),
+          }),
+        "schedule update",
+      );
+      const [schedule] = parseScheduleList({
+        schedules: [((await readJson(response, "schedule update")) as { schedule: unknown }).schedule],
+      });
+      if (!schedule) throw new SdkError("SDK_CLIENT_MISMATCH", "Schedule update returned an unexpected shape.");
+      return schedule;
+    },
+    async deleteSchedule(name: string): Promise<void> {
+      checkScheduleName(name);
+      const response = await guard(
+        () => fetchImpl(`${base}/api/schedules/${name}`, { method: "DELETE", headers }),
+        "schedule delete",
+      );
+      await readJson(response, "schedule delete");
+    },
+    async previewSchedule(options: {
+      kind?: SdkScheduleKind;
+      cron?: string;
+      timezone?: string;
+      dueAt?: string;
+    }): Promise<SdkSchedulePreview> {
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/schedules/preview`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              ...(options.kind === undefined ? {} : { kind: options.kind }),
+              ...(options.cron === undefined ? {} : { cron: options.cron }),
+              ...(options.timezone === undefined ? {} : { timezone: options.timezone }),
+              ...(options.dueAt === undefined ? {} : { dueAt: options.dueAt }),
+            }),
+          }),
+        "schedule preview",
+      );
+      return parseSchedulePreview(await readJson(response, "schedule preview"));
+    },
+    async tickSchedules(): Promise<readonly SdkSchedulePromotion[]> {
+      const response = await guard(
+        () => fetchImpl(`${base}/api/schedules/tick`, { method: "POST", headers }),
+        "schedule tick",
+      );
+      return parseSchedulePromotions(await readJson(response, "schedule tick"));
+    },
+    async cancelSchedule(
+      name: string,
+      executionId?: string,
+    ): Promise<{ schedule: SdkSchedule; cancelled: string | null }> {
+      checkScheduleName(name);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/schedules/${name}/cancel`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(executionId === undefined ? {} : { executionId }),
+          }),
+        "schedule cancel",
+      );
+      const data = (await readJson(response, "schedule cancel")) as { schedule: unknown; cancelled: unknown };
+      const [schedule] = parseScheduleList({ schedules: [data.schedule] });
+      if (!schedule) throw new SdkError("SDK_CLIENT_MISMATCH", "Schedule cancel returned an unexpected shape.");
+      return { schedule, cancelled: typeof data.cancelled === "string" ? data.cancelled : null };
+    },
     async getContract(): Promise<SdkContractDescriptor> {
       const response = await guard(() => fetchImpl(`${base}${SDK_DOC_PATH}`, { headers }), "sdk contract");
       const data: unknown = await readJson(response, "sdk contract");
@@ -2331,6 +2619,42 @@ export function describeContract(): SdkContractDescriptor {
         method: "POST",
         path: "/api/forms/:name/submit",
         description: "Consume a startup handle (422 STALE_FORM_HANDLE), validate, merge defaults, submit or schedule.",
+      },
+      { method: "GET", path: "/api/schedules", description: "Schedule summaries for this Organization (TRG-01)." },
+      {
+        method: "POST",
+        path: "/api/schedules",
+        description: "Create a schedule: one-off dueAt or recurring cron, Saga parse-gated (admin only, TRG-01).",
+      },
+      {
+        method: "POST",
+        path: "/api/schedules/preview",
+        description: "Read-only next-tick preview: no D1 writes; non-UTC timezones record UTC-shift ticks (TRG-01).",
+      },
+      {
+        method: "POST",
+        path: "/api/schedules/tick",
+        description: "Operator-driven promotion of due windows (admin only, TRG-01).",
+      },
+      {
+        method: "GET",
+        path: "/api/schedules/:name",
+        description: "Schedule detail with the delivery ledger (TRG-01).",
+      },
+      {
+        method: "PUT",
+        path: "/api/schedules/:name",
+        description: "Partial schedule update: enabled/cron/timezone/dueAt/input (admin only, TRG-01).",
+      },
+      {
+        method: "DELETE",
+        path: "/api/schedules/:name",
+        description: "Delete a schedule and its delivery ledger; promoted Executions survive (admin only, TRG-01).",
+      },
+      {
+        method: "POST",
+        path: "/api/schedules/:name/cancel",
+        description: "Disable a schedule plus optionally cancel one future Execution (admin only, TRG-01).",
       },
       { method: "GET", path: "/api/apps", description: "Application summaries." },
       { method: "POST", path: "/api/apps", description: "Create an independent app." },
@@ -2874,6 +3198,12 @@ export function describeContract(): SdkContractDescriptor {
         status: "supported",
         detail:
           "Scoped api-key and HMAC webhook endpoints bound to deployed Sagas (TRG-02, ADR 019): operator create/disable/rotate, vendor deliveries with deterministic replay, rate limits, and delivery history.",
+      },
+      {
+        name: "recurring-schedules",
+        status: "supported",
+        detail:
+          "One-off and recurring schedules with durable due-time and cancellation semantics (TRG-01, issue #137): org-scoped rows binding a name to a Saga UUID, Saga parse-gated input, read-only preview, derived-key promotion through the standard submit protocol with exactly-once claim under racing ticks, per-minute Cron tick plus operator manual tick, disable/delete/cancel lifecycle. Ticks use UTC-shifted cron matching; non-UTC timezone labels are recorded and documented, and DST/missed-tick behavior defers to the next tick (no catch-up storm). Overlap policy: same-window ticks converge via the idempotency protocol (no second Execution); different windows dispatch independently. Pending backlog is admission state, never a failure.",
       },
       {
         name: "dynamic-forms",
