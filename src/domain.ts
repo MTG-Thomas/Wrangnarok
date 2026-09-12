@@ -13,6 +13,9 @@ export const ninjaSaga = Object.freeze({
   description: "Rung 1: list NinjaOne organizations read-only over client-credentials OAuth",
 });
 export const NINJA_INTEGRATION_ID = "0606e237-137b-4629-8346-85468e1c2df6";
+// TOOL-01 HaloPSA Code Mode provider (issue #170, ADR 022): stable identity
+// for the OpenAPI proof Integration. Never changes across source edits.
+export const HALO_INTEGRATION_ID = "a1b2c3d4-0000-4111-8111-000000000001";
 // Phase 2 multi-Integration Saga: NinjaOne census digested through the echo
 // Integration. Stable identity per ADR 002 (UUID + revision).
 export const digestSaga = Object.freeze({

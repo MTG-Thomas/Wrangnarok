@@ -20,7 +20,7 @@ import type { Principal } from "./domain";
 import { assertSafeEndpoint, integrationById, validateConnectionConfig } from "./integrations";
 import type { ConnectionView } from "./integrations";
 import { scrubValueWithDeploymentSecrets } from "./secrets";
-import type { NinjaCredentials } from "./bindings";
+import type { HaloCredentials, NinjaCredentials } from "./bindings";
 
 /** Deployment credential surface read by the management test path (CON-01).
  * Required-secret values are presence-checked only — never persisted,
@@ -28,8 +28,7 @@ import type { NinjaCredentials } from "./bindings";
  * (Bindings extends NinjaCredentials); test doubles pass plain records.
  * No index signature: Bindings has none, and required-secret env vars are
  * read through the narrow accessor below. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- marker interface: Bindings must satisfy the management env by construction
-export interface SecretEnv extends NinjaCredentials {}
+export interface SecretEnv extends NinjaCredentials, HaloCredentials {}
 
 function secretValue(env: SecretEnv, name: string): string | undefined {
   const value: unknown = (env as Record<string, unknown>)[name];
@@ -364,6 +363,24 @@ export async function testConnection(
         return { ok: false, checkedAt, code: "CONNECTION_TEST_FAILED", detail: def.health.remediation };
       }
       return { ok: true, checkedAt, detail: "The echo test call round-tripped." };
+    }
+    // HaloPSA Code Mode (TOOL-01): origin-reachability probe only, mirroring
+    // the NinjaOne posture (token host answers 200/401 either way proves
+    // reachability; no listing, no persistence). The pinned-contract search/
+    // inspect/execute path stays on the Code Mode routes.
+    if (def.name === "halo") {
+      const probeUrl = new URL("/api/Tickets", row.endpoint).toString();
+      const response = await fetchImpl(probeUrl, {
+        method: "HEAD",
+        redirect: "manual",
+        signal: AbortSignal.timeout(5000),
+        headers: { Accept: "application/json" },
+      });
+      await response.body?.cancel();
+      if (response.status >= 500) {
+        return { ok: false, checkedAt, code: "CONNECTION_TEST_FAILED", detail: def.health.remediation };
+      }
+      return { ok: true, checkedAt, detail: "The Halo origin answered." };
     }
     // NinjaOne: token-endpoint probe only. No org listing, no persistence —
     // a 200/401 from the token host proves reachability either way (401
