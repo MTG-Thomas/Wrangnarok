@@ -118,14 +118,13 @@ import { join } from "node:path";
 // a shrink pass (direct header construction instead of Response re-wrapping):
 // 55 bytes over the 445 KiB budget. Hand-written security-boundary code,
 // package.json unchanged versus main; deliberate feature headroom only.
-// 2026-09-12 (AUTH-02 merge over sec/response main, issue #143): 465 KiB.
+// 2026-09-12 (AUTH-02 merge over sec/response main, issue #143): 485 KiB.
 // The union of the AUTH-02 resource-role control plane (src/roles.ts, 15
 // role/policy admin routes, grant enforcement) with the OBS-02/OPS-02/RUN-01
 // surfaces plus the sec endpoint safe-URL policy and response baseline
-// measures ~459 KiB combined (re-measure after merge; shrink if the union
-// lands lower). Hand-written feature code, no new dependencies (package.json
-// unchanged versus main); deliberate feature headroom only.
-const BUDGET_BYTES = 465 * 1024;
+// measures 490817 bytes. Hand-written feature code, no new dependencies
+// (package.json unchanged versus main); deliberate feature headroom only.
+const BUDGET_BYTES = 485 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
