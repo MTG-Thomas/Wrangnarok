@@ -87,6 +87,7 @@ import {
   searchTools,
 } from "./mcp";
 import { indexOperations, inspectOperation, searchOperations } from "./openapi";
+import type { CodeModeProvenance } from "./openapi";
 import { toolRegistry } from "./tools";
 import {
   boundedJson,
@@ -292,6 +293,39 @@ function bearerToken(request: Request): string | null {
   if (!header) return null;
   const match = /^Bearer (.+)$/.exec(header);
   return match?.[1] ?? null;
+}
+/** TOOL-01 shared Code Mode execution (issue #170): one host-mediated call
+ * used by POST /api/openapi/execute and the MCP halo_api_execute path.
+ * Takes operation selection + params only (never credentials, never a URL);
+ * resolves the caller-org Connection, validates against the pinned
+ * contract, applies policy, enforces egress, injects auth outside
+ * model-visible state, and audits success with sanitized provenance. */
+async function runCodeModeExecute(
+  env: Bindings,
+  caller: Principal,
+  call: { operationId: string; path?: Record<string, string>; query?: Record<string, string>; body?: unknown },
+): Promise<{ result: unknown; provenance: CodeModeProvenance }> {
+  const executed = await executeHaloOperation(
+    env.DB,
+    caller,
+    { clientId: env.HALO_CLIENT_ID, clientSecret: env.HALO_CLIENT_SECRET },
+    {
+      operationId: call.operationId,
+      ...(call.path === undefined ? {} : { path: call.path }),
+      ...(call.query === undefined ? {} : { query: call.query }),
+      ...(call.body === undefined ? {} : { body: call.body }),
+    },
+  );
+  await recordAudit(
+    env.DB,
+    caller,
+    "codemode.execute",
+    { type: "integration", id: HALO_INTEGRATION_ID },
+    "success",
+    executed.provenance,
+    deploymentSecretsFromEnv(env),
+  );
+  return executed;
 }
 /** Public TRG-02 deliveries (issue #138, ADR 019): vendor-facing webhook and
  * endpoint receivers. Authenticated by credential (per-endpoint key or HMAC
@@ -1914,26 +1948,12 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         throw new Fault(400, "OPENAPI_UNKNOWN_OPERATION", "Provide an operationId from the pinned contract.");
       }
       const params = (body.params ?? {}) as Record<string, unknown>;
-      const { result, provenance } = await executeHaloOperation(
-        env.DB,
-        caller,
-        { clientId: env.HALO_CLIENT_ID, clientSecret: env.HALO_CLIENT_SECRET },
-        {
-          operationId: body.operationId,
-          ...(params.path === undefined ? {} : { path: params.path as Record<string, string> }),
-          ...(params.query === undefined ? {} : { query: params.query as Record<string, string> }),
-          ...(body.input === undefined ? {} : { body: body.input }),
-        },
-      );
-      await recordAudit(
-        env.DB,
-        caller,
-        "codemode.execute",
-        { type: "integration", id: HALO_INTEGRATION_ID },
-        "success",
-        provenance,
-        deploymentSecretsFromEnv(env),
-      );
+      const { result, provenance } = await runCodeModeExecute(env, caller, {
+        operationId: body.operationId,
+        ...(params.path === undefined ? {} : { path: params.path as Record<string, string> }),
+        ...(params.query === undefined ? {} : { query: params.query as Record<string, string> }),
+        ...(body.input === undefined ? {} : { body: body.input }),
+      });
       return json(scrubConnectionPayload({ result, provenance }, env));
     }
     // TOOL-01 inbound MCP gateway (issue #170, ADR 022): JSON-RPC 2.0 over
@@ -2044,26 +2064,12 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         }
         try {
           const params = (args.params ?? {}) as Record<string, unknown>;
-          const { result, provenance } = await executeHaloOperation(
-            env.DB,
-            caller,
-            { clientId: env.HALO_CLIENT_ID, clientSecret: env.HALO_CLIENT_SECRET },
-            {
-              operationId: args.operationId,
-              ...(params.path === undefined ? {} : { path: params.path as Record<string, string> }),
-              ...(params.query === undefined ? {} : { query: params.query as Record<string, string> }),
-              ...(args.input === undefined ? {} : { body: args.input }),
-            },
-          );
-          await recordAudit(
-            env.DB,
-            caller,
-            "codemode.execute",
-            { type: "integration", id: HALO_INTEGRATION_ID },
-            "success",
-            provenance,
-            deploymentSecretsFromEnv(env),
-          );
+          const { result, provenance } = await runCodeModeExecute(env, caller, {
+            operationId: args.operationId,
+            ...(params.path === undefined ? {} : { path: params.path as Record<string, string> }),
+            ...(params.query === undefined ? {} : { query: params.query as Record<string, string> }),
+            ...(args.input === undefined ? {} : { body: args.input }),
+          });
           return json(scrubConnectionPayload(mcpResult(envelope.id, { result, provenance }), env));
         } catch (error) {
           const code = error instanceof Fault ? error.code : "MCP_EXECUTION_FAILED";
