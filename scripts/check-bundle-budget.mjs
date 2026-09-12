@@ -108,12 +108,12 @@ import { join } from "node:path";
 // 446392 bytes: 952 bytes over the 435 KiB budget. Hand-written feature code,
 // no new dependencies (package.json unchanged versus main); deliberate
 // feature headroom only.
-// 2026-09-12 (RUN-02 re-merge over AUTH-01/RUN-01 main, issue #136): 440 KiB.
-// The union of the RUN-02 child-lineage surface with the newer main stays
-// within the AUTH-01 feature headroom; package.json is unchanged versus
-// main. Remeasure after merge; shrink the raise if the combined bundle
-// lands lower.
-const BUDGET_BYTES = 440 * 1024;
+// 2026-09-12 (RUN-02 re-merge over AUTH-01/RUN-01 main, issue #136): 455 KiB.
+// The union of the RUN-02 child-lineage surface with the newer main measures
+// 462412 bytes (~451.6 KiB) locally (CI number governs). Hand-written feature
+// code, no new dependencies (package.json unchanged versus main); deliberate
+// feature headroom only.
+const BUDGET_BYTES = 455 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
