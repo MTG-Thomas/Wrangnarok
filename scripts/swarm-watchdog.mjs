@@ -9,7 +9,7 @@ function sh(cmd, timeout = 90000) {
   try {
     return execSync(cmd, { encoding: "utf-8", timeout }).trim();
   } catch (e) {
-    return `ERROR: ${String((e.stdout ?? e.message)).split("\n")[0]}`;
+    return `ERROR: ${String(e.stdout ?? e.message).split("\n")[0]}`;
   }
 }
 
