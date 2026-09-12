@@ -109,6 +109,7 @@ import {
   parseNinjaOrgsInput,
   parseSmokeInput,
   parseSubmission,
+  resolveSubmissionSaga,
   smokeSaga,
   UUID,
 } from "./domain";
@@ -258,6 +259,7 @@ import {
 } from "./tables";
 import { SAGA_CATALOG, SAGA_DEFINITIONS } from "./sagas";
 import { describeContract, SDK_DOC_PATH, SDK_VERSION } from "./sdk";
+import { isProviderEligible, parseProviderSubmission, providerSummary, runProvider } from "./sync";
 import {
   cancelExecution,
   listHistory,
@@ -826,10 +828,69 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         request.headers.has("Content-Encoding")
       )
         throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
-      const { saga, input } = parseSubmission(await boundedJson(request.body));
+      const body: unknown = await boundedJson(request.body);
+      if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+        const record = body as Record<string, unknown>;
+        // RUN-03 (ADR 023): caller-chosen sync on the async route is a named
+        // rejection, never a silent poll. Eligible Sagas use the provider
+        // route; everything else polls the receipt.
+        if (record.sync === true) {
+          throw new Fault(
+            400,
+            "SYNC_NOT_SUPPORTED",
+            "Inline results ride POST /api/executions/provider for eligible Sagas; this route returns receipts only.",
+          );
+        }
+        if (record.transient === true) {
+          throw new Fault(
+            501,
+            "TRANSIENT_NOT_SUPPORTED",
+            "No-persistence execution is not supported; provider calls persist their receipt.",
+          );
+        }
+      }
+      const { saga, input } = parseSubmission(body);
       const accepted = await submit(env, caller, key, saga, input);
       // Canonical replay: first submit 202, same-key same-input replay 200 + replayed:true (ADR 001 #15).
       return json(accepted, accepted.replayed ? 200 : 202, { Location: accepted.statusUrl });
+    }
+    if (url.pathname === "/api/executions/provider" && request.method === "POST") {
+      // RUN-03 (ADR 023): bounded inline data-provider execution. Same
+      // admission (install gate, idempotency, policy snapshot) as async
+      // submit, then the read-only Integration Action runs inside the
+      // request deadline and checkpoints terminal state directly. No
+      // Workflow binding, no queue wait. Query strings stay denied.
+      if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
+      const key = parseCallerKey(request.headers.get("Idempotency-Key"));
+      if (
+        request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json" ||
+        request.headers.has("Content-Encoding")
+      )
+        throw new Fault(415, "JSON_REQUIRED", "Unencoded JSON is required.");
+      const { saga, input, rejected } = parseProviderSubmission(await boundedJson(request.body), resolveSubmissionSaga);
+      if (rejected.sync === true) {
+        throw new Fault(
+          400,
+          "SYNC_NOT_SUPPORTED",
+          "Sync is chosen by route: this provider route already returns inline results.",
+        );
+      }
+      if (rejected.transient === true) {
+        throw new Fault(
+          501,
+          "TRANSIENT_NOT_SUPPORTED",
+          "No-persistence execution is not supported; provider calls persist their receipt.",
+        );
+      }
+      if (!isProviderEligible(saga.id)) {
+        throw new Fault(
+          501,
+          "PROVIDER_NOT_SUPPORTED",
+          "This Saga runs through the async Execution path only; submit to POST /api/executions and poll the receipt.",
+        );
+      }
+      const outcome = await runProvider(env, caller, key, saga, input);
+      return json(providerSummary(outcome), 200, { Location: outcome.statusUrl });
     }
     const formList = url.pathname === "/api/forms";
     if (formList && request.method === "GET") {

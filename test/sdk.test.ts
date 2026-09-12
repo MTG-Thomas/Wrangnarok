@@ -68,6 +68,22 @@ describe("SDK contract version and descriptor (issue #140)", () => {
     expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
       expect.arrayContaining(["GET /api/sdk", "GET /api/sagas", "POST /api/executions", "POST /api/dev/preview"]),
     );
+    // RUN-03 (ADR 023): bounded inline providers are a supported capability
+    // with the provider route and the named sync/transient/provider codes.
+    expect(descriptor.capabilities.find((entry) => entry.name === "sync-providers")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining(["POST /api/executions/provider"]),
+    );
+    for (const code of [
+      "SYNC_NOT_SUPPORTED",
+      "TRANSIENT_NOT_SUPPORTED",
+      "PROVIDER_NOT_SUPPORTED",
+      "PROVIDER_TIMEOUT",
+      "PROVIDER_IN_FLIGHT",
+      "PROVIDER_OUTPUT_TOO_LARGE",
+    ]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
     // DEV-02 (issue #141): local preview is a supported capability; the OPS-01
     // routes and error codes stay in the contract list.
     expect(descriptor.capabilities.find((entry) => entry.name === "local-preview")?.status).toBe("supported");
