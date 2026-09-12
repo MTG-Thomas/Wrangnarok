@@ -62,7 +62,13 @@ import { join } from "node:path";
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged. Remeasure after merge; shrink the raise if the combined bundle
 // lands lower.
-const BUDGET_BYTES = 380 * 1024;
+// 2026-09-11 (AUTH-01 follow-up): 390 KiB. Cascading-delete accounting over
+// every post-AUTH-01 org-owned table (forms, apps, tables, files, artifacts,
+// endpoints, configs, audit; R2 bytes first, managed rows block) stacks on
+// the OPS-01 surface: 385797 bytes baseline, 394934 bytes with the slice, so
+// 390 KiB keeps the same deliberate feature headroom. No new dependencies:
+// package.json is unchanged versus main.
+const BUDGET_BYTES = 390 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
