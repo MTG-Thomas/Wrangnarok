@@ -24,6 +24,15 @@ import {
   parseHistoryPage,
   parseNotification,
   parseNotifications,
+  parseRuntimePolicy,
+  parseOpsConnectionHealth,
+  parseOpsHealth,
+  parseOpsJobs,
+  parseOpsMetrics,
+  parseOpsPreflight,
+  parseOpsRepairOutcome,
+  parseOpsScheduledTasks,
+  parseOpsVersion,
   parseSagaCatalog,
   parseSdkError,
   scaffoldSaga,
@@ -66,6 +75,21 @@ describe("SDK contract version and descriptor (issue #140)", () => {
     expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
       expect.arrayContaining(["GET /api/audit", "GET /api/notifications", "DELETE /api/notifications/:id"]),
     );
+    // OPS-02 (issue #173): diagnostics/repair routes and codes stay in the
+    // contract list alongside the OPS-01 surface.
+    expect(descriptor.capabilities.find((entry) => entry.name === "ops-diagnostics-repairs")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining([
+        "GET /api/ops/version",
+        "GET /api/ops/health",
+        "GET /api/ops/metrics",
+        "GET /api/ops/scheduled-tasks",
+        "GET /api/ops/jobs",
+        "GET /api/ops/preflight",
+        "GET /api/ops/connections",
+        "POST /api/ops/repairs",
+      ]),
+    );
     for (const code of [
       "CANCELLATION_UNCONFIRMED",
       "STABLE_IDENTITY_REMAP_REQUIRED",
@@ -78,6 +102,13 @@ describe("SDK contract version and descriptor (issue #140)", () => {
       "INVALID_NOTIFICATION",
       "INVALID_NOTIFICATION_ID",
       "NOTIFICATION_NOT_FOUND",
+      "INVALID_REPAIR",
+      "INVALID_REPAIR_KIND",
+      "INVALID_REPAIR_TARGET",
+      "INVALID_REPAIR_KEY",
+      "EXECUTION_NOT_REPAIRABLE",
+      "REPAIR_FORBIDDEN",
+      "REPAIR_UNAVAILABLE",
     ]) {
       expect(SDK_ERROR_CODES).toContain(code);
     }
@@ -114,6 +145,18 @@ describe("SDK contract version and descriptor (issue #140)", () => {
       "INVALID_SCHEDULE",
       "IDEMPOTENCY_CONFLICT",
     ]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
+    // RUN-01 (ADR 018): persisted runtime policy is a supported capability
+    // with its routes and error codes in the contract.
+    expect(descriptor.capabilities.find((entry) => entry.name === "runtime-policy")?.status).toBe("supported");
+    expect(descriptor.routes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining(["GET /api/sagas/:id/policy", "PUT /api/sagas/:id/policy"]),
+    );
+    for (const code of ["INVALID_POLICY", "SAGA_PAUSED", "ADMISSION_LIMITED"]) {
+      expect(SDK_ERROR_CODES).toContain(code);
+    }
+    for (const code of ["STABLE_IDENTITY_REMAP_REQUIRED", "SYNC_CONFLICT", "INVALID_GIT_TARGET", "DEPLOY_BLOCKED"]) {
       expect(SDK_ERROR_CODES).toContain(code);
     }
     for (const capability of descriptor.capabilities) {
@@ -394,6 +437,15 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
       startedAt: "2026-09-11T00:00:01.000Z",
       completedAt: "2026-09-11T00:00:02.000Z",
       runtimeStatus: null,
+      policy: {
+        sagaId: helloSaga.id,
+        version: 1,
+        policy: {
+          timeout: { vendorTimeoutMs: 0, stepTimeout: "10 seconds" },
+          retry: { checkpointRetries: 2, vendorRetries: 0 },
+          admission: { enabled: true, maxConcurrent: 0 },
+        },
+      },
       input: { name: "Ada" },
       result: { greeting: "Hello, Ada!", name: "Ada" },
       error: null,
@@ -542,6 +594,35 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     ).rejects.toMatchObject({ code: "SDK_CLIENT_NETWORK" });
   });
 
+  it("reads and writes saga runtime policy through the typed client", async () => {
+    const served = {
+      policy: {
+        sagaId: helloSaga.id,
+        sagaName: "hello",
+        version: 2,
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        timeout: { vendorTimeoutMs: 250, stepTimeout: "10 seconds" },
+        retry: { checkpointRetries: 2, vendorRetries: 1 },
+        admission: { enabled: true, maxConcurrent: 3 },
+      },
+    };
+    const got = stub([json(catalog), json(served)]);
+    const reader = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: got.fetchImpl });
+    expect(await reader.getSagaPolicy("hello")).toMatchObject({ sagaId: helloSaga.id, version: 2 });
+    expect(got.calls[1]?.url).toBe(`http://local.test/api/sagas/${helloSaga.id}/policy`);
+    const put = stub([json(served)]);
+    const writer = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: put.fetchImpl });
+    expect(await writer.updateSagaPolicy(helloSaga.id, { admission: { maxConcurrent: 3 } })).toMatchObject({
+      admission: { maxConcurrent: 3 },
+    });
+    expect(put.calls[0]?.init.method).toBe("PUT");
+    expect(String(put.calls[0]?.init.body)).toContain("maxConcurrent");
+    const fallback = stub([json(catalog), json(served)]);
+    const fallbackClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: fallback.fetchImpl });
+    expect(await fallbackClient.updateSagaPolicy("hello", undefined)).toMatchObject({ version: 2 });
+    expect(String(fallback.calls[1]?.init.body)).toBe("{}");
+  });
+
   it("cancels with exact IDs and guards the cancel shape", async () => {
     const id = "c".repeat(64);
     const { calls, fetchImpl } = stub([json({ executionId: id, status: "Cancelled", cancelled: true })]);
@@ -601,6 +682,119 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     await expect(
       createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: malformed.fetchImpl }).listAuditEvents(),
     ).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+  });
+
+  it("reads diagnostics and repairs through the typed client", async () => {
+    const counters = {
+      total: 1,
+      pending: 0,
+      pendingUndispatched: 0,
+      running: 0,
+      cancelling: 0,
+      succeeded: 0,
+      failed: 1,
+      timedOut: 0,
+      cancelled: 0,
+    };
+    const versionStub = stub([
+      json({ version: { sdkVersion: "1", sagaCatalog: { count: 5, revision: "r" }, migrationsApplied: [] } }),
+    ]);
+    const versionClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: versionStub.fetchImpl,
+    });
+    expect((await versionClient.getOpsVersion()).sdkVersion).toBe("1");
+    expect(versionStub.calls[0]?.url).toBe("http://local.test/api/ops/version");
+    const healthStub = stub([
+      json({ status: "ok", database: "ok", worker: "ok", checkedAt: "2026-09-12T00:00:00.000Z" }),
+    ]);
+    const healthClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: healthStub.fetchImpl,
+    });
+    expect((await healthClient.getOpsHealth()).status).toBe("ok");
+    const metricsStub = stub([
+      json({ metrics: { generatedAt: "2026-09-12T00:00:00.000Z", executions: counters, recentFailures: [] } }),
+    ]);
+    const metricsClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: metricsStub.fetchImpl,
+    });
+    expect((await metricsClient.getOpsMetrics(5)).executions.failed).toBe(1);
+    expect(metricsStub.calls[0]?.url).toBe("http://local.test/api/ops/metrics?recent=5");
+    await expect(metricsClient.getOpsMetrics(99)).rejects.toMatchObject({ code: "SDK_INVALID_REF" });
+    const tasksStub = stub([json({ tasks: [] })]);
+    const tasksClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: tasksStub.fetchImpl,
+    });
+    expect(await tasksClient.listOpsScheduledTasks()).toEqual([]);
+    const jobsStub = stub([
+      json({
+        jobs: {
+          generatedAt: "2026-09-12T00:00:00.000Z",
+          executions: counters,
+          appBuilds: { queued: 0, running: 0, succeeded: 0, failed: 0, interrupted: [] },
+        },
+      }),
+    ]);
+    const jobsClient = createSdkClient({ base: "http://local.test", token: "tok", fetchImpl: jobsStub.fetchImpl });
+    expect((await jobsClient.getOpsJobs()).appBuilds.succeeded).toBe(0);
+    const preflightStub = stub([json({ checkedAt: "2026-09-12T00:00:00.000Z", integrations: [] })]);
+    const preflightClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: preflightStub.fetchImpl,
+    });
+    expect((await preflightClient.getOpsPreflight()).integrations).toEqual([]);
+    const connsStub = stub([json({ connections: [] })]);
+    const connsClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: connsStub.fetchImpl,
+    });
+    expect((await connsClient.getOpsConnectionHealth()).connections).toEqual([]);
+    // Repairs inspect by default (dryRun:true) and commit explicitly.
+    const repairBody = {
+      repair: { kind: "cleanup-pending-uploads", dryRun: true, targetId: null, action: "a", result: {} },
+    };
+    const inspectStub = stub([json(repairBody)]);
+    const inspectClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: inspectStub.fetchImpl,
+    });
+    const inspected = await inspectClient.runOpsRepair({ kind: "cleanup-pending-uploads" });
+    expect(inspected.dryRun).toBe(true);
+    expect(JSON.parse(String(inspectStub.calls[0]?.init.body)).dryRun).toBe(true);
+    const executeStub = stub([json({ repair: { ...repairBody.repair, dryRun: false } })]);
+    const executeClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: executeStub.fetchImpl,
+    });
+    const executed = await executeClient.runOpsRepair({ kind: "cleanup-pending-uploads", dryRun: false });
+    expect(executed.dryRun).toBe(false);
+    expect(inspectStub.calls[0]?.init.method).toBe("POST");
+    // Malformed diagnostics payloads fail as SDK_CLIENT_MISMATCH.
+    const malformedVersion = stub([json({ nope: true })]);
+    const malformedVersionClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: malformedVersion.fetchImpl,
+    });
+    await expect(malformedVersionClient.getOpsVersion()).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
+    const malformedMetrics = stub([json({ nope: true })]);
+    const malformedMetricsClient = createSdkClient({
+      base: "http://local.test",
+      token: "tok",
+      fetchImpl: malformedMetrics.fetchImpl,
+    });
+    await expect(malformedMetricsClient.getOpsMetrics()).rejects.toMatchObject({ code: "SDK_CLIENT_MISMATCH" });
   });
 
   it("lists history with filters, cursors, and saga resolution", async () => {
@@ -663,6 +857,8 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
       "NINJA_UNAUTHORIZED",
       "NINJA_NOT_CONFIGURED",
       "EXECUTION_CANCELLED",
+      "SAGA_PAUSED",
+      "ADMISSION_LIMITED",
       "DISPATCH_UNCONFIRMED",
     ];
     for (const code of codes) {
@@ -703,6 +899,21 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     expect(() => parseExecutionDetail(null)).toThrow(/unexpected shape/);
     expect(() => parseExecutionDetail({ ...detail(), operations: [{ name: 1 }] })).toThrow(/unexpected shape/);
     expect(() => parseExecutionDetail({ ...detail(), operations: "x" })).toThrow(/unexpected shape/);
+    expect(() => parseExecutionDetail({ ...detail(), policy: undefined })).toThrow(/unexpected shape/);
+    expect(() => parseRuntimePolicy({ policy: { nope: true } })).toThrow(/unexpected shape/);
+    expect(
+      parseRuntimePolicy({
+        policy: {
+          sagaId: helloSaga.id,
+          sagaName: "hello",
+          version: 1,
+          updatedAt: "2026-09-11T00:00:00.000Z",
+          timeout: { vendorTimeoutMs: 0, stepTimeout: "10 seconds" },
+          retry: { checkpointRetries: 2, vendorRetries: 0 },
+          admission: { enabled: true, maxConcurrent: 0 },
+        },
+      }).sagaId,
+    ).toBe(helloSaga.id);
     expect(() => parseHistoryPage({})).toThrow(/unexpected shape/);
     expect(() => parseHistoryPage({ executions: [{ sagaId: 1 }], hasMore: false })).toThrow(/unexpected shape/);
     expect(() => parseHistoryPage({ executions: [], hasMore: false, nextCursor: 7 })).toThrow(/unexpected shape/);
@@ -716,6 +927,207 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     expect(() => parseNotifications({})).toThrow(/unexpected shape/);
     expect(() => parseNotifications({ notifications: [{ id: 1 }] })).toThrow(/unexpected shape/);
     expect(() => parseNotification({})).toThrow(/unexpected shape/);
+    // OPS-02 wire guards (issue #173): diagnostics and repair payloads.
+    expect(() => parseOpsVersion({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsVersion({ version: { sdkVersion: 1 } })).toThrow(/unexpected shape/);
+    expect(() => parseOpsHealth({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsMetrics({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsMetrics({ metrics: { generatedAt: "x", executions: {}, recentFailures: [] } })).toThrow(
+      /unexpected shape/,
+    );
+    expect(() =>
+      parseOpsMetrics({
+        metrics: {
+          generatedAt: "x",
+          executions: {
+            total: 0,
+            pending: 0,
+            pendingUndispatched: 0,
+            running: 0,
+            cancelling: 0,
+            succeeded: 0,
+            failed: 0,
+            timedOut: 0,
+            cancelled: 0,
+          },
+          recentFailures: [{ executionId: 1 }],
+        },
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() => parseOpsScheduledTasks({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsScheduledTasks({ tasks: [{ id: 1 }] })).toThrow(/unexpected shape/);
+    expect(() => parseOpsJobs({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsJobs({ jobs: { generatedAt: "x" } })).toThrow(/unexpected shape/);
+    expect(() => parseOpsPreflight({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsPreflight({ checkedAt: "x", integrations: [{ integrationId: 1 }] })).toThrow(
+      /unexpected shape/,
+    );
+    expect(() => parseOpsConnectionHealth({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsConnectionHealth({ connections: [{ integrationId: 1 }] })).toThrow(/unexpected shape/);
+    expect(() => parseOpsRepairOutcome({})).toThrow(/unexpected shape/);
+    expect(() => parseOpsRepairOutcome({ repair: { kind: 1 } })).toThrow(/unexpected shape/);
+    // OPS-02 guard arms (issue #173): boundary and entry shapes.
+    expect(() => parseOpsVersion({ version: 1 })).toThrow(/unexpected shape/);
+    expect(() => parseOpsVersion({ version: { sdkVersion: "1", sagaCatalog: {}, migrationsApplied: [] } })).toThrow(
+      /unexpected shape/,
+    );
+    expect(() =>
+      parseOpsVersion({ version: { sdkVersion: "1", sagaCatalog: { count: 1 }, migrationsApplied: [] } }),
+    ).toThrow(/unexpected shape/);
+    expect(() => parseOpsHealth({ status: "ok", database: "ok", worker: 1, checkedAt: "x" })).toThrow(
+      /unexpected shape/,
+    );
+    expect(() => parseOpsMetrics({ metrics: 1 })).toThrow(/unexpected shape/);
+    expect(() => parseOpsMetrics({ metrics: { generatedAt: 1, executions: {}, recentFailures: [] } })).toThrow(
+      /unexpected shape/,
+    );
+    expect(() =>
+      parseOpsMetrics({
+        metrics: {
+          generatedAt: "x",
+          executions: {
+            total: 0,
+            pending: 0,
+            pendingUndispatched: 0,
+            running: 0,
+            cancelling: 0,
+            succeeded: 0,
+            failed: 0,
+            timedOut: 0,
+            cancelled: 0,
+          },
+          recentFailures: [{ executionId: "a", sagaName: "s", status: "Failed", code: 1, completedAt: null }],
+        },
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() => parseOpsScheduledTasks({ tasks: 1 })).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsScheduledTasks({
+        tasks: [{ id: "a", name: "n", kind: "endpoint", enabled: true, cadence: 1, detail: "d" }],
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() => parseOpsJobs({ jobs: { generatedAt: "x", executions: {}, appBuilds: {} } })).toThrow(
+      /unexpected shape/,
+    );
+    expect(() =>
+      parseOpsJobs({
+        jobs: {
+          generatedAt: "x",
+          executions: {
+            total: 0,
+            pending: 0,
+            pendingUndispatched: 0,
+            running: 0,
+            cancelling: 0,
+            succeeded: 0,
+            failed: 0,
+            timedOut: 0,
+            cancelled: 0,
+          },
+          appBuilds: { queued: 0, running: 0, succeeded: 0, failed: 0, interrupted: [{ appId: 1 }] },
+        },
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() => parseOpsPreflight({ checkedAt: "x", integrations: 1 })).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsPreflight({
+        checkedAt: "x",
+        integrations: [
+          {
+            integrationId: "i",
+            integrationName: "n",
+            connected: true,
+            enabled: true,
+            missingSecrets: "x",
+            ready: true,
+          },
+        ],
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() => parseOpsConnectionHealth({ connections: 1 })).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsRepairOutcome({ repair: { kind: "k", dryRun: true, targetId: 1, action: "a", result: null } }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsRepairOutcome({ repair: { kind: "k", dryRun: "yes", targetId: null, action: "a", result: null } }),
+    ).toThrow(/unexpected shape/);
+    // OPS-02 guard entry arms (issue #173): malformed list entries.
+    const counters = {
+      total: 0,
+      pending: 0,
+      pendingUndispatched: 0,
+      running: 0,
+      cancelling: 0,
+      succeeded: 0,
+      failed: 0,
+      timedOut: 0,
+      cancelled: 0,
+    };
+    expect(() =>
+      parseOpsMetrics({
+        metrics: {
+          generatedAt: "x",
+          executions: counters,
+          recentFailures: [{ executionId: "a", sagaName: "s", status: "Failed", code: null, completedAt: 7 }],
+        },
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsScheduledTasks({
+        tasks: [{ id: "a", name: "n", kind: 7, enabled: true, cadence: null, detail: "d" }],
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsScheduledTasks({
+        tasks: [{ id: "a", name: "n", kind: "endpoint", enabled: "yes", cadence: null, detail: "d" }],
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsScheduledTasks({
+        tasks: [{ id: "a", name: "n", kind: "endpoint", enabled: true, cadence: null, detail: 7 }],
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsJobs({
+        jobs: {
+          generatedAt: "x",
+          executions: counters,
+          appBuilds: { queued: 0, running: 0, succeeded: 0, failed: 0, interrupted: [{ appId: "a" }] },
+        },
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsPreflight({
+        checkedAt: "x",
+        integrations: [
+          {
+            integrationId: "i",
+            integrationName: "n",
+            connected: true,
+            enabled: true,
+            missingSecrets: [],
+            ready: "yes",
+          },
+        ],
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsConnectionHealth({
+        connections: [
+          {
+            integrationId: "i",
+            integrationName: "n",
+            connected: true,
+            enabled: true,
+            testHint: "t",
+            remediation: 7,
+          },
+        ],
+      }),
+    ).toThrow(/unexpected shape/);
+    expect(() =>
+      parseOpsRepairOutcome({ repair: { kind: "k", dryRun: true, targetId: null, action: 7, result: null } }),
+    ).toThrow(/unexpected shape/);
   });
 
   it("validates every schema branch offline", () => {
