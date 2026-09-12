@@ -2180,7 +2180,7 @@ async function routeOrgs(request: Request, env: Bindings, ctx: CallerCtx, url: U
   const del = /^\/api\/orgs\/([0-9a-fA-F-]{36})$/.exec(pathname);
   if (del?.[1] && request.method === "DELETE") {
     requireInstanceAdmin(ctx);
-    return json(await deleteOrg(env.DB, parseOrgId(del[1])));
+    return json(await deleteOrg(env.DB, parseOrgId(del[1]), { files: env.FILES, artifacts: env.ARTIFACTS }));
   }
   const preview = /^\/api\/orgs\/([0-9a-fA-F-]{36})\/delete-preview$/.exec(pathname);
   if (preview?.[1] && request.method === "GET") {

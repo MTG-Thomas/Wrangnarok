@@ -67,6 +67,12 @@ import { join } from "node:path";
 // same deliberate feature headroom, not dependency bloat: package.json is
 // unchanged. Remeasure after merge; shrink the raise if the combined bundle
 // lands lower.
+// 2026-09-11 (AUTH-01 follow-up): 390 KiB. Cascading-delete accounting over
+// every post-AUTH-01 org-owned table (forms, apps, tables, files, artifacts,
+// endpoints, configs, audit; R2 bytes first, managed rows block) stacks on
+// the OPS-01 surface: 385797 bytes baseline, 394934 bytes with the slice, so
+// 390 KiB keeps the same deliberate feature headroom. No new dependencies:
+// package.json is unchanged versus main.
 // 2026-09-11 (OBS-02 merge over current main, issue #153): 405 KiB. The
 // union of the OBS-02 author-log surface (src/logs.ts, two routes, SDK
 // tail/search, CLI logs/log-search) with the newer main surfaces measures
@@ -84,7 +90,13 @@ import { join } from "node:path";
 // policy-gated submit plus snapshot-resolved retries/deadlines) stacks on
 // the OPS-02 surface above. Same deliberate feature headroom, not dependency
 // bloat: package.json is unchanged versus main.
-const BUDGET_BYTES = 435 * 1024;
+// 2026-09-12 (AUTH-01 second re-drive over RUN-01 main): 440 KiB. The union
+// of the AUTH-01 org-lifecycle surface (cascading-delete accounting over all
+// org-owned tables plus R2 bytes) with the RUN-01 policy surface measures
+// 446392 bytes: 952 bytes over the 435 KiB budget. Hand-written feature code,
+// no new dependencies (package.json unchanged versus main); deliberate
+// feature headroom only.
+const BUDGET_BYTES = 440 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
