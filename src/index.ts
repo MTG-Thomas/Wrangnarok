@@ -238,10 +238,49 @@ import { deploymentSecretsFromEnv, scrubValueWithDeploymentSecrets } from "./sec
 import { logRequest } from "./usage";
 export { EchoWorkflow, HelloWorkflow, NinjaEchoDigestWorkflow, NinjaOrgsWorkflow, SmokeWorkflow } from "./sagas";
 
+/** Baseline defense headers for every user-facing response (issue #237).
+ * JSON API responses already carried no-store + nosniff; this extends the same
+ * posture to Static Assets pass-through and raw file/byte responses so the
+ * public UI and the API share one baseline: no MIME sniffing, no framing, a
+ * locked-down referrer, no powerful browser features, and HSTS on HTTPS.
+ * Content-Type/Cache-Control stay caller-owned (JSON defaults, file types).
+ * apiBytes/json build the baseline inline (one Response, no re-wrap); only
+ * the ASSETS pass-through copies headers, since fetched responses may be
+ * immutable. */
+/** Content-Security-Policy per surface: the JSON/file API carries no active
+ * content, so default-src 'none'; the Static Assets UI shell needs its own
+ * scripts, styles, and images, so self-only. */
+const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+const ASSET_CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+const SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "Content-Security-Policy": API_CSP,
+};
+function withAssetSecurity(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const name of Object.keys(SECURITY_HEADERS)) {
+    if (name === "Content-Security-Policy") continue;
+    const value = SECURITY_HEADERS[name];
+    if (value !== undefined && !headers.has(name)) headers.set(name, value);
+  }
+  if (!headers.has("Content-Security-Policy")) headers.set("Content-Security-Policy", ASSET_CSP);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+function apiBytes(body: BodyInit | null, status: number, headers: Record<string, string>): Response {
+  return new Response(body, { status, headers: { ...SECURITY_HEADERS, ...headers } });
+}
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
   return Response.json(body, {
     status,
-    headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...extra },
+    headers: { ...SECURITY_HEADERS, "Cache-Control": "no-store", ...extra },
   });
 }
 /** Log route for the access log: raw /api/* pathname or "static". Query
@@ -297,9 +336,9 @@ async function handlePublicDelivery(request: Request, env: Bindings): Promise<Re
   const challengeRow = findChallengeEndpoint(rows.filter((row) => row.kind === "webhook"));
   const challenge = challengeRow ? vendorChallenge(challengeRow, url) : null;
   if (challenge !== null) {
-    return new Response(challenge, {
-      status: 200,
-      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    return apiBytes(challenge, 200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
     });
   }
   if (url.search) {
@@ -381,7 +420,7 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         return json({ error: { code: fault.code, message: fault.message } }, fault.status);
       }
     }
-    if (env.ASSETS) return env.ASSETS.fetch(request);
+    if (env.ASSETS) return withAssetSecurity(await env.ASSETS.fetch(request));
     return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
   }
   try {
@@ -930,16 +969,13 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       if (!row) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
       const stored = await env.FILES.get(objectKey(resolved.sourceOrgId, resolved.location, resolved.path));
       if (!stored) return json({ error: { code: "NOT_FOUND", message: "Not found." } }, 404);
-      return new Response(stored.body, {
-        status: 200,
-        headers: {
-          "Content-Type": row.content_type,
-          "Content-Length": String(row.size),
-          ETag: `"${row.sha256}"`,
-          "X-File-Version": String(row.version),
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
+      return apiBytes(stored.body, 200, {
+        "Content-Type": row.content_type,
+        "Content-Length": String(row.size),
+        ETag: `"${row.sha256}"`,
+        "X-File-Version": String(row.version),
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       });
     }
     if (url.pathname === "/api/files/finalize" && request.method === "POST") {
@@ -1167,14 +1203,11 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     const appAsset = /^\/api\/apps\/([0-9a-f-]{36})\/assets\/(.+)$/.exec(url.pathname);
     if (appAsset?.[1] && appAsset[2] && request.method === "GET") {
       const served = await serveAsset(env.DB, caller, parseAppId(appAsset[1]), appAsset[2]);
-      return new Response(served.content, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store",
-          ETag: `"${served.contentHash}"`,
-          "X-Content-Type-Options": "nosniff",
-        },
+      return apiBytes(served.content, 200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        ETag: `"${served.contentHash}"`,
+        "X-Content-Type-Options": "nosniff",
       });
     }
     const appOne = /^\/api\/apps\/([0-9a-f-]{36})$/.exec(url.pathname);
@@ -1465,13 +1498,10 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
         artifactAdmin,
         parseArtifactVersion(Number(artifactVersion[2])),
       );
-      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
-        status: 200,
-        headers: {
-          "Content-Type": served.mime,
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
+      return apiBytes(served.bytes.slice().buffer as ArrayBuffer, 200, {
+        "Content-Type": served.mime,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       });
     }
     const artifactBytes = /^\/api\/artifacts\/([0-9a-f-]{36})\/bytes$/.exec(url.pathname);
@@ -1498,13 +1528,10 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (artifactPreview?.[1] && request.method === "GET") {
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       const served = await previewArtifact(artifactStore, caller, parseArtifactId(artifactPreview[1]), artifactAdmin);
-      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
-        status: 200,
-        headers: {
-          "Content-Type": served.mime,
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
+      return apiBytes(served.bytes.slice().buffer as ArrayBuffer, 200, {
+        "Content-Type": served.mime,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       });
     }
     const artifactDownload = /^\/api\/artifacts\/([0-9a-f-]{36})\/download$/.exec(url.pathname);
@@ -1512,14 +1539,11 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       if (url.search) throw new Fault(400, "UNSUPPORTED_QUERY", "Query parameters are not supported on this route.");
       const served = await downloadArtifact(artifactStore, caller, parseArtifactId(artifactDownload[1]), artifactAdmin);
       const filename = served.name.replace(/["\r\n]/g, "_");
-      return new Response(served.bytes.slice().buffer as ArrayBuffer, {
-        status: 200,
-        headers: {
-          "Content-Type": served.mime,
-          "Content-Disposition": `attachment; filename="${filename}"`,
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
+      return apiBytes(served.bytes.slice().buffer as ArrayBuffer, 200, {
+        "Content-Type": served.mime,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       });
     }
     const artifactRename = /^\/api\/artifacts\/([0-9a-f-]{36})\/rename$/.exec(url.pathname);
@@ -1745,11 +1769,19 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
       if (typeof body.integrationId !== "string") {
         throw new Fault(400, "UNKNOWN_INTEGRATION", "A Connection write needs an integrationId.");
       }
-      const created = await createConnection(env.DB, caller, body.integrationId, {
-        config: body.config,
-        ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
-        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
-      });
+      const created = await createConnection(
+        env.DB,
+        caller,
+        body.integrationId,
+        {
+          config: body.config,
+          ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+          ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+        },
+        // Issue #239: echo endpoints gate on deployment environment — the
+        // loopback default serves local only; non-local needs explicit HTTPS.
+        { environment: (env as unknown as Record<string, string | undefined>).ENVIRONMENT },
+      );
       return json(scrubConnectionPayload({ connection: created }, env), 201);
     }
     const connTest = /^\/api\/connections\/([0-9a-f-]{36})\/test$/.exec(url.pathname);
@@ -1776,11 +1808,18 @@ async function handleFetch(request: Request, env: Bindings): Promise<Response> {
     if (connOne?.[1] && request.method === "PUT") {
       requireJson(request);
       const body = (await boundedJson(request.body)) as Record<string, unknown>;
-      const updated = await updateConnection(env.DB, caller, connOne[1], {
-        ...(body.config === undefined ? {} : { config: body.config }),
-        ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
-        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
-      });
+      const updated = await updateConnection(
+        env.DB,
+        caller,
+        connOne[1],
+        {
+          ...(body.config === undefined ? {} : { config: body.config }),
+          ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+          ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+        },
+        // Issue #239: same environment gate as create above.
+        { environment: (env as unknown as Record<string, string | undefined>).ENVIRONMENT },
+      );
       return json(scrubConnectionPayload({ connection: updated }, env));
     }
     if (connOne?.[1] && request.method === "DELETE") {
