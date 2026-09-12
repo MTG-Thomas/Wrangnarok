@@ -200,6 +200,42 @@ describe("TRG-01 schedule CRUD (workerd)", () => {
     expect((await worker.fetch(authed("/api/schedules/morning-digest", "DELETE"), bindings)).status).toBe(200);
     expect((await worker.fetch(authed("/api/schedules/morning-digest", "GET"), bindings)).status).toBe(404);
   });
+  it("deletes a schedule after its first delivery without FK failure", async () => {
+    // Regression (#137 reopen): schedule_deliveries references schedules(id)
+    // with no ON DELETE action, so deleting a delivered schedule must clear
+    // its delivery rows in the same delete. ExecutionHistory provenance
+    // survives on the executions rows (keyed by Execution ID).
+    const runAt = new Date(Date.now() - 30_000).toISOString();
+    expect(
+      (
+        await worker.fetch(
+          authed("/api/schedules", "POST", {
+            name: "delivered-then-deleted",
+            sagaId: helloSaga.id,
+            kind: "one-off",
+            runAt,
+            input: { name: "sched" },
+          }),
+          bindings,
+        )
+      ).status,
+    ).toBe(201);
+    const tick = worker as unknown as { scheduled: (event: unknown, env: Bindings) => Promise<void> };
+    await tick.scheduled({ cron: "* * * * *" }, bindings);
+    const delivered = await bindings.DB.prepare(
+      "SELECT COUNT(*) AS n FROM schedule_deliveries WHERE schedule_id=(SELECT id FROM schedules WHERE org_id=? AND name=?)",
+    )
+      .bind("00000000-0000-4000-8000-000000000001", "delivered-then-deleted")
+      .first<{ n: number }>();
+    expect(delivered?.n).toBe(1);
+    expect((await worker.fetch(authed("/api/schedules/delivered-then-deleted", "DELETE"), bindings)).status).toBe(200);
+    const remaining = await bindings.DB.prepare("SELECT COUNT(*) AS n FROM schedule_deliveries").first<{
+      n: number;
+    }>();
+    expect(remaining?.n).toBe(0);
+    const executions = await bindings.DB.prepare("SELECT COUNT(*) AS n FROM executions").first<{ n: number }>();
+    expect(executions?.n).toBeGreaterThan(0);
+  }, 25000);
   it("creates one-off schedules with durable due-time", async () => {
     const runAt = new Date(Date.now() + 60_000).toISOString();
     const created = await worker.fetch(

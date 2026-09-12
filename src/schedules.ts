@@ -87,7 +87,7 @@ export function parseScheduleName(name: string): string {
   return name;
 }
 
-const CRON_FIELD = /^(\*|\*\/\d+|\d+(-\d+)?(,\d+(-\d+)?)*)$/;
+const CRON_FIELD = /^(\*|\*\/[1-9]\d*|\d+(-\d+)?(,\d+(-\d+)?)*)$/;
 /** Validate a 5-field cron expression (minute hour day month weekday).
  * Documented DST/missed-tick posture: matching is wall-clock UTC unless a
  * named IANA timezone parses via Intl; a tick that never fires (downtime)
@@ -471,6 +471,11 @@ export async function setScheduleEnabled(
 export async function deleteSchedule(db: D1Database, caller: Principal, name: string): Promise<void> {
   const row = await loadSchedule(db, caller.orgId, name);
   if (!row) throw new Fault(404, "NOT_FOUND", "Not found.");
+  // Delivery rows reference the schedule row (migration 0016 FK), so they go
+  // in the same delete: the window-to-Execution mapping is schedule-scoped
+  // metadata, while ExecutionHistory provenance survives on the executions
+  // rows themselves (keyed by Execution ID, never by schedule).
+  await db.prepare("DELETE FROM schedule_deliveries WHERE schedule_id=?").bind(row.id).run();
   await db.prepare("DELETE FROM schedules WHERE id=?").bind(row.id).run();
 }
 

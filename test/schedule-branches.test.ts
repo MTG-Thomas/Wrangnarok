@@ -34,6 +34,11 @@ describe("TRG-01 branch coverage", () => {
     expect(nextCronDue("*/30 * * * *", "UTC", new Date("2026-09-12T10:05:00.000Z"))).toBe("2026-09-12T10:30:00.000Z");
     expect(() => nextCronDue("nope * * * *", "UTC")).toThrow(/5-field/);
     expect(() => nextCronDue("* * * *", "UTC")).toThrow(/5-field/);
+    // Zero (or otherwise non-positive) steps never reach the matcher: a
+    // `value % 0` matcher would spin the full one-year horizon, so the
+    // parser rejects fast with 400 INVALID_SCHEDULE instead.
+    expect(() => parseCron("*/0 * * * *")).toThrow(/5-field/);
+    expect(() => nextCronDue("*/0 * * * *", "UTC")).toThrow(/5-field/);
   });
   it("matches wall-clock time in named timezones", () => {
     // 09:00 in New York is 13:00 UTC (EDT, September).
