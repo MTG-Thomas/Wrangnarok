@@ -72,7 +72,14 @@ import { join } from "node:path";
 // tail/search, CLI logs/log-search) with the newer main surfaces measures
 // ~388 KiB combined. Hand-written feature code, no new dependencies
 // (package.json unchanged versus main); deliberate feature headroom only.
-const BUDGET_BYTES = 405 * 1024;
+// 2026-09-12 (OPS-02, issue #173): 425 KiB. The diagnostics/repair surface
+// (src/ops.ts: version/health/metrics/scheduler/jobs/preflight/connections
+// plus five inspect-then-act repairs; 8 routes in src/index.ts; SDK guards
+// plus client plus descriptor entries; CLI commands plus selftest) measures
+// ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
+// feature code, no new dependencies (package.json unchanged versus main);
+// deliberate feature headroom only.
+const BUDGET_BYTES = 425 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
