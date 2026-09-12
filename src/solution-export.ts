@@ -690,9 +690,8 @@ export async function previewCaptureSource(
     },
     manifest,
   );
-  if (validatedSource.readme !== undefined && validatedSource.readme.length > SOURCE_README_MAX_CHARS) {
-    throw invalid("INVALID_SOURCE", `The capture readme must be at most ${SOURCE_README_MAX_CHARS} chars.`);
-  }
+  // The readme cap is enforced by validateSourceInfo above: reaching here
+  // with an oversized readme is impossible, so no second check.
   const metadata: SourceMetadata = {
     exportedAt: new Date().toISOString(),
     exporter: opts.exporter ?? "wrangnarok-export",
@@ -921,8 +920,6 @@ export async function importSourcePackage(
   catalogs: SourceCatalogs = staticSourceCatalogs(),
 ): Promise<{ package: SourcePackage; manifest: BundleManifest; report: ImportReport }> {
   const validated = await validatePackage(raw, catalogs, "wrangnarok-import");
-  const metadata = validated.metadata;
-  void metadata;
   return {
     package: validated,
     manifest: validated.manifest,

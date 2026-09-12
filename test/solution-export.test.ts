@@ -7,9 +7,10 @@ import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Bindings } from "../src/bindings";
-import { ECHO_INTEGRATION_ID, echoSaga, helloSaga, NINJA_INTEGRATION_ID } from "../src/domain";
+import { digestSaga, ECHO_INTEGRATION_ID, echoSaga, Fault, helloSaga, NINJA_INTEGRATION_ID } from "../src/domain";
 import { SAGA_DEFINITIONS } from "../src/sagas";
 import { installBundle } from "../src/solutions";
+import type { BundleManifest } from "../src/solutions";
 import {
   captureSource,
   checkClosure,
@@ -432,5 +433,318 @@ describe("solution source export and import (SOL-03)", () => {
     const imported = await importSourcePackage(JSON.parse(exported.files[0]?.json as string));
     expect(imported.report.modules).toBe(1);
     expect(defaultSourceNotes().join(" ")).toContain("OPS-03");
+  });
+
+  // Branch-coverage sweep (coverage gate: every metric >= 95%). Each guard in
+  // src/solution-export.ts gets one positive and one negative proof through
+  // the public export/import surface, so the gate measures behavior and the
+  // fail-closed branches cannot rot silently.
+  it("rejects every malformed envelope, identity, and requirement branch", async () => {
+    const pkg = await capturedPackage();
+    const good = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    // Envelope: non-object, wrong format, wrong version.
+    await expect(exportSourcePackage(null)).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(exportSourcePackage({ ...good, format: "wrangnarok.backup" })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(exportSourcePackage({ ...good, formatVersion: 99 })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    // Requirements: non-list, malformed entry, version skew.
+    await expect(exportSourcePackage({ ...good, source: { ...pkg.source, requirements: "1" } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(
+      exportSourcePackage({ ...good, source: { ...pkg.source, requirements: [{ name: "x" }] } }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(
+      exportSourcePackage({
+        ...good,
+        source: { ...pkg.source, requirements: [{ name: "wrangnarok.manifest", version: "99" }] },
+      }),
+    ).rejects.toMatchObject({ code: "REQUIREMENT_UNSATISFIED" });
+    // Identity: non-object source, bad UUID, bad slug, bad semver,
+    // non-object logo and git pointers.
+    await expect(exportSourcePackage({ ...good, source: null })).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(exportSourcePackage({ ...good, source: { ...pkg.source, id: "nope" } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(exportSourcePackage({ ...good, source: { ...pkg.source, name: "-bad slug-" } })).rejects.toMatchObject(
+      { code: "INVALID_SOURCE" },
+    );
+    await expect(exportSourcePackage({ ...good, source: { ...pkg.source, version: "v1" } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(exportSourcePackage({ ...good, source: { ...pkg.source, logo: "svg" } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(exportSourcePackage({ ...good, source: { ...pkg.source, git: "repo" } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    // Modules: empty list, non-object entry, non-UUID sagaId.
+    await expect(exportSourcePackage({ ...good, modules: [] })).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(exportSourcePackage({ ...good, modules: ["echo"] })).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(
+      exportSourcePackage({ ...good, modules: [{ ...pkg.modules[0], sagaId: "nope" }] }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    // Assets: non-list, oversized list, and a logo-less valid package still
+    // exports (the optional-logo branch).
+    await expect(exportSourcePackage({ ...good, assets: "notes" })).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    const tooMany = Array.from({ length: 17 }, (_, i) => ({
+      path: `notes/n${i}.md`,
+      contentType: "text/markdown",
+      text: "x",
+    }));
+    await expect(exportSourcePackage({ ...good, assets: tooMany })).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+  });
+
+  it("rejects every malformed logo branch", async () => {
+    const pkg = await capturedPackage();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    const good = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    // A valid logo passes: the true branch of every logo guard.
+    const withLogo = await exportSourcePackage({
+      ...good,
+      source: { ...pkg.source, logo: { contentType: "image/svg+xml", svg } },
+    });
+    expect(withLogo.files).toHaveLength(2);
+    // Every false branch: wrong content type, empty svg, non-svg markup,
+    // scripted svg, and remote-reference svg.
+    for (const logo of [
+      { contentType: "image/png", svg },
+      { contentType: "image/svg+xml", svg: "" },
+      { contentType: "image/svg+xml", svg: "just text, no markup" },
+      { contentType: "image/svg+xml", svg: "<svg><script>alert(1)</script></svg>" },
+      { contentType: "image/svg+xml", svg: '<svg><image href="https://example.com/x.png"/></svg>' },
+      { contentType: "image/svg+xml", svg: '<svg><image href="http://example.com/x.png"/></svg>' },
+    ]) {
+      await expect(exportSourcePackage({ ...good, source: { ...pkg.source, logo } })).rejects.toMatchObject({
+        code: "INVALID_SOURCE",
+      });
+    }
+  });
+
+  it("rejects every malformed git, readme, asset, and metadata branch", async () => {
+    const pkg = await capturedPackage();
+    const good = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    // Valid git pointer passes; repo with embedded credentials, a non-hex
+    // commit, and an overlong repo fail.
+    const withGit = await exportSourcePackage({
+      ...good,
+      source: { ...pkg.source, git: { repo: "https://example.com/org/repo", commit: "abc1234" } },
+    });
+    expect(withGit.files).toHaveLength(2);
+    await expect(
+      exportSourcePackage({ ...good, source: { ...pkg.source, git: { repo: "https://user@example.com/r" } } }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(
+      exportSourcePackage({ ...good, source: { ...pkg.source, git: { commit: "not-hex!!" } } }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(
+      exportSourcePackage({ ...good, source: { ...pkg.source, git: { repo: `https://x/${"r".repeat(300)}` } } }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    // Readme: empty and oversized fail; the valid capture path already
+    // covers the true branch.
+    await expect(exportSourcePackage({ ...good, source: { ...pkg.source, readme: "" } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(
+      exportSourcePackage({ ...good, source: { ...pkg.source, readme: "x".repeat(9000) } }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    // Assets: non-object entry, empty-text path segments ("a//b.md"),
+    // dot segments, overlong text, and a valid asset passes.
+    await expect(exportSourcePackage({ ...good, assets: ["notes"] })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(
+      exportSourcePackage({ ...good, assets: [{ path: "a//b.md", contentType: "text/plain", text: "x" }] }),
+    ).rejects.toMatchObject({ code: "INVALID_ASSET_PATH" });
+    await expect(
+      exportSourcePackage({ ...good, assets: [{ path: "a/./b.md", contentType: "text/plain", text: "x" }] }),
+    ).rejects.toMatchObject({ code: "INVALID_ASSET_PATH" });
+    await expect(
+      exportSourcePackage({
+        ...good,
+        assets: [{ path: "notes/big.md", contentType: "text/plain", text: "x".repeat(9000) }],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    const withAsset = await exportSourcePackage({
+      ...good,
+      assets: [{ path: "notes/small.md", contentType: "text/markdown", text: "hello" }],
+    });
+    expect(withAsset.files).toHaveLength(2);
+    // Metadata: non-object, bad instant, bad exporter via import path is
+    // fixed ("wrangnarok-import") so only the raw branches are reachable
+    // here; bad upstream, oversized notes, empty note, and bad notes type.
+    await expect(exportSourcePackage({ ...good, metadata: null })).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(
+      exportSourcePackage({ ...good, metadata: { ...pkg.metadata, exportedAt: "not-a-date" } }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(
+      exportSourcePackage({ ...good, metadata: { ...pkg.metadata, upstream: "x".repeat(200) } }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    await expect(exportSourcePackage({ ...good, metadata: { ...pkg.metadata, notes: "hi" } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(exportSourcePackage({ ...good, metadata: { ...pkg.metadata, notes: [""] } })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+  });
+
+  it("rejects every module identity-mismatch branch", async () => {
+    const pkg = await capturedPackage();
+    const good = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    const first = pkg.modules[0] as { sagaId: string; name: string; description: string; revision: string };
+    // Wrong name, wrong description, and reordered requiredIntegrations.
+    await expect(exportSourcePackage({ ...good, modules: [{ ...first, name: "not-echo" }] })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    await expect(exportSourcePackage({ ...good, modules: [{ ...first, description: "wrong" }] })).rejects.toMatchObject(
+      { code: "INVALID_SOURCE" },
+    );
+    await expect(
+      exportSourcePackage({ ...good, modules: [{ ...first, requiredIntegrations: "x" }] }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+  });
+
+  it("covers the closure matrix: unknown integration, secret mismatch, fallback name", async () => {
+    const pkg = await capturedPackage();
+    const catalogs = staticSourceCatalogs();
+    // Unknown integration id: no catalog entry, so the fallback renders the
+    // raw id in the detail and the gap blocks.
+    const ghostManifest = {
+      ...pkg.manifest,
+      integrations: [{ id: "00000000-0000-4000-8000-000000000000", connections: [] }],
+    } as unknown as BundleManifest;
+    const ghostGaps = checkClosure(ghostManifest, [], catalogs);
+    expect(ghostGaps.map((gap) => gap.reason)).toContain("UNKNOWN_INTEGRATION");
+    expect(ghostGaps.every((gap) => gap.blocking)).toBe(true);
+    await expect(
+      importSourcePackage({ ...JSON.parse(JSON.stringify(pkg)), manifest: ghostManifest }),
+    ).rejects.toMatchObject({ code: "UNKNOWN_INTEGRATION" });
+    // Secret-schema mismatch through the public import surface.
+    const badSecret = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    (badSecret.manifest as Record<string, unknown[]>).integrations = [
+      {
+        id: ECHO_INTEGRATION_ID,
+        connections: [{ org: "default", config: { endpoint: ENDPOINT }, secretsRequired: ["nope"] }],
+      },
+    ] as unknown[];
+    await expect(importSourcePackage(badSecret)).rejects.toMatchObject({ code: "SECRET_SCHEMA_MISMATCH" });
+    // Undeclared integration requirement that IS in the catalog renders the
+    // definition name (not the raw id) in the gap detail.
+    const digestManifest = {
+      manifestVersion: 1,
+      bundle: { id: BUNDLE_ID, name: "digest-starter", version: "1.0.0" },
+      sagas: [{ id: digestSaga.id, revision: digestSaga.revision }],
+      integrations: [
+        {
+          id: ECHO_INTEGRATION_ID,
+          connections: [{ org: "default", config: { endpoint: ENDPOINT }, secretsRequired: [] }],
+        },
+      ],
+      config: [],
+    };
+    const digestGaps = checkClosure(
+      digestManifest as unknown as BundleManifest,
+      [
+        {
+          sagaId: digestSaga.id,
+          name: digestSaga.name,
+          revision: digestSaga.revision,
+          description: digestSaga.description,
+          requiredIntegrations: [NINJA_INTEGRATION_ID, ECHO_INTEGRATION_ID],
+        },
+      ],
+      catalogs,
+    );
+    expect(digestGaps.map((gap) => gap.reason)).toContain("INTEGRATION_NOT_DECLARED");
+    expect(digestGaps[0]?.detail).toContain("ninjaone");
+  });
+
+  it("covers capture scoping, mapper, scanner, and sink branches", async () => {
+    // ORG_NOT_DECLARED: scoped org with no declared connections.
+    const scoped = await previewCaptureSource(bindings.DB, manifest(), { orgName: "ghost-org" });
+    expect(scoped.gaps.map((gap) => gap.reason)).toContain("ORG_NOT_DECLARED");
+    // Empty readme fails closed.
+    await expect(previewCaptureSource(bindings.DB, manifest(), { readme: "" })).rejects.toMatchObject({
+      code: "INVALID_SOURCE",
+    });
+    // Mapper rejects non-UUID triplets.
+    await expect(mapSourceToInstall("nope", "also-nope", "bad")).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    // Scanner: arrays walk element-wise (covered true branch), deep nesting
+    // fails closed, constructor/prototype keys fail closed, and the
+    // allowlisted secretsRequired key passes through the credential scan.
+    const deep: Record<string, unknown> = {};
+    let cursor: Record<string, unknown> = deep;
+    for (let i = 0; i < 40; i++) {
+      const next: Record<string, unknown> = {};
+      cursor.next = next;
+      cursor = next;
+    }
+    await expect(exportSourcePackage(deep)).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    for (const key of ["constructor", "prototype"]) {
+      const poisoned: Record<string, unknown> = {};
+      Object.defineProperty(poisoned, key, { value: { polluted: true }, enumerable: true });
+      await expect(exportSourcePackage(poisoned)).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    }
+    // Fully-null secrets map and empty-string secret values skip the
+    // value scan without failing.
+    const pkg = await capturedPackage();
+    const clean = await exportSourcePackage(pkg, { secrets: { nothing: "" } });
+    expect(clean.files).toHaveLength(2);
+    // Export-job sink cleanup on validation failure + Fault-preserving
+    // cleanup when a staged Fault (not a transport error) aborts the job.
+    let cleaned = 0;
+    await expect(
+      runExportJob(null, {
+        writeTemp: () => {},
+        commit: () => {},
+        cleanup: () => {
+          cleaned += 1;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_SOURCE" });
+    expect(cleaned).toBe(1);
+    let cleanedFault = 0;
+    const fault = new Fault(409, "CUSTOM_BLOCK", "staged fault");
+    await expect(
+      runExportJob(pkg, {
+        writeTemp: () => {
+          throw fault;
+        },
+        commit: () => {},
+        cleanup: () => {
+          cleanedFault += 1;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "CUSTOM_BLOCK" });
+    expect(cleanedFault).toBe(1);
+  });
+
+  it("rejects oversized packages at the byte cap through runExportJob", async () => {
+    const pkg = await capturedPackage();
+    // 70000 chars of text fail manifest asset validation first; craft a
+    // package that passes validation but exceeds the 65536-byte cap: 8
+    // max-size assets plus notes stay schema-valid while the canonical JSON
+    // crosses the cap.
+    const big = JSON.parse(JSON.stringify(pkg)) as Record<string, unknown>;
+    big.assets = Array.from({ length: 8 }, (_, i) => ({
+      path: `notes/big${i}.md`,
+      contentType: "text/plain",
+      text: "x".repeat(8192),
+    }));
+    await expect(exportSourcePackage(big)).rejects.toMatchObject({ code: "SOURCE_TOO_LARGE" });
+    let cleaned = 0;
+    await expect(
+      runExportJob(big, {
+        writeTemp: () => {},
+        commit: () => {},
+        cleanup: () => {
+          cleaned += 1;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "SOURCE_TOO_LARGE" });
+    expect(cleaned).toBe(1);
   });
 });
