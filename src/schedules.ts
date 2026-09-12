@@ -153,7 +153,7 @@ export function parseScheduleTimezone(value: unknown): string {
   return value;
 }
 
-function parseScheduleInput(value: unknown, saga: SagaDef): unknown {
+export function parseScheduleInput(value: unknown, saga: SagaDef): unknown {
   if (value === undefined) return saga.parse({});
   const shaped = saga.parse(value);
   if (new TextEncoder().encode(JSON.stringify(shaped)).byteLength > BODY_LIMIT) {
@@ -162,7 +162,7 @@ function parseScheduleInput(value: unknown, saga: SagaDef): unknown {
   return shaped;
 }
 
-function parseRunAt(value: unknown): string {
+export function parseRunAt(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 64) {
     throw invalid("INVALID_SCHEDULE", "One-off schedules require an ISO run-at timestamp.");
   }
@@ -193,7 +193,10 @@ export function currentWindow(now: Date = new Date()): string {
  * minute up to one year out. Step values (`*\/n`) advance arithmetically;
  * named timezones shift the wall clock through Intl before matching. */
 export function nextCronDue(cron: string, timezone: string, from: Date = new Date()): string {
-  const fields = cron.trim().split(/\s+/);
+  // Fail closed on unvalidated cadence: only a parseCron-shaped expression
+  // reaches the matcher, so the matcher never spins on garbage.
+  const valid = parseCron(cron);
+  const fields = valid.split(" ");
   const matchers = fields.map((field) => cronMatcher(field));
   const [minuteMatch, hourMatch, dayMatch, monthMatch, weekdayMatch] = matchers;
   if (!minuteMatch || !hourMatch || !dayMatch || !monthMatch || !weekdayMatch) {
@@ -223,12 +226,14 @@ function cronMatcher(field: string): (value: number) => boolean {
     const step = Number(field.slice(2));
     return (value) => value % step === 0;
   }
+  // Fields arrive parseCron-validated (numeric lists and ranges only), so
+  // every chunk yields at least one finite endpoint; a missing high end is a
+  // plain value, never garbage.
   const values = new Set<number>();
   for (const chunk of field.split(",")) {
     const ends = chunk.split("-").map(Number);
-    const low = ends[0];
+    const low = ends[0] ?? 0;
     const high = ends[1];
-    if (low === undefined || Number.isNaN(low)) continue;
     if (high === undefined || Number.isNaN(high)) values.add(low);
     else for (let candidate = low; candidate <= high; candidate += 1) values.add(candidate);
   }
@@ -541,10 +546,10 @@ export async function promoteDueSchedules(
       skipped.push(schedule.name);
       continue;
     }
-    const window =
-      schedule.kind === "one-off"
-        ? `once-${schedule.id.slice(0, 16)}`
-        : currentWindow(new Date(schedule.next_due_at ?? now.toISOString()));
+    // next_due_at is non-null here: the tick query selects enabled rows
+    // with next_due_at <= now, and only the one-off branch below nulls it.
+    const dueAt = schedule.next_due_at as string;
+    const window = schedule.kind === "one-off" ? `once-${schedule.id.slice(0, 16)}` : currentWindow(new Date(dueAt));
     try {
       promoted.push(await promoteWindow(db, env, schedule, window, sagas, submitFn));
     } catch (error) {
@@ -567,11 +572,7 @@ export async function promoteDueSchedules(
         .bind(now.toISOString(), schedule.id)
         .run();
     } else {
-      const advanced = nextCronDue(
-        schedule.cron,
-        schedule.timezone,
-        new Date(schedule.next_due_at ?? now.toISOString()),
-      );
+      const advanced = nextCronDue(schedule.cron, schedule.timezone, new Date(dueAt));
       await db
         .prepare("UPDATE schedules SET next_due_at=?,updated_at=? WHERE id=?")
         .bind(advanced, now.toISOString(), schedule.id)

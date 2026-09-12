@@ -1032,7 +1032,7 @@ function isScheduleSummary(value: unknown): value is SdkScheduleSummary {
   if (!isRecord(value)) return false;
   return (
     typeof value.id === "string" &&
-    STABLE_UUID.test(value.id) &&
+    EXECUTION_ID_RE.test(value.id) &&
     typeof value.name === "string" &&
     SCHEDULE_NAME_RE.test(value.name) &&
     typeof value.sagaId === "string" &&

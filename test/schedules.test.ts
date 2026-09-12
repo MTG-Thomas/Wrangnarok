@@ -9,6 +9,7 @@ import worker from "../src/index";
 import type { Bindings } from "../src/bindings";
 import { helloSaga } from "../src/domain";
 import { currentWindow, nextCronDue, parseCron, parseScheduleTimezone, scheduleWindowKey } from "../src/schedules";
+import { createSdkClient, SdkError } from "../src/sdk";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
@@ -168,6 +169,26 @@ describe("TRG-01 schedule CRUD (workerd)", () => {
     expect(detail.schedule.sagaId).toBe(helloSaga.id);
     // Unknown names 404, never a leak.
     expect((await worker.fetch(authed("/api/schedules/no-such-schedule", "GET"), bindings)).status).toBe(404);
+    expect((await worker.fetch(authed("/api/schedules/no-such-schedule", "DELETE"), bindings)).status).toBe(404);
+    expect((await worker.fetch(authed("/api/schedules/no-such-schedule/enable", "POST"), bindings)).status).toBe(404);
+    expect((await worker.fetch(authed("/api/schedules/no-such-schedule/disable", "POST"), bindings)).status).toBe(404);
+    expect(
+      (
+        await worker.fetch(
+          authed("/api/schedules/no-such-schedule/deliveries?window=2026-09-12T10:01", "GET"),
+          bindings,
+        )
+      ).status,
+    ).toBe(404);
+    // Unknown delivery windows 404, never an invented mapping.
+    expect(
+      (await worker.fetch(authed("/api/schedules/morning-digest/deliveries?window=2099-01-01T00:00", "GET"), bindings))
+        .status,
+    ).toBe(404);
+    // Query strings outside the allowlist stay denied.
+    expect(
+      (await worker.fetch(authed("/api/schedules/morning-digest/deliveries?window=x&extra=1", "GET"), bindings)).status,
+    ).toBe(400);
     // Disable fences promotion; re-enable resumes.
     expect((await worker.fetch(authed("/api/schedules/morning-digest/disable", "POST"), bindings)).status).toBe(200);
     const disabled = (await (await worker.fetch(authed("/api/schedules/morning-digest", "GET"), bindings)).json()) as {
@@ -238,4 +259,33 @@ describe("TRG-01 schedule CRUD (workerd)", () => {
     // Reads stay open to same-org members.
     expect((await worker.fetch(authed("/api/schedules", "GET"), memberBindings)).status).toBe(200);
   });
+  it("drives schedules through the typed SDK client", async () => {
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) =>
+      worker.fetch(new Request(url, { ...(init ?? {}), headers: { ...auth, ...(init?.headers ?? {}) } }), {
+        ...bindings,
+      })) as typeof fetch;
+    const client = createSdkClient({ base: "http://local.test", token: TOKEN, fetchImpl });
+    // Malformed names fail before any fetch.
+    await expect(client.getSchedule("UPPER")).rejects.toBeInstanceOf(SdkError);
+    const created = await client.createSchedule({
+      name: "sdk-roundtrip",
+      sagaId: helloSaga.id,
+      kind: "one-off",
+      runAt: new Date(Date.now() + 3_600_000).toISOString(),
+      input: { name: "sched" },
+    });
+    expect(created.name).toBe("sdk-roundtrip");
+    expect(created.kind).toBe("one-off");
+    expect(await client.listSchedules()).toHaveLength(1);
+    expect((await client.getSchedule("sdk-roundtrip")).id).toBe(created.id);
+    const disabled = await client.setScheduleEnabled("sdk-roundtrip", false);
+    expect(disabled.enabled).toBe(false);
+    expect((await client.setScheduleEnabled("sdk-roundtrip", true)).enabled).toBe(true);
+    // No deliveries yet: the visibility read 404s instead of inventing one.
+    await expect(client.getScheduleDelivery("sdk-roundtrip", "2026-09-12T10:01")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await client.deleteSchedule("sdk-roundtrip");
+    expect(await client.listSchedules()).toHaveLength(0);
+  }, 25000);
 });

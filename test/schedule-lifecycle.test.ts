@@ -17,6 +17,7 @@ import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
 import migration7 from "../migrations/0007_org_membership.sql?raw";
 import migration8 from "../migrations/0008_executions_org_fk.sql?raw";
+import migration12 from "../migrations/0012_saga_policies.sql?raw";
 import migration16 from "../migrations/0016_schedules.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
@@ -52,6 +53,7 @@ beforeEach(async () => {
   await bindings.DB.exec(migration2);
   await bindings.DB.exec(migration7);
   await bindings.DB.exec(migration8);
+  await bindings.DB.exec(migration12);
   await bindings.DB.exec(migration16);
   await bindings.DB.exec(seed);
 });
@@ -128,6 +130,47 @@ describe("TRG-01 promotion semantics (workerd)", () => {
       await worker.fetch(authed(`/api/schedules/overdue-probe/deliveries?window=${promoted?.window}`, "GET"), bindings)
     ).json()) as { delivery: { executionId: string } };
     expect(deliveries.delivery.executionId).toBe(promoted?.executionId);
+  }, 25000);
+  it("skips ticks fenced by runtime policy or missing sagas without failing the tick", async () => {
+    // A paused Saga fences promotion with SAGA_PAUSED: the tick reports a
+    // skip and the next tick retries, never a tick failure.
+    await createRecurring("paused-probe");
+    expect(
+      (
+        await worker.fetch(
+          authed(`/api/sagas/${helloSaga.id}/policy`, "PUT", { admission: { enabled: false } }),
+          bindings,
+        )
+      ).status,
+    ).toBe(200);
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await bindings.DB.prepare("UPDATE schedules SET next_due_at=? WHERE org_id=? AND name=?")
+      .bind(past, principal.orgId, "paused-probe")
+      .run();
+    const paused = await promoteDueSchedules(
+      bindings.DB,
+      { DB: bindings.DB, HELLO_WORKFLOW: bindings.HELLO_WORKFLOW } as never,
+      SAGA_DEFINITIONS,
+      submit,
+      new Date(),
+    );
+    expect(paused.promoted.map((entry) => entry.scheduleName)).not.toContain("paused-probe");
+    expect(paused.skipped).toContain("paused-probe");
+    await worker.fetch(authed(`/api/sagas/${helloSaga.id}/policy`, "PUT", { admission: { enabled: true } }), bindings);
+    // A schedule pointing at an unknown Saga skips the same way: no
+    // misconfigured dispatch, no tick failure.
+    await bindings.DB.prepare("UPDATE schedules SET saga_id=? WHERE org_id=? AND name=?")
+      .bind("00000000-0000-4000-8000-000000000099", principal.orgId, "paused-probe")
+      .run();
+    const orphaned = await promoteDueSchedules(
+      bindings.DB,
+      { DB: bindings.DB, HELLO_WORKFLOW: bindings.HELLO_WORKFLOW } as never,
+      SAGA_DEFINITIONS,
+      submit,
+      new Date(),
+    );
+    expect(orphaned.promoted.map((entry) => entry.scheduleName)).not.toContain("paused-probe");
+    expect(orphaned.skipped).toContain("paused-probe");
   }, 25000);
   it("never promotes disabled or deleted schedules", async () => {
     await createRecurring("disabled-probe");

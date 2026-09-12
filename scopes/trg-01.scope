@@ -12,6 +12,7 @@ src/sdk.ts
 src/ops.ts
 migrations/0016_schedules.sql
 test/schedules.test.ts
+test/schedule-branches.test.ts
 test/schedule-lifecycle.test.ts
 test/schedule-tick.test.ts
 test/domain.test.ts

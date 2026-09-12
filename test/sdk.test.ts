@@ -1225,7 +1225,7 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     );
     // TRG-01 (issue #137): schedule guards accept the served shape and reject drift.
     const scheduleShape = {
-      id: "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5",
+      id: "a".repeat(64),
       name: "morning-digest",
       sagaId: helloSaga.id,
       sagaName: "hello",
@@ -1249,9 +1249,13 @@ describe("SDK client branches over stub fetch (issue #140)", () => {
     ).toBe("a".repeat(64));
     expect(() => parseScheduleList({})).toThrow(/unexpected shape/);
     expect(() => parseScheduleList({ schedules: [{ name: 1 }] })).toThrow(/unexpected shape/);
+    expect(() => parseScheduleList({ schedules: [{ ...scheduleShape, id: "not-hex" }] })).toThrow(/unexpected shape/);
+    expect(() => parseScheduleList({ schedules: [{ ...scheduleShape, enabled: "yes" }] })).toThrow(/unexpected shape/);
     expect(() => parseScheduleDetail({})).toThrow(/unexpected shape/);
     expect(() => parseScheduleDetail({ schedule: { ...scheduleShape, kind: "whenever" } })).toThrow(/unexpected shape/);
+    expect(() => parseScheduleDetail({ schedule: { ...scheduleShape, name: "UPPER" } })).toThrow(/unexpected shape/);
     expect(() => parseScheduleDelivery({})).toThrow(/unexpected shape/);
+    expect(() => parseScheduleDelivery({ delivery: { schedule: "x", window: "y" } })).toThrow(/unexpected shape/);
     const receipt = {
       form: "contact",
       executionId: "a".repeat(64),
