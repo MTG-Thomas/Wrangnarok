@@ -32,7 +32,7 @@ import type { OrgCtx } from "../src/saga";
 import { helloParentSagaDef } from "../src/sagas/hello-parent";
 import migration1 from "../migrations/0001_initial.sql?raw";
 import migration2 from "../migrations/0002_cancelling.sql?raw";
-import migration7 from "../migrations/0007_child_lineage.sql?raw";
+import migration15 from "../migrations/0015_child_lineage.sql?raw";
 import seed from "../scripts/seed-local.sql?raw";
 
 const bindings = env as unknown as Bindings;
@@ -73,7 +73,7 @@ async function detail(id: string) {
 beforeEach(async () => {
   await bindings.DB.exec(migration1);
   await bindings.DB.exec(migration2);
-  await bindings.DB.exec(migration7);
+  await bindings.DB.exec(migration15);
   await bindings.DB.exec(seed);
 });
 

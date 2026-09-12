@@ -71,6 +71,11 @@ describe("Saga authoring contract (issue #57)", () => {
       const receipt = await ctx.children.invoke("hello", { name: "Ada" });
       return step.do("probe-v1", async () => ({ receipt }));
     }
+    async function topLevelConfig(ctx: SagaEventContext, step: SagaStep): Promise<unknown> {
+      const timeout = await ctx.config.get("timeout");
+      return step.do("probe-v1", async () => ({ timeout }));
+    }
+    }
     async function noDurableSteps(): Promise<unknown> {
       return { ok: true };
     }
@@ -82,6 +87,7 @@ describe("Saga authoring contract (issue #57)", () => {
     );
     expect(() => assertDeterministicRun("bad-db", topLevelDb)).toThrow(/ctx\.db.*outside step\.do/);
     expect(() => assertDeterministicRun("bad-children", topLevelChildren)).toThrow(/ctx\.children.*outside step\.do/);
+    expect(() => assertDeterministicRun("bad-config", topLevelConfig)).toThrow(/ctx\.config.*outside step\.do/);
     expect(() => assertDeterministicRun("bad-nosteps", noDurableSteps)).toThrow(/never calls step\.do/);
   });
 

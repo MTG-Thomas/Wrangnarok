@@ -12,9 +12,29 @@ import type { SagaDefinition, SagaEventContext } from "../saga";
 import { bindSagaChildren } from "../children";
 import type { ChildCatalog } from "../children";
 import { SAGA_DEFINITIONS } from "./definitions";
+import { bindSagaConfig } from "../config";
 import { clearExecutionSecrets, registerExecutionSecrets, scrubExecutionText, scrubExecutionValue } from "../secrets";
 import { echo } from "../integrations/echo";
 import { listOrganizations } from "../integrations/ninjaone";
+
+/** Read the parent caller identity from its immutable D1 Execution row.
+ * Lazy (first child invoke/await only): context construction itself never
+ * touches D1, so unknown rows still fail in prepareExecution as before. */
+async function readParentOrg(env: Bindings, id: string): Promise<{ orgId: string; userId: string }> {
+  const row = await env.DB.prepare("SELECT org_id,user_id FROM executions WHERE id=?")
+    .bind(id)
+    .first<{ org_id: string; user_id: string }>();
+  if (!row) throw new NonRetryableError("Unknown Saga revision.");
+  return { orgId: row.org_id, userId: row.user_id };
+}
+
+/** Read the Execution's own Organization from the immutable D1 row. Never
+ * Workflow params, never caller input: the row is the authority. */
+async function executionOrgId(db: D1Database, id: string): Promise<string> {
+  const row = await db.prepare("SELECT org_id FROM executions WHERE id = ?").bind(id).first<{ org_id: string }>();
+  if (!row) throw new NonRetryableError("Unknown Execution.");
+  return row.org_id;
+}
 
 export async function executeSaga<TOutput>(
   env: Bindings,
@@ -33,36 +53,70 @@ export async function executeSaga<TOutput>(
   registerExecutionSecrets(id, [env.NINJA_CLIENT_ID, env.NINJA_CLIENT_SECRET]);
   try {
     const sagaStep = bindSagaStep(step);
-    // The child handle needs the parent OrgCtx (org/user identity built from
-    // the immutable parent D1 row, never from caller input). Read the row
-    // here; prepareExecution inside run() revalidates it before Running.
-    const parentRow = await env.DB.prepare("SELECT org_id,user_id FROM executions WHERE id=?")
-      .bind(id)
-      .first<{ org_id: string; user_id: string }>();
-    if (!parentRow) throw new NonRetryableError("Unknown Saga revision.");
     const catalog: ChildCatalog = { sagas: SAGA_DEFINITIONS };
+    // The child handle resolves the parent OrgCtx lazily from the immutable
+    // parent D1 row (never from caller input) on first invoke/await, so
+    // constructing the context never touches D1: prepareExecution inside
+    // run() stays the first read (unknown rows fail there as before).
+    let parentOrg: { orgId: string; userId: string } | null = null;
+    const childEnv = (caller: { orgId: string; userId: string }) => ({
+      env,
+      catalog,
+      parentOrg: {
+        orgId: caller.orgId,
+        userId: caller.userId,
+        executionId: id,
+        sagaId: def.id,
+        sagaRevision: def.revision,
+        attemptToken: `${id}:0`,
+      },
+      parentExecutionId: id,
+      parentSagaId: def.id,
+    });
+    const lazyChildren = {
+      invoke: async (...args: Parameters<ReturnType<typeof bindSagaChildren>["invoke"]>) => {
+        parentOrg ??= await readParentOrg(env, id);
+        return bindSagaChildren(childEnv(parentOrg), sagaStep).invoke(...args);
+      },
+      awaitResult: async <T>(...args: Parameters<ReturnType<typeof bindSagaChildren>["awaitResult"]>) => {
+        parentOrg ??= await readParentOrg(env, id);
+        return bindSagaChildren(childEnv(parentOrg), sagaStep).awaitResult<T>(args[0], args[1]);
+      },
+    };
+    // ctx.config resolves against the Execution's own Organization only: the
+    // org comes from the immutable D1 Execution row (never Workflow params,
+    // never caller input), read lazily inside step.do() so the handle itself
+    // performs no I/O at construction. Deployment secrets resolve secret
+    // references transiently; resolved values register with the
+    // execution-scoped registry for write-time scrubbing.
+    const deploymentSecrets: Record<string, string | undefined> = {
+      clientSecret: env.NINJA_CLIENT_SECRET,
+      NINJA_CLIENT_SECRET: env.NINJA_CLIENT_SECRET,
+    };
+    // One handle per Execution: the org is looked up lazily (inside step.do)
+    // so construction performs no I/O, then delegates to the pure binder.
+    // Faults (424 CONFIG_REQUIREMENT_UNSATISFIED) propagate to Saga code,
+    // which maps them like any other structured downstream error.
+    const lazyConfig = {
+      async get(key: string, defaultValue?: unknown): Promise<unknown> {
+        const orgId = await executionOrgId(env.DB, id);
+        return bindSagaConfig({ db: env.DB, orgId, executionId: id, secrets: deploymentSecrets }).get(
+          key,
+          defaultValue,
+        );
+      },
+      async require(key: string): Promise<unknown> {
+        const orgId = await executionOrgId(env.DB, id);
+        return bindSagaConfig({ db: env.DB, orgId, executionId: id, secrets: deploymentSecrets }).require(key);
+      },
+    };
     const ctx: SagaEventContext = {
       executionId: id,
       integrations: { echo: { echo }, ninjaone: { listOrganizations } },
       db: env.DB,
       secrets: { clientId: env.NINJA_CLIENT_ID, clientSecret: env.NINJA_CLIENT_SECRET },
-      children: bindSagaChildren(
-        {
-          env,
-          catalog,
-          parentOrg: {
-            orgId: parentRow.org_id,
-            userId: parentRow.user_id,
-            executionId: id,
-            sagaId: def.id,
-            sagaRevision: def.revision,
-            attemptToken: `${id}:0`,
-          },
-          parentExecutionId: id,
-          parentSagaId: def.id,
-        },
-        sagaStep,
-      ),
+      children: lazyChildren,
+      config: lazyConfig,
     };
     const output = await def.run(ctx, sagaStep);
     assertJsonSerializable(output, `${def.name} output`);
