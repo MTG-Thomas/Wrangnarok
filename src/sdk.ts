@@ -71,6 +71,9 @@ export const SDK_ERROR_CODES = [
   "INVALID_NOTIFICATION_ID",
   "NOTIFICATION_NOT_FOUND",
   "INTEGRATION_REQUIREMENT_UNSATISFIED",
+  "INVALID_POLICY",
+  "SAGA_PAUSED",
+  "ADMISSION_LIMITED",
   "FORM_VALIDATION_FAILED",
   "ECHO_VENDOR_TIMEOUT",
   "ECHO_INTEGRATION_FAILED",
@@ -322,10 +325,21 @@ export interface SdkExecutionSummary {
 
 export interface SdkExecutionDetail extends SdkExecutionSummary {
   readonly runtimeStatus: string | null;
+  readonly policy: SdkRuntimePolicySnapshot;
   readonly input: unknown;
   readonly result: unknown;
   readonly error: unknown;
   readonly operations: readonly SdkOperation[];
+}
+
+export interface SdkRuntimePolicySnapshot {
+  readonly sagaId: string;
+  readonly version: number;
+  readonly policy: {
+    readonly timeout: { readonly vendorTimeoutMs: number; readonly stepTimeout: string };
+    readonly retry: { readonly checkpointRetries: number; readonly vendorRetries: number };
+    readonly admission: { readonly enabled: boolean; readonly maxConcurrent: number };
+  };
 }
 
 export interface SdkHistoryPage {
@@ -552,6 +566,7 @@ export function parseExecutionDetail(value: unknown): SdkExecutionDetail {
     (value.startedAt !== null && typeof value.startedAt !== "string") ||
     (value.completedAt !== null && typeof value.completedAt !== "string") ||
     (value.runtimeStatus !== null && typeof value.runtimeStatus !== "string") ||
+    !isRecord(value.policy) ||
     !("input" in value) ||
     !("result" in value) ||
     !("error" in value) ||
@@ -636,6 +651,46 @@ export interface SdkPreviewOptions {
   readonly saga: string;
   readonly input?: unknown;
   readonly checkEnvironment?: boolean;
+}
+
+export interface SdkRuntimePolicy {
+  readonly sagaId: string;
+  readonly sagaName: string;
+  readonly version: number;
+  readonly updatedAt: string;
+  readonly timeout: { readonly vendorTimeoutMs: number; readonly stepTimeout: string };
+  readonly retry: { readonly checkpointRetries: number; readonly vendorRetries: number };
+  readonly admission: { readonly enabled: boolean; readonly maxConcurrent: number };
+}
+
+function isRuntimePolicy(value: unknown): value is SdkRuntimePolicy {
+  if (!isRecord(value)) return false;
+  const timeout = value.timeout;
+  const retry = value.retry;
+  const admission = value.admission;
+  return (
+    typeof value.sagaId === "string" &&
+    typeof value.sagaName === "string" &&
+    typeof value.version === "number" &&
+    typeof value.updatedAt === "string" &&
+    isRecord(timeout) &&
+    typeof timeout.vendorTimeoutMs === "number" &&
+    typeof timeout.stepTimeout === "string" &&
+    isRecord(retry) &&
+    typeof retry.checkpointRetries === "number" &&
+    typeof retry.vendorRetries === "number" &&
+    isRecord(admission) &&
+    typeof admission.enabled === "boolean" &&
+    typeof admission.maxConcurrent === "number"
+  );
+}
+
+/** Guard a GET /api/sagas/:id/policy payload. Throws SDK_CLIENT_MISMATCH. */
+export function parseRuntimePolicy(value: unknown): SdkRuntimePolicy {
+  if (!isRecord(value) || !isRuntimePolicy(value.policy)) {
+    throw new SdkError("SDK_CLIENT_MISMATCH", "The Saga policy has an unexpected shape.");
+  }
+  return value.policy;
 }
 
 function isPreviewEnvironment(value: unknown): value is SdkPreviewEnvironment {
@@ -1383,6 +1438,10 @@ function hintFor(code: unknown): string | null {
       return "NinjaOne credentials are missing or rejected; check the server environment, not the Saga source.";
     case "EXECUTION_CANCELLED":
       return "The Execution was cancelled; submit a fresh Idempotency-Key to run again.";
+    case "SAGA_PAUSED":
+      return "This Saga is paused for this Organization; an operator must re-enable its runtime policy.";
+    case "ADMISSION_LIMITED":
+      return "This Saga reached its concurrent Execution limit; wait for an active Execution to settle.";
     case "DISPATCH_UNCONFIRMED":
       return "Work may have started. Retry the same request and Idempotency-Key.";
     default:
@@ -1393,6 +1452,10 @@ function hintFor(code: unknown): string | null {
 export interface SdkClient {
   listSagas(): Promise<readonly SdkSaga[]>;
   inspectSaga(ref: string): Promise<SdkSaga>;
+  /** RUN-01 persisted policy (GET /api/sagas/:id/policy): effective policy. */
+  getSagaPolicy(ref: string): Promise<SdkRuntimePolicy>;
+  /** RUN-01 operator write (PUT /api/sagas/:id/policy): partial merge. */
+  updateSagaPolicy(ref: string, policy: unknown): Promise<SdkRuntimePolicy>;
   /** DEV-02 read-only preview (POST /api/dev/preview): validates against the
    * static Catalog with no D1 writes and no Workflow dispatch. */
   previewSaga(options: SdkPreviewOptions): Promise<SdkPreview>;
@@ -1545,6 +1608,24 @@ export function createSdkClient(options: SdkClientOptions): SdkClient {
       }
       const sagas = await fetchSagas();
       return inspectSaga(sagas, ref);
+    },
+    async getSagaPolicy(ref: string): Promise<SdkRuntimePolicy> {
+      const sagaId = await resolveSagaId(ref);
+      const response = await guard(() => fetchImpl(`${base}/api/sagas/${sagaId}/policy`, { headers }), "saga policy");
+      return parseRuntimePolicy(await readJson(response, "saga policy"));
+    },
+    async updateSagaPolicy(ref: string, policy: unknown): Promise<SdkRuntimePolicy> {
+      const sagaId = await resolveSagaId(ref);
+      const response = await guard(
+        () =>
+          fetchImpl(`${base}/api/sagas/${sagaId}/policy`, {
+            method: "PUT",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify(policy ?? {}),
+          }),
+        "saga policy update",
+      );
+      return parseRuntimePolicy(await readJson(response, "saga policy update"));
     },
     async previewSaga(preview: SdkPreviewOptions): Promise<SdkPreview> {
       const sagaId = await resolveSagaId(preview.saga);
@@ -1845,6 +1926,16 @@ export function describeContract(): SdkContractDescriptor {
           "Caller identity: verified userId/orgId, credential class (human/service/fixture/endpoint), and membership role/kind.",
       },
       { method: "GET", path: "/api/sagas", description: "Saga discovery catalog (read-only metadata)." },
+      {
+        method: "GET",
+        path: "/api/sagas/:id/policy",
+        description: "Effective per-Saga runtime policy (persisted row or code default; RUN-01).",
+      },
+      {
+        method: "PUT",
+        path: "/api/sagas/:id/policy",
+        description: "Operator-only policy change, merged over the current row (RUN-01).",
+      },
       {
         method: "POST",
         path: "/api/dev/preview",
@@ -2318,6 +2409,12 @@ export function describeContract(): SdkContractDescriptor {
         detail: "Offline validateAgainstSchema plus server parse; the server remains authoritative.",
       },
       { name: "execute-status-cancel", status: "supported", detail: "Submit, poll, detail, history, and cancel." },
+      {
+        name: "runtime-policy",
+        status: "supported",
+        detail:
+          "Persisted per-Saga runtime policy (RUN-01, ADR 018): operator inspect/change independent of source; applied snapshots ride Execution detail.",
+      },
       {
         name: "author-logs",
         status: "supported",
