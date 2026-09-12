@@ -85,9 +85,14 @@ import { join } from "node:path";
 // ~413 KiB combined over the OBS-02 baseline (~397 KiB). Hand-written
 // feature code, no new dependencies (package.json unchanged versus main);
 // deliberate feature headroom only.
-// 2026-09-12 (AUTH-01 re-drive over OPS-02 main): remeasure; keep the higher
-// of the two deliberate raises plus measured union below.
-const BUDGET_BYTES = 425 * 1024;
+// 2026-09-12 (RUN-01 stacked over OPS-02, issue #135): 435 KiB. Persisted
+// per-Saga runtime policy (2 routes, D1 table, per-Execution snapshot,
+// policy-gated submit plus snapshot-resolved retries/deadlines) stacks on
+// the OPS-02 surface above. Same deliberate feature headroom, not dependency
+// bloat: package.json is unchanged versus main.
+// 2026-09-12 (AUTH-01 second re-drive over RUN-01 main): union remeasured
+// below; keep the higher deliberate raise.
+const BUDGET_BYTES = 435 * 1024;
 
 const dir = mkdtempSync(join(tmpdir(), "wrangnarok-bundle-"));
 const outfile = join(dir, "worker.js");
