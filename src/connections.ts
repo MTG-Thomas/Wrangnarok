@@ -17,7 +17,7 @@
 //   per-tenant secret storage.
 import { Fault, UUID } from "./domain";
 import type { Principal } from "./domain";
-import { integrationById, validateConnectionConfig } from "./integrations";
+import { assertSafeEndpoint, integrationById, validateConnectionConfig } from "./integrations";
 import type { ConnectionView } from "./integrations";
 import { scrubValueWithDeploymentSecrets } from "./secrets";
 import type { NinjaCredentials } from "./bindings";
@@ -335,6 +335,19 @@ export async function testConnection(
         detail: `Deployment credential ${envVar} is not configured: refusing a half-credentialed test.`,
       };
     }
+  }
+  // Re-parse the persisted endpoint before any probe fetch: rows written
+  // before #236 or outside the validated paths fail closed here as invalid
+  // configuration, never as a vendor fetch to an unsafe target.
+  try {
+    assertSafeEndpoint(def.name, row.endpoint);
+  } catch {
+    return {
+      ok: false,
+      checkedAt,
+      code: "INVALID_CONNECTION",
+      detail: "This Connection endpoint is not a safe URL: update it before testing.",
+    };
   }
   const fetchImpl = vendor.fetchImpl ?? globalThis.fetch;
   try {

@@ -1,21 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 import { boundedJson, ECHO_INTEGRATION_ID, Fault, parseInput, VENDOR_TIMEOUT_MS } from "../domain";
 import type { EchoInput } from "../domain";
+import { assertSafeEndpoint } from "./index";
 export const echoIntegration = Object.freeze({ id: ECHO_INTEGRATION_ID, name: "echo" });
-/** Local fixture URL: the only loopback endpoint the echo Integration serves.
- * Portable default for local deployments only — non-local deployments must
- * configure an explicit HTTPS endpoint (issue #239). */
-export const ECHO_FIXTURE_ENDPOINT = "http://127.0.0.1:8788/echo";
-/** True for the local fixture URL. Anything else must be explicit HTTPS. */
-export function isEchoFixtureEndpoint(endpoint: string): boolean {
-  return endpoint === ECHO_FIXTURE_ENDPOINT;
-}
-/** True for explicit non-local echo endpoints: HTTPS with a non-loopback host. */
-export function isEchoHttpsEndpoint(endpoint: string): boolean {
-  if (!endpoint.startsWith("https://")) return false;
-  const host = endpoint.slice("https://".length).split("/")[0]?.toLowerCase() ?? "";
-  return host.length > 0 && host !== "localhost" && !host.startsWith("127.") && host !== "[::1]" && host !== "0.0.0.0";
-}
 export interface EchoConnection {
   endpoint: string;
 }
@@ -31,16 +18,12 @@ export async function echo(
   timeoutMs?: number,
 ): Promise<EchoInput> {
   const deadline = timeoutMs ?? VENDOR_TIMEOUT_MS;
-  // Fixture-only by default, explicit HTTPS elsewhere (issue #239): the
-  // local fixture URL serves local development; any other endpoint must be
-  // an explicit non-loopback HTTPS URL so transport is never cleartext past
-  // loopback. Connection writes enforce the same rule per environment.
-  if (!isEchoFixtureEndpoint(connection.endpoint) && !isEchoHttpsEndpoint(connection.endpoint)) {
-    throw new Fault(
-      500,
-      "INVALID_CONNECTION",
-      "The echo Integration requires its local fixture endpoint or explicit HTTPS.",
-    );
+  // The first slice supports only this local vendor fixture, not arbitrary user URLs.
+  // The safe-URL guard parses the persisted value before the exact pin, so
+  // rows that predate persist-time validation fail closed here too.
+  assertSafeEndpoint("echo", connection.endpoint);
+  if (connection.endpoint !== "http://127.0.0.1:8788/echo") {
+    throw new Fault(500, "INVALID_CONNECTION", "The echo Integration requires its local fixture endpoint.");
   }
   const started = Date.now();
   const timedOut = () => Date.now() - started >= deadline;
